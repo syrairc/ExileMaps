@@ -379,9 +379,12 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Delirium");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Expedition");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Ritual");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Boss");
-            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corruption");
+            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Map Boss");
+            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Cleansed");
+            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corrupted");
+            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Corrupted Nexus");
             ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Irradiated");
+            ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, "Unique Map");
             DrawConnections(cachedNode, nodeCurrentPosition);
             DrawMapNode(cachedNode, nodeCurrentPosition);            
             DrawTowerMods(cachedNode, nodeCurrentPosition);
@@ -535,9 +538,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (!newNode.IsVisited) {
             // Check if the map has content
             try {
-                if (node.Element.GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("Corrupt")))
-                    if (Settings.MapContent.ContentTypes.TryGetValue("Corruption", out Content corruption))                        
-                        newNode.Content.TryAdd(corruption.Name, corruption);
+                AddNodeContentTypesFromTextures(node, newNode);
 
                 if (node.Element.Content != null)  
                     foreach(var content in node.Element.Content.Where(x => x.Name != "").AsParallel().ToList())        
@@ -617,10 +618,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             return 1;
 
         cachedNode.Content.Clear();
-
-        if (node.Element.GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("Corrupt")))
-            if (Settings.MapContent.ContentTypes.TryGetValue("Corruption", out Content corruption))                        
-                cachedNode.Content.TryAdd(corruption.Name, corruption);
+        AddNodeContentTypesFromTextures(node, cachedNode);
 
         if (node.Element.Content != null)
             foreach(var content in node.Element.Content.Where(x => x.Name != ""))           
@@ -681,6 +679,26 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         foreach (var point in neighborConnections)
             if (mapCache.TryGetValue(point.Item1, out Node neighborNode))
                 cachedNode.Neighbors.TryAdd(point.Item1, neighborNode);
+        
+    }
+
+    private void AddNodeContentTypesFromTextures(AtlasNodeDescription node, Node toNode) {
+        
+        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("Corrupt")))
+            if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted", out Content corruption))                        
+                toNode.Content.TryAdd(corruption.Name, corruption);
+            
+        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("CorruptionNexus")))
+            if (Settings.MapContent.ContentTypes.TryGetValue("Corrupted Nexus", out Content nexus))                        
+                toNode.Content.TryAdd(nexus.Name, nexus);
+        
+        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("Sanctification")))
+            if (Settings.MapContent.ContentTypes.TryGetValue("Cleansed", out Content cleansed))                        
+                toNode.Content.TryAdd(cleansed.Name, cleansed);
+
+        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("UniqueMap")))
+            if (Settings.MapContent.ContentTypes.TryGetValue("UniqueMap", out Content uniqueMap))                        
+                toNode.Content.TryAdd(uniqueMap.Name, uniqueMap);
         
     }
     
