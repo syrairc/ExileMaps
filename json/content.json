@@ -34,8 +34,8 @@
     "Weight": 2.0,
     "Color": "200, 154,205,50"
   },
-  "Map Boss": {
-    "Name": "Map Boss",
+  "Powerful Map Boss": {
+    "Name": "Powerful Map Boss",
     "Weight": 4.5,
     "Color": "220, 0, 208, 255"
   },
