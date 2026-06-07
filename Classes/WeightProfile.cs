@@ -39,7 +39,6 @@ namespace ExileMaps.Classes
     public class BiomeProfileEntry
     {
         public float Weight { get; set; } = 1.0f;
-        public bool Highlight { get; set; } = true;
     }
 
     public class WeightProfile

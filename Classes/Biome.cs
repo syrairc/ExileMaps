@@ -1,8 +1,4 @@
-using System;
 using System.ComponentModel;
-using System.Drawing;
-using System.Text.Json.Serialization;
-using System.Linq;
 
 namespace ExileMaps.Classes
 {
@@ -10,8 +6,6 @@ namespace ExileMaps.Classes
     {
         private string name;
         private float weight = 1.0f;
-        private Color color = Color.FromArgb(255, 255, 255, 255);
-        private bool highlight = true;
 
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -46,33 +40,5 @@ namespace ExileMaps.Classes
             }
         }
 
-        [JsonConverter(typeof(JsonColorConverter))]
-        public Color Color
-        {
-            get => color;
-            set
-            {
-                if (color != value)
-                {
-                    color = value;
-                    OnPropertyChanged(nameof(Color));
-                }
-            }
-        }
-
-        public bool Highlight
-        {
-            get => highlight;
-            set
-            {
-                if (highlight != value)
-                {
-                    highlight = value;
-                    OnPropertyChanged(nameof(Highlight));
-                }
-            }
-        }
-
-        
     }
 }

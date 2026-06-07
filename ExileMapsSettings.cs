@@ -16,6 +16,16 @@ using static ExileMaps.ExileMapsCore;
 
 namespace ExileMaps;
 
+// Selectable sprite for the animated waypoint path. Each maps to a textures/path-*.png file loaded in
+// Initialise; Comet = path-energy-stripe.png (the default).
+public enum PathTextureStyle
+{
+    Comet,
+    Chevron,
+    DoubleChevron,
+    Capsule,
+}
+
 public class ExileMapsSettings : ISettings
 {
     public ToggleNode Enable { get; set; } = new ToggleNode(false);
@@ -25,6 +35,11 @@ public class ExileMapsSettings : ISettings
     {
         public string ActiveProfile { get; set; } = "Default";
         public Dictionary<string, WeightProfile> Profiles { get; set; } = new() { { "Default", new() } };
+
+        // Set once the pre-rework ("v1") settings auto-detect has been handled (imported or dismissed) so
+        // the one-time import banner never reappears. Persisted, but not auto-rendered as a widget (plain
+        // properties in this class, like ActiveProfile/Profiles, are driven by code, not the settings menu).
+        public bool OldSettingsMigrationHandled { get; set; } = false;
 
         [JsonIgnore]
         private string _profileEditName = "";
@@ -82,8 +97,7 @@ public class ExileMapsSettings : ISettings
                 foreach (var (k, biome) in Main.Settings.Maps.Biomes.Biomes)
                     profile.Biomes[k] = new BiomeProfileEntry
                     {
-                        Weight = biome.Weight,
-                        Highlight = true
+                        Weight = biome.Weight
                     };
             }
         }
@@ -130,6 +144,10 @@ public class ExileMapsSettings : ISettings
                     if (Main.Settings.Maps.Biomes.Biomes.TryGetValue(k, out var biome))
                         biome.Weight = entry.Weight;
                 }
+
+                // Live weights just changed; recompute cached node weights/colors and waypoints so the
+                // atlas reflects the new profile immediately (a refresh re-runs each Node.RecalculateWeight).
+                Main.OnProfileApplied();
             }
         }
 
@@ -181,7 +199,14 @@ public class ExileMapsSettings : ISettings
             {
                 Profiles.Remove(name);
                 if (ActiveProfile == name)
-                    SwitchProfile(Profiles.ContainsKey("Default") ? "Default" : Profiles.Keys.First());
+                {
+                    // Don't route through SwitchProfile: it calls SaveCurrentProfile first, which
+                    // re-creates the just-removed profile (ActiveProfile still points at it) and the
+                    // deleted profile reappears in the list. Point ActiveProfile at the fallback first,
+                    // then overlay it onto the live data.
+                    ActiveProfile = Profiles.ContainsKey("Default") ? "Default" : Profiles.Keys.First();
+                    LoadProfile(ActiveProfile);
+                }
             }
         }
 
@@ -325,14 +350,13 @@ public class ExileMapsSettings : ISettings
         };
     }
 
-    // Top-level import/export: full settings and weight-only presets. Both span every category.
+    // Top-level import/export: full settings. Profile import/export (Profiles section) covers weight-only presets.
     [JsonIgnore]
     public CustomNode WeightImportExport { get; set; } = new CustomNode
     {
         DrawDelegate = () =>
         {
             SettingsHelpers.DrawImportExportSettingsButtons();
-            SettingsHelpers.DrawImportExportWeightsButtons();
         }
     };
 
@@ -391,64 +415,64 @@ public class HotkeySettings
     [JsonIgnore]
     public CustomNode SepGeneral { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("General") };
 
-    [Menu("Map Cache Refresh Hotkey", "Default: ]")]
+    [Menu("Map Cache Refresh Hotkey", "Default: Home")]
     public HotkeyNodeV2 RefreshMapCacheHotkey { get; set; } = new HotkeyNodeV2(Keys.Home);
 
-    [Menu("Quick Edit Node Hotkey", "Hover a node on the Atlas and press to open a popup that edits that map type and its content without opening settings.")]
+    [Menu("Quick Edit Node Hotkey", "Hover a node on the Atlas and press to open a popup that edits that map type and its content without opening settings. Unbound by default - set a key.")]
     public HotkeyNodeV2 QuickEditNodeHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
     [JsonIgnore]
     public CustomNode SepWaypoints { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Waypoints") };
 
-    [Menu("Add Waypoint Hotkey", "Default: ,")]
+    [Menu("Add Waypoint Hotkey", "Default: Insert")]
     public HotkeyNodeV2 AddWaypointHotkey { get; set; } = new HotkeyNodeV2(Keys.Insert);
 
-    [Menu("Remove Waypoint Hotkey", "Default: .")]
+    [Menu("Remove Waypoint Hotkey", "Default: Delete")]
     public HotkeyNodeV2 DeleteWaypointHotkey { get; set; } = new HotkeyNodeV2(Keys.Delete);
 
-    [Menu("Waypoint Panel Hotkey", "Default: /")]
+    [Menu("Waypoint Panel Hotkey", "Default: End")]
     public HotkeyNodeV2 ToggleWaypointPanelHotkey { get; set; } = new HotkeyNodeV2(Keys.End);
 
-    [Menu("Toggle Waypoints Hotkey", "Show/hide waypoints and their arrows")]
+    [Menu("Toggle Waypoints Hotkey", "Show/hide waypoints and their arrows. Unbound by default - set a key.")]
     public HotkeyNodeV2 ToggleWaypointsHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
     [JsonIgnore]
     public CustomNode SepNodeProcessing { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Node Processing") };
 
-    [Menu("Toggle Processing Visited Nodes", "Default: '")]
+    [Menu("Toggle Processing Visited Nodes", "Default: unbound - set this")]
     public HotkeyNodeV2 ToggleVisitedNodesHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
-    [Menu("Toggle Processing Unlocked Nodes", "Default: '")]
+    [Menu("Toggle Processing Unlocked Nodes", "Default: unbound - set this")]
     public HotkeyNodeV2 ToggleUnlockedNodesHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
-    [Menu("Toggle Processing Locked Nodes", "Default: '")]
+    [Menu("Toggle Processing Locked Nodes", "Default: unbound - set this")]
     public HotkeyNodeV2 ToggleLockedNodesHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
-    [Menu("Toggle Processing Hidden Nodes", "Default: '")]
+    [Menu("Toggle Processing Hidden Nodes", "Default: unbound - set this")]
     public HotkeyNodeV2 ToggleHiddenNodesHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
     [JsonIgnore]
     public CustomNode SepDataUpdates { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Game Data Updates") };
 
-    [Menu("Update Map Type Data")]
+    [Menu("Update Map Type Data", "Re-scrape map types from game files. Unbound by default - set a key.")]
     public HotkeyNodeV2 UpdateMapsKey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
-    [Menu("Update Content Type Data")]
+    [Menu("Update Content Type Data", "Re-scrape content types from game files. Unbound by default - set a key.")]
     public HotkeyNodeV2 UpdateContentKey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
-    [Menu("Update Biome Data")]
+    [Menu("Update Biome Data", "Re-scrape biomes from game files. Unbound by default - set a key.")]
     public HotkeyNodeV2 UpdateBiomesKey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
     [JsonIgnore]
     public CustomNode SepDebug { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Debug") };
 
-    [Menu("Debug Node Hotkey", "Hover a node on the Atlas and press to open a popup showing that node's debug info and element flags.")]
+    [Menu("Debug Node Hotkey", "Hover a node on the Atlas and press to open a popup showing that node's debug info and element flags. Unbound by default - set a key.")]
     public HotkeyNodeV2 DebugNodeHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
-    [Menu("Print Node Debug Data")]
+    [Menu("Print Node Debug Data", "Unbound by default - set a key.")]
     public HotkeyNodeV2 DebugKey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
-    [Menu("Toggle Debug Mode")]
+    [Menu("Toggle Debug Mode", "Unbound by default - set a key.")]
     public HotkeyNodeV2 ToggleDebugModeHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
 }
 
@@ -460,9 +484,6 @@ public class GraphicSettings
 
     [JsonIgnore]
     public CustomNode SepPerformance { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Performance") };
-
-    [Menu("Render every N ticks", "Throttle the renderer to only re-render every Nth tick - can improve performance.")]
-    public RangeNode<int> RenderNTicks { get; set; } = new RangeNode<int>(5, 1, 20);
 
     [Menu("Map Cache Refresh Rate", "Throttle the map cache refresh rate. Default is 5 seconds.")]
     public RangeNode<int> MapCacheRefreshRate { get; set; } = new RangeNode<int>(5, 1, 60);
@@ -527,11 +548,48 @@ public class GraphicSettings
     [Menu("Draw paths to waypoints", "Shows the shortest path from the nearest visited node to waypoints")]
     public ToggleNode ShowPaths { get; set; } = new ToggleNode(true);
 
-    [Menu("Waypoint path color", "Color of the path lines to waypoints")]
-    public ColorNode PathLineColor { get; set; } = new ColorNode(Color.FromArgb(255, 255, 140, 0));
+    [Menu("Waypoint Line Width", "Width of the map waypoint path (px).")]
+    public RangeNode<float> WaypointLineWidth { get; set; } = new RangeNode<float>(9.0f, 0, 24);
 
-    [Menu("Waypoint Line Width", "Width of the map waypoint lines")]
-    public RangeNode<float> WaypointLineWidth { get; set; } = new RangeNode<float>(3.0f, 0, 10);
+    // Persisted enum (no [Menu]; edited via WaypointPathTexturePicker below, like SpecialMapIcon).
+    public PathTextureStyle WaypointPathTexture { get; set; } = PathTextureStyle.Comet;
+
+    [JsonIgnore]
+    public CustomNode WaypointPathTexturePicker { get; set; } = new CustomNode
+    {
+        DrawDelegate = () =>
+        {
+            if (Main == null) return;
+            string[] labels = { "Comet", "Chevron", "Double Chevron", "Capsule" };
+            int idx = (int)Main.Settings.Graphics.WaypointPathTexture;
+            if (idx < 0 || idx >= labels.Length) idx = 0;
+            ImGui.Text("Waypoint Path Texture");
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(160);
+            if (ImGui.Combo("##waypointpathtexture", ref idx, labels, labels.Length))
+                Main.Settings.Graphics.WaypointPathTexture = (PathTextureStyle)idx;
+            ImGui.SameLine();
+            ImGui.TextDisabled("(needs 'Use Icons for Nodes' on; off = flat line)");
+        }
+    };
+
+    [Menu("Animate Waypoint Path", "Scroll dashes along the path toward the waypoint. Off = static dashed line.")]
+    public ToggleNode WaypointPathAnimated { get; set; } = new ToggleNode(true);
+
+    [Menu("Waypoint Dash Length", "Length (px) of each dash on the waypoint path. 0 = solid line.")]
+    public RangeNode<float> WaypointDashLength { get; set; } = new RangeNode<float>(20.0f, 0, 80);
+
+    [Menu("Waypoint Dash Gap", "Gap (px) between dashes on the waypoint path.")]
+    public RangeNode<float> WaypointDashGap { get; set; } = new RangeNode<float>(10.0f, 0, 60);
+
+    [Menu("Waypoint Dash Speed", "How fast dashes scroll toward the waypoint (px per tick). 0 = static.")]
+    public RangeNode<float> WaypointDashSpeed { get; set; } = new RangeNode<float>(1.5f, 0, 8);
+
+    [Menu("Waypoint Texture Scale", "Thickness multiplier applied to the path width when using a textured path. Plain-line mode ignores this.")]
+    public RangeNode<float> WaypointPathTextureScale { get; set; } = new RangeNode<float>(2.0f, 0.5f, 6);
+
+    [Menu("Waypoint Arrow Min Distance", "Only show the off-screen waypoint arrow when the waypoint is farther than this (px) from screen center. Lower = arrow shows for nearer waypoints.")]
+    public RangeNode<float> WaypointArrowMinDistance { get; set; } = new RangeNode<float>(1200.0f, 50, 1500);
 
     [Menu("Favorite Marker Color", "Color of the star marker drawn above favorite map nodes")]
     public ColorNode FavoriteColor { get; set; } = new ColorNode(Color.FromArgb(255, 255, 215, 0));
@@ -539,14 +597,17 @@ public class GraphicSettings
     [Menu("Favorite Marker Scale", "Size of the star marker drawn above favorite map nodes")]
     public RangeNode<float> FavoriteIconScale { get; set; } = new RangeNode<float>(1.0f, 0, 3);
 
+    [JsonIgnore]
+    public CustomNode SepSpecialMaps { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Special Maps") };
+
     [Menu("Show Atlas Point Marker", "Draw a small silver star above maps that grant an atlas passive point.")]
     public ToggleNode ShowAtlasPointIndicator { get; set; } = new ToggleNode(true);
 
     [Menu("Show Atlas Quest Marker", "Draw a small golden exclamation above maps that have atlas quest content.")]
     public ToggleNode ShowAtlasQuestIndicator { get; set; } = new ToggleNode(true);
 
-    [JsonIgnore]
-    public CustomNode SepSpecialMaps { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Special Maps") };
+    [Menu("Atlas Marker Size", "Pixel size of the atlas-point star and atlas-quest exclamation markers.")]
+    public RangeNode<float> AtlasIndicatorSize { get; set; } = new RangeNode<float>(20.0f, 8, 48);
 
     [Menu("Special Map Indicator", "Draw an icon above 'special' map nodes (wider node art) instead of a solid circle, so the map art isn't covered")]
     public ToggleNode ShowSpecialMapIndicator { get; set; } = new ToggleNode(true);
@@ -556,6 +617,12 @@ public class GraphicSettings
 
     [Menu("Special Map Marker Scale", "Size of the icon drawn above special map nodes")]
     public RangeNode<float> SpecialMapIconScale { get; set; } = new RangeNode<float>(1.0f, 0, 3);
+
+    [Menu("Special Map Width Threshold", "Node art wider than this (px) counts as a 'special' map: skips the covering fill and gets an icon above instead. Raise if normal maps are wrongly flagged, lower if specials are missed (may vary with resolution/UI scale).")]
+    public RangeNode<float> SpecialMapWidthThreshold { get; set; } = new RangeNode<float>(90.0f, 40, 200);
+
+    [Menu("Special Map Marker Offset", "Pixels above the node center to place the special-map icon.")]
+    public RangeNode<float> SpecialMapIconOffset { get; set; } = new RangeNode<float>(40.0f, 0, 120);
 
     // Sprite drawn above special map nodes. Persisted (Newtonsoft); edited via SpecialMapIconPicker.
     public SpriteIcon SpecialMapIcon { get; set; } = SpriteIcon.Exclamation;
@@ -649,7 +716,7 @@ public class MapSettings
                         HighlightMapNodes = highlightNodes;
 
                     ImGui.TableNextColumn();
-                    ImGui.Text("Highlight Map Nodes");
+                    ImGui.Text("Draw Map Nodes");
                     ImGui.TableNextRow();
 
                     ImGui.TableNextColumn();
@@ -667,7 +734,7 @@ public class MapSettings
                         DrawWeightOnMap = drawWeight;
 
                     ImGui.TableNextColumn();
-                    ImGui.TextUnformatted("Draw Weight % on Map");  
+                    ImGui.TextUnformatted("Draw Weight on Map");
 
                     ImGui.TableNextColumn();
                     Color goodColor = GoodNodeColor;
@@ -707,6 +774,33 @@ public class MapSettings
             ImGui.Separator();
             ImGui.TextWrapped("CTRL+Click on a slider to manually enter a value.");
 
+            // How weights work — quick reference for the user.
+            if (ImGui.CollapsingHeader("How do map weights work?"))
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.75f, 0.75f, 0.75f, 1.0f));
+                ImGui.TextWrapped(
+                    "Each node's weight decides how desirable it is (higher = more highlighted). It is the map's base " +
+                    "weight, scaled by the content on the node, plus a flat biome bonus. Three different scales feed " +
+                    "one formula:");
+                ImGui.Spacing();
+                ImGui.TextWrapped("    Weight = MapWeight + |MapWeight| x (sum of content weights) / 100 + (sum of biome weights)");
+                ImGui.Spacing();
+                ImGui.TextWrapped(
+                    "Map weight (-50 to 50): 50 = amazing, 25 = good, 0 = neutral, negative = actively avoid.");
+                ImGui.TextWrapped(
+                    "Content weight (-100 to 100) is a whole-number percentage bonus (default 25). Content adds together - " +
+                    "it does NOT multiply. Positive content always RAISES the value (even for negative-weight maps); " +
+                    "negative content lowers it. 0 = ignored.");
+                ImGui.TextWrapped(
+                    "Biome weight (-5 to 5) is a small flat amount added after the content scaling (most biomes 0). Set a " +
+                    "few you care about; it nudges otherwise-similar maps.");
+                ImGui.Spacing();
+                ImGui.TextWrapped(
+                    "Example: a map (10) with Breach (+25) and Delirium (-10), on a +2 biome = " +
+                    "10 + 10 x (25 - 10)/100 + 2 = 10 + 1.5 + 2 = 13.5.");
+                ImGui.PopStyleColor();
+            }
+
             // Profile context
             ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.6f, 0.6f, 0.6f, 1.0f));
             ImGui.Text($"Profile: {(Main != null && Main.Settings.Profiles != null ? Main.Settings.Profiles.ActiveProfile : "Default")}");
@@ -720,6 +814,13 @@ public class MapSettings
             ImGui.SameLine();
             if (ImGui.Button("Clear##mapsearchclear"))
                 mapSearchFilter = "";
+            // Quick-filter chips - narrow the list to favorites / highlighted / weighted maps.
+            ImGui.SameLine(); ImGui.Spacing(); ImGui.SameLine();
+            ImGui.Checkbox("Favorites##mapchip", ref mapFilterFav);
+            ImGui.SameLine();
+            ImGui.Checkbox("Highlighted##mapchip", ref mapFilterHighlight);
+            ImGui.SameLine();
+            ImGui.Checkbox("Weight > 0##mapchip", ref mapFilterWeighted);
 
             if (ImGui.BeginTable("maps_table", 10, ImGuiTableFlags.SizingFixedFit|ImGuiTableFlags.Borders|ImGuiTableFlags.PadOuterX))
             {
@@ -740,6 +841,9 @@ public class MapSettings
                     .Where(x => !MapIsUnused(x.Key, x.Value))
                     .Where(x => string.IsNullOrEmpty(mapSearchFilter)
                         || (x.Value.Name?.Contains(mapSearchFilter, StringComparison.OrdinalIgnoreCase) ?? false))
+                    .Where(x => !mapFilterFav || x.Value.Favorite)
+                    .Where(x => !mapFilterHighlight || x.Value.Highlight)
+                    .Where(x => !mapFilterWeighted || x.Value.Weight > 0)
                     .OrderBy(x => x.Value.Name)
                     .ToList();
                 var visibleMapValues = visibleMaps.Select(x => x.Value).ToList();
@@ -749,7 +853,8 @@ public class MapSettings
                 ImGui.TableNextColumn();
                 ImGui.Text("Set all");
                 SettingsHelpers.ToggleAll("highlight", visibleMapValues, m => m.Highlight, (m, v) => m.Highlight = v);
-                ImGui.TableNextColumn(); // Weight (no bulk action)
+                ImGui.TableNextColumn();
+                SettingsHelpers.SetAllWeight("mapweight", ref bulkMapWeight, -50f, 50f, "%.1f", visibleMapValues, (m, w) => m.Weight = w);
                 ImGui.TableNextColumn();
                 SettingsHelpers.CenterControl(30f);
                 SettingsHelpers.SetAllColor("nodecolor", ref bulkNodeColor, visibleMapValues, (m, c) => m.NodeColor = c);
@@ -792,7 +897,7 @@ public class MapSettings
                     ImGui.TableNextColumn();
                     float weight = map.Weight;
                     ImGui.SetNextItemWidth(100);
-                    if(ImGui.SliderFloat($"##{key}_weight", ref weight, -25.0f, 50.0f, "%.1f"))                        
+                    if(ImGui.SliderFloat($"##{key}_weight", ref weight, -50.0f, 50.0f, "%.1f"))
                         map.Weight = weight;
 
                     ImGui.TableNextColumn();
@@ -855,6 +960,8 @@ public class MapSettings
                 foreach (var (_, m) in Maps)
                     m.Weight = 0;
             });
+            ImGui.SameLine();
+            SettingsHelpers.DrawResetToDefaultsButton("maps", ref defaultWeightsConfirm);
             }
         };
 
@@ -862,8 +969,19 @@ public class MapSettings
 
     [JsonIgnore]
     private string mapSearchFilter = "";
+    // Quick-filter chips for the map table (combine with the search box).
+    private bool mapFilterFav = false;
+    private bool mapFilterHighlight = false;
+    private bool mapFilterWeighted = false;
     [JsonIgnore]
     private bool mapResetConfirm = false;
+    [JsonIgnore]
+    private bool defaultWeightsConfirm = false;
+    // Backing value for the "set all" weight slider in the map table header.
+    [JsonIgnore]
+    // Starts neutral (0) so nudging the "set all" slider doesn't silently jump every map to a non-zero
+    // weight. The user drags it to the value they actually want.
+    private float bulkMapWeight = 0f;
     // Backing values for the "set all" color pickers in the map table header.
     [JsonIgnore]
     private Vector4 bulkNodeColor = new(1, 1, 1, 1);
@@ -957,21 +1075,9 @@ public class BiomeSettings
                         ImGui.TableNextColumn();
                         float weight = biome.Weight;                        
                         ImGui.SetNextItemWidth(100);
-                        if(ImGui.SliderFloat($"##{biome}_weight", ref weight, -5.0f, 5.0f, "%.2f"))                        
+                        if(ImGui.SliderFloat($"##{biome}_weight", ref weight, -5.0f, 5.0f, "%.2f"))
                             biome.Weight = weight;
-                        
-                        // // Color
-                        // ImGui.TableNextColumn();
-                        // SettingsHelpers.CenterControl(30f);
-                        // Vector4 biomeColorVector = new(biome.Color.R / 255.0f, biome.Color.G / 255.0f, biome.Color.B / 255.0f, biome.Color.A / 255.0f);
-                        // if(ImGui.ColorEdit4($"##{biome}_color", ref biomeColorVector, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview | ImGuiColorEditFlags.NoInputs))                        
-                        //     biome.Color = Color.FromArgb((int)(biomeColorVector.W * 255), (int)(biomeColorVector.X * 255), (int)(biomeColorVector.Y * 255), (int)(biomeColorVector.Z * 255));
-                        
-                        // // Icon
-                        // ImGui.TableNextColumn();
-                        // SettingsHelpers.CenterControl(30f);
 
-                        
                         ImGui.PopID();
                     }
                 }
@@ -1065,6 +1171,8 @@ public class ContentSettings
                 ImGui.SameLine();
                 if (ImGui.Button("Clear##contentsearchclear"))
                     contentSearchFilter = "";
+                ImGui.SameLine(); ImGui.Spacing(); ImGui.SameLine();
+                ImGui.Checkbox("Favorites##contentchip", ref contentFilterFav);
 
                 if (ImGui.BeginTable("content_table", 6, ImGuiTableFlags.Borders))
                 {
@@ -1079,6 +1187,7 @@ public class ContentSettings
                     var visibleContent = ContentTypes
                         .Where(x => string.IsNullOrEmpty(contentSearchFilter)
                             || (x.Value.Name?.Contains(contentSearchFilter, StringComparison.OrdinalIgnoreCase) ?? false))
+                        .Where(x => !contentFilterFav || x.Value.Favorite)
                         .OrderBy(x => x.Value.Name)
                         .ToList();
                     var contentValues = visibleContent.Select(x => x.Value).ToList();
@@ -1087,7 +1196,8 @@ public class ContentSettings
                     ImGui.TableNextRow();
                     ImGui.TableNextColumn();
                     ImGui.Text("Set all");
-                    ImGui.TableNextColumn(); // Weight (no bulk action)
+                    ImGui.TableNextColumn();
+                    SettingsHelpers.SetAllWeight("contentweight", ref bulkContentWeight, -100f, 100f, "%.0f", contentValues, (c, w) => c.Weight = w);
                     ImGui.TableNextColumn();
                     SettingsHelpers.CenterControl(30f);
                     SettingsHelpers.SetAllColor("contentcolor", ref bulkContentColor, contentValues, (c, col) => c.Color = col);
@@ -1110,7 +1220,7 @@ public class ContentSettings
                         ImGui.TableNextColumn();
                         float weight = content.Weight;                        
                         ImGui.SetNextItemWidth(100);
-                        if(ImGui.SliderFloat($"##{key}_weight", ref weight, -5.0f, 5.0f, "%.2f")) 
+                        if(ImGui.SliderFloat($"##{key}_weight", ref weight, -100.0f, 100.0f, "%.0f"))
                             content.Weight = weight;
                         
                         ImGui.TableNextColumn();
@@ -1141,19 +1251,29 @@ public class ContentSettings
 
                 SettingsHelpers.DrawResetWeightsButton("content", ref contentResetConfirm, () => {
                     foreach (var (_, c) in ContentTypes)
-                        c.Weight = 0;
+                        c.Weight = 0f;
                 });
+                ImGui.SameLine();
+                SettingsHelpers.DrawResetToDefaultsButton("content", ref defaultWeightsConfirm);
             }
         };
     }
 
     [JsonIgnore]
+    private bool defaultWeightsConfirm = false;
+    [JsonIgnore]
     private bool contentResetConfirm = false;
     [JsonIgnore]
     private string contentSearchFilter = "";
+    // Quick-filter chip for the content table (favorites only).
+    private bool contentFilterFav = false;
     // Backing value for the "set all" color picker in the content table header.
     [JsonIgnore]
     private Vector4 bulkContentColor = new(1, 1, 1, 1);
+    // Backing value for the "set all" weight slider in the content table header.
+    [JsonIgnore]
+    // Neutral default - see bulkMapWeight.
+    private float bulkContentWeight = 0f;
 }
 
 /// <summary>
@@ -1272,6 +1392,16 @@ public static class SettingsHelpers {
         }
     }
 
+    /// <summary>
+    /// "Set all" weight slider for a table column. Dragging it applies the value to every item.
+    /// The slider value is caller-owned so it persists between frames.
+    /// </summary>
+    public static void SetAllWeight<T>(string id, ref float value, float min, float max, string fmt, System.Collections.Generic.IEnumerable<T> items, Action<T,float> set) {
+        ImGui.SetNextItemWidth(100);
+        if (ImGui.SliderFloat($"##setallw_{id}", ref value, min, max, fmt))
+            foreach (var i in items) set(i, value);
+    }
+
     public static void CenterControl(float width) {
         float availableWidth = ImGui.GetContentRegionAvail().X;
         float cursorPosX = ImGui.GetCursorPosX() + (availableWidth - width) / 2.0f;
@@ -1352,48 +1482,66 @@ public static class SettingsHelpers {
     }
 
     /// <summary>
-    /// Draws "Export Weights" / "Import Weights" buttons that save or load every weight (maps, content,
-    /// biomes, mods) to/from a user-chosen JSON file via a native file dialog.
+    /// Draws a "Reset to Plugin Defaults" button (with confirm) that reloads the bundled
+    /// exilemaps_weights.json, restoring the shipped default map and content weights.
     /// </summary>
-    public static void DrawImportExportWeightsButtons() {
-        if (ImGui.Button("Export Weights##export_weights"))
-            Main.ExportWeights();
-        if (ImGui.IsItemHovered()) {
-            ImGui.BeginTooltip();
-            ImGui.Text("Save all weights (maps, content, biomes, mods) to a JSON file.");
-            ImGui.EndTooltip();
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Import Weights##import_weights"))
-            Main.ImportWeights();
-        if (ImGui.IsItemHovered()) {
-            ImGui.BeginTooltip();
-            ImGui.Text("Load weights from a previously exported JSON file.");
-            ImGui.EndTooltip();
+    public static void DrawResetToDefaultsButton(string id, ref bool confirming) {
+        ImGui.Spacing();
+        if (!confirming) {
+            if (ImGui.Button($"Reset to Plugin Defaults##{id}_default"))
+                confirming = true;
+            if (ImGui.IsItemHovered()) {
+                ImGui.BeginTooltip();
+                ImGui.Text("Restore the map and content weights that ship with the plugin.");
+                ImGui.EndTooltip();
+            }
+        } else {
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.7f, 0.1f, 0.1f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.85f, 0.15f, 0.15f, 1.0f));
+            if (ImGui.Button($"Reset to plugin defaults? Click to confirm##{id}_default_confirm")) {
+                Main?.ResetWeightsToDefaults();
+                confirming = false;
+            }
+            ImGui.PopStyleColor(2);
+            ImGui.SameLine();
+            if (ImGui.Button($"Cancel##{id}_default_cancel"))
+                confirming = false;
         }
     }
 
     /// <summary>
-    /// Draws "Export Settings" / "Import Settings" buttons that save or load the entire settings object
-    /// (all categories) to/from a user-chosen JSON file via a native file dialog.
+    /// Draws the "Import Old Settings" button (convert a pre-rework settings file into a new profile) plus
+    /// the one-time auto-detect banner. Full settings export/import was removed - profiles cover sharing.
     /// </summary>
     public static void DrawImportExportSettingsButtons() {
-        if (ImGui.Button("Export Settings##export_settings"))
-            Main.ExportSettings();
-        if (ImGui.IsItemHovered()) {
-            ImGui.BeginTooltip();
-            ImGui.Text("Save all plugin settings to a JSON file.");
-            ImGui.EndTooltip();
-        }
+        DrawOldSettingsImportBanner();
 
-        ImGui.SameLine();
-        if (ImGui.Button("Import Settings##import_settings"))
-            Main.ImportSettings();
+        if (ImGui.Button("Import Old Settings##import_old_settings"))
+            Main.ImportOldSettings();
         if (ImGui.IsItemHovered()) {
             ImGui.BeginTooltip();
-            ImGui.Text("Load all plugin settings from a previously exported JSON file.\nOverwrites your current settings.");
+            ImGui.Text("Convert settings from the previous (pre-rework) version of the plugin.\nMap/content/biome weights load into a NEW profile (leaving existing\nprofiles intact); all other settings apply directly.\n\nSettings files are normally stored in your ExileCore folder under\nconfig\\global\\ (e.g. config\\global\\ExileMaps_settings.json).");
             ImGui.EndTooltip();
         }
+    }
+
+    // One-time prompt shown when pre-rework ("v1") settings were detected on disk at load (see
+    // ExileMapsCore.DetectOldSettings). Import converts the backed-up v1 file into an "Original Settings"
+    // profile and restores keybinds/other categories; Dismiss hides it for good. Both stop the prompt
+    // permanently via OldSettingsMigrationHandled.
+    private static void DrawOldSettingsImportBanner() {
+        if (Main == null || !Main.OldSettingsPendingImport)
+            return;
+
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.85f, 0.3f, 1f));
+        ImGui.TextWrapped("Settings from the previous version were detected. Import them into an 'Original Settings' profile? This also restores your old keybinds and other settings.");
+        ImGui.PopStyleColor();
+
+        if (ImGui.Button("Import##old_settings_banner"))
+            Main.ImportDetectedOldSettings();
+        ImGui.SameLine();
+        if (ImGui.Button("Dismiss##old_settings_banner"))
+            Main.DismissDetectedOldSettings();
+        ImGui.Separator();
     }
 }

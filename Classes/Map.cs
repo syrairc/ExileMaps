@@ -24,7 +24,7 @@ namespace ExileMaps.Classes
 
         [JsonIgnore]
         private int fogCount = 0;
-        private float weight = 1.0f;
+        private float weight = 10.0f;
 
         public event PropertyChangedEventHandler PropertyChanged;
 
@@ -43,10 +43,6 @@ namespace ExileMaps.Classes
 
         // Sprite drawn for this map's nodes (and special-map indicator). Serializes as int; default Circle.
         public SpriteIcon Icon { get; set; } = SpriteIcon.Circle;
-
-        public bool IsTower() {
-            return MatchID("MapSwampTower") || MatchID("MapLostTowers") || MatchID("MapMesa") || MatchID("MapBluff") || MatchID("MapAlpineRidge");
-        }
 
         public override string ToString()
         {

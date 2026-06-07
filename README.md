@@ -4,8 +4,6 @@
 
 It highlights map nodes, scores each one with a configurable **weight** (a "how good is this map?" number), marks the **content** on each map (Breach, Ritual, Expedition, etc.), flags maps that give **atlas passive points** or **atlas quests**, and lets you drop **waypoints** with on-screen arrows and a shortest-path line from where you've already explored.
 
-> ExileMaps is a plugin for the third-party **ExileCore2** overlay (a "HUD"). It only *reads* the game and draws on top of it — it never clicks, moves, or plays for you. You need the ExileCore2 HUD installed to use it.
-
 ---
 
 ## What you'll see on the Atlas
@@ -17,27 +15,6 @@ It highlights map nodes, scores each one with a configurable **weight** (a "how 
 - **Favorite stars** — a gold star above maps you've marked as favorites.
 - **Atlas point / quest markers** — a small silver star for maps that grant an atlas passive point, and a gold "!" for maps with an atlas quest.
 - **Waypoints** — a marker above any map you've pinned, an arrow at the screen edge pointing to off-screen waypoints, and a line tracing the shortest route from explored territory.
-
----
-
-## Requirements
-
-- **Path of Exile 2**
-- The **ExileCore2** HUD/overlay, installed and working
-
----
-
-## Installation
-
-Most people install ExileMaps the same way as any other ExileCore2 plugin:
-
-1. Get the plugin (either a release build, or the source code).
-2. Put it in your HUD's plugins folder:
-   - **Compiled build:** copy the ExileMaps folder into your HUD's `Plugins/Compiled/` folder.
-   - **Source code:** copy the source into your HUD's `Plugins/Source/ExileMaps/` folder — the HUD will build it for you the next time it starts.
-3. Start the HUD (and the game), then open the HUD settings and **enable ExileMaps**.
-
-The plugin ships with everything it needs (`json/` data files and `textures/` icons) — make sure those folders stay next to the plugin.
 
 ---
 
@@ -103,27 +80,4 @@ Under **Content** you choose which content types draw a ring, what color, and wh
 
 ### Sharing your setup
 - **Export/Import Settings** — your entire ExileMaps configuration.
-- **Export/Import Weights** — just the weight numbers (maps/content/biomes).
-- **Export/Import Profile** — a single profile, perfect for sharing a curated farming setup.
-
-All of these open a normal Windows file dialog.
-
----
-
-## Tips & troubleshooting
-
-- **Nothing is highlighted / the map lists are empty.** Make sure the plugin is enabled, then open the Atlas and wait a moment for the first scan. If it's still empty, bind and press the **Update Map / Content / Biome data** hotkeys while the Atlas is open. The **Refresh** hotkey (Home) forces a re-scan.
-- **After a new league or patch.** Map IDs change between leagues. If maps stop matching, press the **Update … Data** hotkeys to re-read the game's current lists.
-- **Icons look like plain circles.** That's the fallback look. The custom icon set lives at `textures/Icons_Desaturated.png` — make sure it's present next to the plugin, and that **Use Icons for Nodes** is on under Graphics.
-- **The overlay covers a tooltip or my health orbs.** ExileMaps already avoids the map tooltip, title bar, orbs, flasks, and skill bar. If something still overlaps after a game UI change, let the maintainer know.
-- **Performance.** If the overlay feels heavy on a huge atlas, raise **Render every N ticks** and **Map Cache Refresh Rate** under Graphics, and/or lower the **Atlas Range** under Features.
-- **Weights changed but colors didn't update.** Updates are batched and apply within a moment; a Refresh (Home) forces it.
-
----
-
-## Good to know
-
-- ExileMaps is **display-only** — it reads the game and draws an overlay. It does not automate anything.
-- It runs **inside the ExileCore2 HUD**; it is not a standalone program.
-- Engine files for ExileCore2 are **not** included and are not redistributed here.
-- This is a community hobby project for Path of Exile 2. Expect occasional breakage right after game patches — a quick **Update … Data** usually sorts it out.
+- **Export/Import Profile** — a single profile (weights + display settings), perfect for sharing a curated farming setup.

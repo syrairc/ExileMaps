@@ -33,6 +33,15 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private const string defaultBiomesPath = "json\\biomes.json";
     private const string defaultContentPath = "json\\content.json";
     private const string ArrowPath = "textures\\arrow.png";
+    // Selectable waypoint-path sprites (one dash each). Loaded if present; the path falls back to a
+    // plain line when the selected texture is missing or 'Use Icons for Nodes' is off.
+    private static readonly Dictionary<PathTextureStyle, string> PathTextureFiles = new()
+    {
+        { PathTextureStyle.Comet,         "textures\\path-energy-stripe.png" },
+        { PathTextureStyle.Chevron,       "textures\\path-chevron.png" },
+        { PathTextureStyle.DoubleChevron, "textures\\path-double-chevron.png" },
+        { PathTextureStyle.Capsule,       "textures\\path-capsule.png" },
+    };
     private const string IconsFile = "Icons.png";
     // New custom sprite sheet for the plugin (drop the generated PNG in textures/). Loaded if present;
     // grid layout (SpriteSheetCols x SpriteSheetRows) to be set once the sheet is finalized.
@@ -44,20 +53,44 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     public AtlasPanel AtlasPanel;
 
     private Vector2 screenCenter;
-    private List<Node> selectedNodes = [];
+    private readonly List<Node> selectedNodes = [];
+    // How often (in frames) to recompute the on-screen node set. Throttles the per-frame cull only;
+    // the cached set still redraws every frame. Was the "Render every N ticks" setting.
+    private const int OnScreenRecomputeInterval = 5;
+    // Waypoint-panel list filter: 0 = All, 1 = Manual only, 2 = Auto-created only. Transient (not saved).
+    private int waypointListFilter = 0;
+    // Reused each frame to resolve on-screen node rects without allocating a new list per render.
+    private readonly List<(Node node, RectangleF rect)> nodePositions = [];
     private RectangleF cachedScreenRect;
     private readonly List<RectangleF> cachedExcludeRects = [];
     private Dictionary<Vector2i, Node> mapCache = [];
     public bool refreshCache = false;
-    private int cacheTicks = 0;
     private bool refreshingCache = false;
-    private float maxMapWeight = 20.0f;
-    private float minMapWeight = -20.0f;
+    // When set, the next background refresh clears the cache first (atlas reopen / area change).
+    private bool clearCacheOnRefresh = false;
+    // 0..1 fraction of the current cache refresh, updated from the background refresh job and read by
+    // the render thread to draw the reload progress bar. volatile so the render thread sees updates.
+    private volatile float cacheRefreshProgress = 0f;
+    private float maxMapWeight = 50.0f;
+    private float minMapWeight = -50.0f;
     private readonly object mapCacheLock = new();
     private DateTime lastRefresh = DateTime.Now;
     private bool weightsDirty = false;
     private DateTime lastWeightRecalc = DateTime.Now;
     private int TickCount { get; set; }
+
+    // Bumped whenever a cache refresh finishes. Step counts and the atlas-panel list are memoized
+    // against this so the waypoint panel doesn't rerun a full BFS + filter/sort every render frame.
+    private int mapCacheVersion = 0;
+    private int weightsRecalcVersion = 0;
+    // id -> Map index for the MatchID fallback, so resolving a node's map type is O(1) instead of an
+    // O(n) scan of every map per node. Rebuilt when the map dictionary gains entries (scrape).
+    private Dictionary<string, Map> mapIdIndex;
+    private int mapIdIndexCount = -1;
+    private Dictionary<Vector2i, int> cachedStepCounts;
+    private int cachedStepCountsVersion = -1;
+    private List<Node> cachedAtlasList;
+    private (int ver, int wver, string filter, bool regex, string sort, string sort2, int maxSteps, int maxItems) cachedAtlasSig = (-1, -1, null, false, null, null, -1, -1);
 
     private Vector2 atlasOffset;
     private Vector2 atlasDelta;
@@ -66,6 +99,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     internal IntPtr arrowId;
     internal IntPtr customIconsId;
     private bool customIconsLoaded = false;
+    // Texture ids for each loaded path sprite, keyed by style. Missing entries = file not present.
+    private readonly Dictionary<PathTextureStyle, IntPtr> pathTextureIds = new();
 
     private bool AtlasHasBeenClosed = true;
     private bool gameFilesScraped = false;
@@ -87,10 +122,25 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         // post-scrape via SeedProfiles(). EnsureDefaultProfile only guarantees a valid ActiveProfile key.
         Settings.Profiles.EnsureDefaultProfile();
 
+        // Must run before ExileCore re-saves the settings file as v2 (first save destroys the old data),
+        // so we sniff + back it up here at load. The actual conversion is deferred to a user banner click.
+        DetectOldSettings();
+
         Graphics.InitImage(IconsFile);
         iconsId = Graphics.GetTextureId(IconsFile);
         Graphics.InitImage("arrow.png", Path.Combine(DirectoryFullName, ArrowPath));
         arrowId = Graphics.GetTextureId("arrow.png");
+
+        // Load each selectable waypoint-path sprite that exists. DrawWaypointPath falls back to a plain
+        // line for any style whose file is missing.
+        foreach (var (style, rel) in PathTextureFiles) {
+            var full = Path.Combine(DirectoryFullName, rel);
+            if (!File.Exists(full))
+                continue;
+            var name = Path.GetFileName(rel);
+            Graphics.InitImage(name, full);
+            pathTextureIds[style] = Graphics.GetTextureId(name);
+        }
 
         // Load the custom sprite sheet if it's been added. Guarded so the plugin still runs before
         // the PNG exists; once present, address sprites via GetSpriteUV(col, row).
@@ -122,7 +172,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
 
         if (AtlasHasBeenClosed) {
-            RefreshMapCache(true);
+            // Enqueue an async clearing refresh instead of running it inline on the main thread
+            // (which froze the overlay and hid the reload bar). Force past the throttle.
+            refreshCache = true;
+            clearCacheOnRefresh = true;
+            lastRefresh = DateTime.MinValue;
         }
 
         AtlasHasBeenClosed = false;
@@ -137,23 +191,45 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             SeedProfiles();
         }
 
-        cacheTicks++;
-        if (cacheTicks % 100 != 0) 
-            if (AtlasPanel.Descriptions.Count > mapCache.Count)
-                refreshCache = true;
-        cacheTicks = 0;
-        
+        // The atlas streams its node Descriptions in progressively after opening (0 -> ... -> full over
+        // several seconds after an area change), so the live count can outrun what we cached. Re-flag a
+        // refresh whenever the cache is behind, so a partial first fill gets corrected.
+        bool cacheBehind = AtlasPanel.Descriptions.Count > mapCache.Count;
+        if (cacheBehind)
+            refreshCache = true;
+
         screenCenter = GameController.Window.GetWindowRectangle().Center - GameController.Window.GetWindowRectangle().Location;
-        
-        if (refreshCache && !refreshingCache && (DateTime.Now.Subtract(lastRefresh).TotalSeconds > Settings.Graphics.MapCacheRefreshRate || mapCache.Count == 0))
+
+        // Throttle full refreshes to MapCacheRefreshRate, EXCEPT while the cache is still filling (empty,
+        // or behind the live node count). Without the cacheBehind bypass a partial cache caught mid-stream
+        // right after an area change - e.g. 71 of 585 nodes - was shown until the rate elapsed (up to tens
+        // of seconds); the old `mapCache.Count == 0` check only caught a fully empty cache. The 0.5s floor
+        // stops a slow stream from kicking off a burst of back-to-back refreshes.
+        double elapsed = DateTime.Now.Subtract(lastRefresh).TotalSeconds;
+        bool throttleOpen = elapsed > Settings.Graphics.MapCacheRefreshRate
+            || mapCache.Count == 0
+            || (cacheBehind && elapsed > 0.5);
+        if (refreshCache && !refreshingCache && throttleOpen)
         {
+            bool clearCache = clearCacheOnRefresh;
+            clearCacheOnRefresh = false;
             var job = new Job($"{nameof(ExileMaps)}RefreshCache", () =>
             {
-                RefreshMapCache();
-                refreshCache = false;
+                // Task.Run swallows exceptions: without this guard a thrown refresh would leave
+                // refreshingCache stuck true and deadlock every future refresh + weight recalc. Reset the
+                // flags here (not only at RefreshMapCache's tail) so failures recover. On error advance
+                // lastRefresh so a persistently-failing refresh retries on the throttle, not every tick.
+                try {
+                    RefreshMapCache(clearCache);
+                } catch (Exception e) {
+                    LogError("Error refreshing map cache: " + e.Message + "\n" + e.StackTrace);
+                    lastRefresh = DateTime.Now;
+                } finally {
+                    refreshingCache = false;
+                    refreshCache = false;
+                }
             });
             job.Start();
-
         }
 
         // Coalesce settings-change weight recalcs. Slider drags (and quick-edit edits) fire
@@ -186,23 +262,28 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         TickCount++;
 
         if (!AtlasPanel.IsVisible) return;
-        if (mapCache.Count == 0) RefreshMapCache();
+        // First-open population is handled asynchronously by Tick's refresh gate (which fires when
+        // mapCache.Count == 0), so the overlay keeps drawing and the reload bar can show. Don't run
+        // a synchronous refresh on the render thread here.
 
         // Cache panel/tooltip bounds once per frame so IsOnScreen avoids repeated game-memory reads.
         UpdateScreenBounds();
 
-        // Recompute the on-screen node set only every RenderNTicks frames (the filter is expensive:
-        // per-node GetClientRect + IsOnScreen over the whole atlas), but redraw the cached set every
-        // frame so the immediate-mode overlay never flickers. Node positions stay live because
-        // RenderNode reads GetClientRect fresh each frame.
-        if (TickCount % Settings.Graphics.RenderNTicks.Value == 0 || selectedNodes.Count == 0) {
+        // Recompute the on-screen node set only every OnScreenRecomputeInterval frames (the filter is
+        // expensive: per-node GetClientRect + IsOnScreen over the whole atlas), but redraw the cached
+        // set every frame so the immediate-mode overlay never flickers. Node positions stay live because
+        // RenderNode reads GetClientRect fresh each frame. (This was the old "Render every N ticks"
+        // setting; it only ever throttled this cull, never the draw, so it's an internal constant now.)
+        if (TickCount % OnScreenRecomputeInterval == 0 || selectedNodes.Count == 0) {
             lock (mapCacheLock) {
-                selectedNodes = mapCache.Values.AsParallel()
+                // Reuse the list (clear + refill) instead of allocating a new one each recompute.
+                selectedNodes.Clear();
+                selectedNodes.AddRange(mapCache.Values.AsParallel()
                     .Where(x => Settings.Features.ProcessVisitedNodes || !x.IsVisited || x.IsAttempted)
                     .Where(x => (Settings.Features.ProcessHiddenNodes && !x.IsVisible) || x.IsVisible)
                     .Where(x => (Settings.Features.ProcessLockedNodes && !x.IsUnlocked) || x.IsUnlocked)
                     .Where(x => (Settings.Features.ProcessUnlockedNodes && x.IsUnlocked) || !x.IsUnlocked)
-                    .Where(x => IsOnScreen(x.MapNode.Element.GetClientRect().Center)).ToList();
+                    .Where(x => IsOnScreen(x.MapNode.Element.GetClientRect().Center)));
             }
         }
 
@@ -211,10 +292,10 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             // whole set: lines -> node fills -> rings -> labels. Layered passes (rather than one full
             // draw per node) keep the z-order globally consistent and stop lines flickering over
             // circles/labels.
-            var nodePositions = new List<(Node node, RectangleF rect)>(selectedNodes.Count);
+            nodePositions.Clear();
             foreach (var node in selectedNodes) {
                 try { nodePositions.Add((node, node.MapNode.Element.GetClientRect())); }
-                catch { /* skip nodes whose memory read fails this frame */ }
+                catch (Exception e) { DebugSwallow("Render: node rect read", e); }
             }
 
             if (Settings.Features.DebugMode) {
@@ -260,6 +341,66 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             LogError("Error drawing waypoints: " + e.Message + "\n" + e.StackTrace);
         }
 
+        DrawCacheProgressBar();
+
+    }
+
+    // Small, non-interactive progress bar centered at the bottom of the play area. Two states:
+    //  - a determinate fill while the background refresh job rebuilds the cache (cacheRefreshProgress);
+    //  - an indeterminate sweep during the first-open stall, before the refresh even starts, while we
+    //    wait for the game's endgame files to load / scrape and the first cache to build (so the user
+    //    sees "something is happening" instead of an empty atlas for a few seconds).
+    // Fill color for the cache reload bar (not user-configurable; it's a brief transient indicator).
+    private static readonly Color CacheBarColor = Color.FromArgb(255, 90, 200, 255);
+
+    private void DrawCacheProgressBar()
+    {
+        // Pre-refresh loading: files not scraped yet, or the cache hasn't been populated for the first
+        // time. Only meaningful while the atlas is open (this is only called from Render after the
+        // AtlasPanel.IsVisible gate).
+        bool loading = !gameFilesScraped || mapCache.Count == 0;
+        if (!refreshingCache && !loading)
+            return;
+
+        try {
+            const float barWidth = 260f;
+            const float barHeight = 6f;
+            const float bottomMargin = 48f;
+
+            float left = cachedScreenRect.Center.X - barWidth / 2f;
+            float top = cachedScreenRect.Bottom - bottomMargin;
+
+            Vector2 bgStart = new(left, top);
+            Vector2 bgEnd = new(left + barWidth, top + barHeight);
+
+            // Track (background).
+            Graphics.DrawBox(bgStart, bgEnd, Color.FromArgb(180, 0, 0, 0), 3f);
+
+            string label;
+            if (refreshingCache) {
+                // Determinate fill.
+                float pct = Math.Clamp(cacheRefreshProgress, 0f, 1f);
+                if (pct > 0f)
+                    Graphics.DrawBox(bgStart, new Vector2(left + barWidth * pct, top + barHeight), CacheBarColor, 3f);
+                label = "Updating Atlas Cache";
+            } else {
+                // Indeterminate sweep (no percentage known yet): a segment slides left->right and wraps,
+                // driven by the per-frame TickCount.
+                float segW = barWidth * 0.3f;
+                float travel = barWidth + segW;
+                float pos = ((TickCount * 3f) % travel) - segW;
+                float segLeft = Math.Clamp(left + pos, left, left + barWidth);
+                float segRight = Math.Clamp(left + pos + segW, left, left + barWidth);
+                if (segRight > segLeft)
+                    Graphics.DrawBox(new Vector2(segLeft, top), new Vector2(segRight, top + barHeight), CacheBarColor, 3f);
+                label = "Loading atlas data...";
+            }
+
+            DrawCenteredTextWithBackground(label, new Vector2(cachedScreenRect.Center.X, top - 6f),
+                Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 8, 3);
+        } catch (Exception e) {
+            LogError("Error drawing cache progress bar: " + e.Message);
+        }
     }
     #endregion
 
@@ -315,8 +456,12 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (!AtlasPanel.IsVisible)
             return;
 
-        if (Settings.Keybinds.RefreshMapCacheHotkey.PressedOnce()) {  
-            RefreshMapCache();
+        if (Settings.Keybinds.RefreshMapCacheHotkey.PressedOnce()) {
+            // Enqueue a background refresh instead of running it inline on the render thread (which
+            // froze the overlay for the whole refresh and hid the reload bar). Force past the
+            // throttle so a manual press refreshes immediately.
+            refreshCache = true;
+            lastRefresh = DateTime.MinValue;
         }
 
         if (Settings.Keybinds.DebugKey.PressedOnce())
@@ -397,7 +542,26 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
     }
 
-    private void LoadDefaultWeights() {
+    // Called after a profile is overlaid onto the live map/content/biome data (LoadProfile). Cached
+    // Node.Weight values are stale until each node's RecalculateWeight re-runs, which happens in a cache
+    // refresh - so force one, bypassing the throttle, so weights/colors/waypoints update immediately
+    // instead of after the next throttled refresh (or not at all). Cheap: no clear, existing nodes just
+    // get recomputed.
+    public void OnProfileApplied() {
+        refreshCache = true;
+        lastRefresh = DateTime.MinValue;
+    }
+
+    // Reset live weights to the bundled plugin defaults AND persist them: the active profile is the
+    // source of truth that gets overlaid onto live data on every launch (SeedProfiles -> LoadProfile),
+    // so without SaveCurrentProfile the reset would be lost on reload.
+    public void ResetWeightsToDefaults() {
+        LoadDefaultWeights();
+        Settings.Profiles.SaveCurrentProfile();
+        weightsDirty = true;
+    }
+
+    public void LoadDefaultWeights() {
         try {
             // Load bundled default weights and apply to current map/content/biome entries
             var weightsPath = Path.Combine(DirectoryFullName, "json\\exilemaps_weights.json");
@@ -468,19 +632,22 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     // comdlg32 dialog on a short-lived background STA thread (no join, render keeps running), stash the
     // chosen path in a volatile field, and let ProcessPendingWeightFile (called from Render) do the
     // actual read/write on the plugin thread.
-    private volatile string pendingExportPath;
-    private volatile string pendingImportPath;
     private volatile string pendingExportSettingsPath;
     private volatile string pendingImportSettingsPath;
     private volatile string pendingExportProfilePath;
     private volatile string pendingImportProfilePath;
+    private volatile string pendingImportOldSettingsPath;
+    // Profile name to capture a pending old-settings import into (set by the auto-detect banner; the
+    // manual file-picker leaves it null so the profile is named after the file).
+    private volatile string pendingImportOldSettingsName;
     private volatile bool weightDialogBusy;
 
-    // Called from a button in settings. Launches the Save dialog asynchronously.
-    public void ExportWeights() => OpenWeightFileDialogAsync(save: true);
-
-    // Called from a button in settings. Launches the Open dialog asynchronously.
-    public void ImportWeights() => OpenWeightFileDialogAsync(save: false);
+    // Pre-rework ("v1") settings auto-detect state. Set in Initialise: if the on-disk settings file still
+    // has the old structure we back it up (ExileCore rewrites the live file as v2 on the next save) and
+    // raise a one-time import banner. oldSettingsBackupPath points at the preserved copy.
+    private bool oldSettingsPendingImport = false;
+    private string oldSettingsBackupPath;
+    public bool OldSettingsPendingImport => oldSettingsPendingImport;
 
     // Called from a button in settings. Save/load the entire settings object (all categories).
     public void ExportSettings() => OpenSettingsFileDialogAsync(save: true);
@@ -490,21 +657,88 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     public void ExportProfile() => OpenProfileFileDialogAsync(save: true);
     public void ImportProfile() => OpenProfileFileDialogAsync(save: false);
 
+    // Called from a button in settings. Convert + import a pre-rework ("v1") settings file.
+    public void ImportOldSettings() => OpenOldSettingsFileDialogAsync();
+
+    // Runs once at load (Initialise). If the user hasn't already handled the v1 migration and the on-disk
+    // settings file still has the pre-rework structure, copy it to a sidecar backup - ExileCore rewrites
+    // the live file as v2 on the next save, destroying the old data - and raise the one-time import banner.
+    private void DetectOldSettings() {
+        try {
+            if (Settings.Profiles.OldSettingsMigrationHandled)
+                return;
+
+            var path = FindSettingsFilePath();
+            if (path == null || !File.Exists(path))
+                return;
+
+            var text = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(text) || !LooksLikeOldSettings(text))
+                return;
+
+            // Preserve the v1 data before ExileCore overwrites the live file on the next save.
+            var dir = Path.GetDirectoryName(path);
+            var backup = Path.Combine(dir, "ExileMaps_settings.v1.bak.json");
+            File.Copy(path, backup, overwrite: true);
+            oldSettingsBackupPath = backup;
+            oldSettingsPendingImport = true;
+            LogMessage($"Detected pre-rework settings; backed up to {backup}. Import available in plugin settings.");
+        } catch (Exception e) {
+            LogError("Error detecting old settings: " + e.Message);
+        }
+    }
+
+    // Locate this plugin's ExileCore2 settings file: <ConfigDirectory>/<Name>_settings.json
+    // (e.g. config/global/ExileMaps_settings.json). Falls back to any *_settings.json in that directory.
+    private string FindSettingsFilePath() {
+        try {
+            var dir = ConfigDirectory;
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir))
+                return null;
+            var primary = Path.Combine(dir, InternalName + "_settings.json");
+            if (File.Exists(primary))
+                return primary;
+            var matches = Directory.GetFiles(dir, "*_settings.json");
+            return matches.FirstOrDefault(f => Path.GetFileName(f).Contains("ExileMaps", StringComparison.OrdinalIgnoreCase))
+                ?? matches.FirstOrDefault();
+        } catch {
+            return null;
+        }
+    }
+
+    // The v1 settings file has top-level sections that no longer exist in the current structure
+    // (MapTypes -> Maps, separate MapContent, dropped MapMods). On-disk files wrap data in "data".
+    private static bool LooksLikeOldSettings(string json) {
+        try {
+            var root = Newtonsoft.Json.Linq.JObject.Parse(json);
+            var data = root["data"] as Newtonsoft.Json.Linq.JObject ?? root;
+            return data["MapTypes"] != null || data["MapContent"] != null || data["MapMods"] != null;
+        } catch {
+            return false;
+        }
+    }
+
+    // Banner "Import": convert the backed-up v1 file into an "Original Settings" profile (and restore
+    // keybinds/other categories) on the next ProcessPendingWeightFile pass, then stop prompting.
+    public void ImportDetectedOldSettings() {
+        if (oldSettingsBackupPath != null) {
+            pendingImportOldSettingsName = "Original Settings";
+            pendingImportOldSettingsPath = oldSettingsBackupPath;
+        }
+        oldSettingsPendingImport = false;
+        Settings.Profiles.OldSettingsMigrationHandled = true;
+    }
+
+    // Banner "Dismiss": stop prompting. The .v1.bak file stays on disk, so the manual "Import Old
+    // Settings" button can still convert it later if the user changes their mind.
+    public void DismissDetectedOldSettings() {
+        oldSettingsPendingImport = false;
+        Settings.Profiles.OldSettingsMigrationHandled = true;
+    }
+
     // Applies any path the dialog thread produced. Runs on the plugin thread (from Render) so all
     // settings access stays on the same thread the UI uses.
     public void ProcessPendingWeightFile() {
-        var export = pendingExportPath;
-        if (export != null) {
-            pendingExportPath = null;
-            WriteWeights(export);
-        }
-
-        var import = pendingImportPath;
-        if (import != null) {
-            pendingImportPath = null;
-            ReadWeights(import);
-        }
-
         var exportSettings = pendingExportSettingsPath;
         if (exportSettings != null) {
             pendingExportSettingsPath = null;
@@ -528,65 +762,13 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             pendingImportProfilePath = null;
             ReadProfile(importProfile);
         }
-    }
 
-    // Exports every weight (maps, content, biomes, mods), keyed by the settings dictionary key so
-    // ImportWeights can match them back. Only weights are saved.
-    private void WriteWeights(string path) {
-        try {
-            var data = new WeightExport {
-                Maps = Settings.Maps.Maps.ToDictionary(x => x.Key, x => x.Value.Weight),
-                Content = Settings.Maps.Content.ContentTypes.ToDictionary(x => x.Key, x => x.Value.Weight),
-                Biomes = Settings.Maps.Biomes.Biomes.ToDictionary(x => x.Key, x => x.Value.Weight),
-            };
-
-            var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
-            File.WriteAllText(path, json);
-            LogMessage($"Exported weights to {path} ({data.Maps.Count} maps, {data.Content.Count} content, {data.Biomes.Count} biomes)");
-        } catch (Exception e) {
-            LogError("Error exporting weights: " + e.Message + "\n" + e.StackTrace);
-        }
-    }
-
-    // Imports weights from a JSON file written by WriteWeights, applying them by key. For maps, falls
-    // back to matching by Name (spaces ignored) so presets survive id/key churn between leagues.
-    // Setting Weight via the property fires PropertyChanged, which marks weightsDirty for the recalc.
-    private void ReadWeights(string path) {
-        try {
-            if (!File.Exists(path)) {
-                LogError($"Error importing weights: file not found ({path}).");
-                return;
-            }
-
-            var data = JsonSerializer.Deserialize<WeightExport>(File.ReadAllText(path));
-            if (data == null) {
-                LogError("Error importing weights: file was empty or invalid.");
-                return;
-            }
-
-            int maps = 0, content = 0, biomes = 0;
-
-            foreach (var (key, weight) in data.Maps ?? []) {
-                if (Settings.Maps.Maps.TryGetValue(key, out var map)) {
-                    map.Weight = weight; maps++;
-                } else {
-                    // Fallback: match by Name (ignoring spaces) for presets made on a different install.
-                    var byName = Settings.Maps.Maps.Values.FirstOrDefault(m =>
-                        m.Name == key || m.Name?.Replace(" ", "") == key);
-                    if (byName != null) { byName.Weight = weight; maps++; }
-                }
-            }
-
-            foreach (var (key, weight) in data.Content ?? [])
-                if (Settings.Maps.Content.ContentTypes.TryGetValue(key, out var c)) { c.Weight = weight; content++; }
-
-            foreach (var (key, weight) in data.Biomes ?? [])
-                if (Settings.Maps.Biomes.Biomes.TryGetValue(key, out var b)) { b.Weight = weight; biomes++; }
-
-            weightsDirty = true;
-            LogMessage($"Imported weights from {path} ({maps} maps, {content} content, {biomes} biomes)");
-        } catch (Exception e) {
-            LogError("Error importing weights: " + e.Message + "\n" + e.StackTrace);
+        var importOld = pendingImportOldSettingsPath;
+        if (importOld != null) {
+            pendingImportOldSettingsPath = null;
+            var importOldName = pendingImportOldSettingsName;
+            pendingImportOldSettingsName = null;
+            ConvertOldSettings(importOld, importOldName);
         }
     }
 
@@ -684,24 +866,131 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
     }
 
-    // Opens a native common dialog on a background STA thread. Does NOT block the render thread; the
-    // selected path is picked up by ProcessPendingWeightFile on a later frame.
-    private void OpenWeightFileDialogAsync(bool save) {
+    // Imports a settings file from the previous ("v1") version of the plugin, converting its structure
+    // to the current one. The old layout differs: a top-level "MapTypes" (now "Maps"), separate
+    // top-level "Biomes"/"MapContent" sections (now nested under Maps), an int-valued "Keybinds" shape
+    // (now HotkeyNodeV2), and a vestigial "MapMods" section (dropped). The on-disk ExileCore2 settings
+    // file also wraps everything in a "data" object. Map/content/biome weights+colors+favorites are
+    // captured into a NEW profile (named after the file) and made active so existing profiles are left
+    // intact; every other category is applied directly to the live settings. Each section is populated
+    // in isolation so one malformed section can't abort the whole import.
+    private void ConvertOldSettings(string path, string profileName = null) {
+        try {
+            if (!File.Exists(path)) {
+                LogError($"Error importing old settings: file not found ({path}).");
+                return;
+            }
+
+            var text = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(text)) {
+                LogError("Error importing old settings: file was empty or invalid.");
+                return;
+            }
+
+            var root = Newtonsoft.Json.Linq.JObject.Parse(text);
+            // On-disk settings wrap everything in "data"; a hand-made/exported file may not.
+            var data = root["data"] as Newtonsoft.Json.Linq.JObject ?? root;
+
+            // Preserve any unsaved live edits to the current active profile before we overwrite live state.
+            Settings.Profiles.SaveCurrentProfile();
+
+            // Non-weight categories apply directly to the live settings objects.
+            PopulateOldSection(data["Enable"], Settings.Enable, "Enable");
+            PopulateOldSection(data["Features"], Settings.Features, "Features");
+            PopulateOldSection(data["Graphics"], Settings.Graphics, "Graphics");
+            PopulateOldSection(data["Waypoints"], Settings.Waypoints, "Waypoints");
+            ConvertOldKeybinds(data["Keybinds"] as Newtonsoft.Json.Linq.JObject);
+
+            // Reshape MapTypes + the formerly top-level Biomes/MapContent into the current Maps object.
+            if (data["MapTypes"] is Newtonsoft.Json.Linq.JObject mapTypes) {
+                var mapsObj = (Newtonsoft.Json.Linq.JObject)mapTypes.DeepClone();
+                if (data["Biomes"] is Newtonsoft.Json.Linq.JObject oldBiomes)
+                    mapsObj["Biomes"] = oldBiomes;
+                if (data["MapContent"] is Newtonsoft.Json.Linq.JObject oldContent)
+                    mapsObj["Content"] = oldContent;
+                PopulateOldSection(mapsObj, Settings.Maps, "Maps");
+            }
+
+            // Capture the just-imported map/content/biome state into a new profile and switch to it.
+            // Auto-detect import passes an explicit name ("Original Settings"); the manual file-picker
+            // leaves it null, so the profile is named after the chosen file.
+            string baseName = profileName;
+            if (string.IsNullOrWhiteSpace(baseName))
+                baseName = Path.GetFileNameWithoutExtension(path);
+            if (string.IsNullOrWhiteSpace(baseName))
+                baseName = "Imported";
+            string name = baseName;
+            int i = 2;
+            while (Settings.Profiles.Profiles.ContainsKey(name))
+                name = $"{baseName} {i++}";
+
+            Settings.Profiles.Profiles[name] = new WeightProfile();
+            Settings.Profiles.ActiveProfile = name;
+            Settings.Profiles.SaveCurrentProfile(); // snapshot live (imported) -> the new profile
+
+            weightsDirty = true;
+            refreshCache = true;
+            LogMessage($"Imported old settings from {path} into new profile '{name}'.");
+        } catch (Exception e) {
+            LogError("Error importing old settings: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    // PopulateObject one old-settings section onto a live target, isolated so a bad section doesn't
+    // abort the whole import. Uses Newtonsoft (the serializer ExileCore2 settings round-trip through).
+    private void PopulateOldSection(Newtonsoft.Json.Linq.JToken token, object target, string label) {
+        if (token == null)
+            return;
+        try {
+            // Use ExileCore2's settings serializer (SettingsContainer.jsonSettings) - it registers the
+            // converters for ColorNode/ToggleNode/etc. Default Newtonsoft can't parse a ColorNode hex
+            // string like "ffffffff" and would throw, aborting the whole section.
+            Newtonsoft.Json.JsonConvert.PopulateObject(token.ToString(), target, SettingsContainer.jsonSettings);
+        } catch (Exception e) {
+            LogError($"Error importing old settings section '{label}': {e.Message}");
+        }
+    }
+
+    // Old keybinds stored a single int (a System.Windows.Forms.Keys value) per bind; the current
+    // settings use HotkeyNodeV2 ({ ValueV2: { Key, ControllerKey, ControllerModifierKey, Win } }).
+    // Translate each int to the named key and populate. Binds removed in the rework simply no-op.
+    private void ConvertOldKeybinds(Newtonsoft.Json.Linq.JObject oldKeybinds) {
+        if (oldKeybinds == null)
+            return;
+        try {
+            var converted = new Newtonsoft.Json.Linq.JObject();
+            foreach (var prop in oldKeybinds.Properties()) {
+                var valTok = prop.Value?["Value"];
+                if (valTok == null)
+                    continue;
+                int vk = valTok.ToObject<int>();
+                string keyName = ((System.Windows.Forms.Keys)vk).ToString();
+                converted[prop.Name] = new Newtonsoft.Json.Linq.JObject {
+                    ["ValueV2"] = new Newtonsoft.Json.Linq.JObject {
+                        ["Key"] = keyName,
+                        ["ControllerKey"] = "None",
+                        ["ControllerModifierKey"] = "None",
+                        ["Win"] = false
+                    }
+                };
+            }
+            Newtonsoft.Json.JsonConvert.PopulateObject(converted.ToString(), Settings.Keybinds, SettingsContainer.jsonSettings);
+        } catch (Exception e) {
+            LogError($"Error importing old settings section 'Keybinds': {e.Message}");
+        }
+    }
+
+    // Same async-dialog pattern as the others, but open-only, for a pre-rework settings file.
+    private void OpenOldSettingsFileDialogAsync() {
         if (weightDialogBusy)
             return;
         weightDialogBusy = true;
 
         var thread = new System.Threading.Thread(() => {
             try {
-                string initialDir = DirectoryFullName;
-                string chosen = save
-                    ? NativeFileDialog.ShowSave("Export Weights", "exilemaps_weights.json", initialDir)
-                    : NativeFileDialog.ShowOpen("Import Weights", initialDir);
-
-                if (!string.IsNullOrEmpty(chosen)) {
-                    if (save) pendingExportPath = chosen;
-                    else pendingImportPath = chosen;
-                }
+                string chosen = NativeFileDialog.ShowOpen("Import Old Settings", DirectoryFullName);
+                if (!string.IsNullOrEmpty(chosen))
+                    pendingImportOldSettingsPath = chosen;
             } catch (Exception e) {
                 LogError("Error opening file dialog: " + e.Message);
             } finally {
@@ -713,7 +1002,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         thread.Start();
     }
 
-    // Same async-dialog pattern as OpenWeightFileDialogAsync, but for the full settings file.
+    // Opens a native common dialog on a background STA thread for the full settings file. Does NOT block
+    // the render thread; the selected path is picked up by ProcessPendingWeightFile on a later frame.
     private void OpenSettingsFileDialogAsync(bool save) {
         if (weightDialogBusy)
             return;
@@ -949,7 +1239,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     Settings.Maps.Content.ContentTypes.TryAdd(id, existing);
                 }
                 updated++;
-            } else if (Settings.Maps.Content.ContentTypes.TryAdd(id, new Content { Name = name, Weight = 0.0f, AtlasIcon = icon })) {
+            } else if (Settings.Maps.Content.ContentTypes.TryAdd(id, new Content { Name = name, Weight = 25.0f, AtlasIcon = icon })) {
                 added++;
                 LogMessage($"Added Content Type: {id}");
             }
@@ -1006,44 +1296,119 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     #endregion
 
-    private List<Node> FindShortestPath(Node start, Node end)
+    // Find the shortest route from a waypoint destination outward to the nearest completed (visited)
+    // map. BFS expands from the destination and stops at the first visited node reached on each branch,
+    // so the returned path contains exactly ONE completed map — the anchor at index 0. Among all routes
+    // of the minimum graph distance, the one with the greatest summed map weight is chosen (so equal-
+    // length paths prefer higher-value maps). Returns the path ordered
+    // [completed anchor, ...incomplete maps..., destination] plus its summed weight, or (null, 0) if no
+    // completed map is reachable.
+    private (List<Node> path, float weight) FindPathToNearestCompleted(Node destination)
     {
-        if (start == null || end == null)
-            return null;
+        if (destination == null)
+            return (null, 0f);
 
-        var visited = new HashSet<Vector2i>();
-        var queue = new Queue<(Node node, List<Node> path)>();
+        // Destination itself already completed — trivial one-node path.
+        if (destination.IsVisited)
+            return (new List<Node> { destination }, destination.Weight);
 
-        queue.Enqueue((start, new List<Node> { start }));
-        visited.Add(start.Coordinates);
+        var dist = new Dictionary<Vector2i, int>();
+        var best = new Dictionary<Vector2i, float>();    // max accumulated weight among shortest paths
+        var parent = new Dictionary<Vector2i, Node>();
+        var queue = new Queue<Node>();
+
+        dist[destination.Coordinates] = 0;
+        best[destination.Coordinates] = destination.Weight;
+        parent[destination.Coordinates] = null;
+        queue.Enqueue(destination);
+
+        int anchorDist = int.MaxValue;
+        float anchorWeight = float.NegativeInfinity;
+        Node anchor = null;
 
         while (queue.Count > 0)
         {
-            var (current, path) = queue.Dequeue();
+            var current = queue.Dequeue();
+            int cd = dist[current.Coordinates];
 
-            if (current.Coordinates == end.Coordinates)
-                return path;
+            // FIFO guarantees all nodes at anchorDist are dequeued before any further-out node; once we
+            // step past that distance nothing closer/equal can appear, so stop.
+            if (cd > anchorDist)
+                break;
+
+            // A completed map (other than the destination): candidate anchor. Do NOT expand its
+            // neighbors — the route ends here so only one completed map is ever on the path. Keep the
+            // nearest anchor, and among equally-near anchors the highest-weight route.
+            if (current.IsVisited && current.Coordinates != destination.Coordinates)
+            {
+                float w = best[current.Coordinates];
+                if (cd < anchorDist || (cd == anchorDist && w > anchorWeight))
+                {
+                    anchorDist = cd;
+                    anchorWeight = w;
+                    anchor = current;
+                }
+                continue;
+            }
 
             foreach (var neighbor in current.Neighbors.Values)
             {
-                if (neighbor != null && !visited.Contains(neighbor.Coordinates))
+                if (neighbor == null)
+                    continue;
+                int nd = cd + 1;
+                // Exclude completed maps from the path weight: visited nodes are pinned to 500, and the
+                // only visited node on a path is the anchor you already stand on — counting its 500 would
+                // swamp the real total. Weight = destination + intermediate incomplete maps only.
+                float nw = best[current.Coordinates] + (neighbor.IsVisited ? 0f : neighbor.Weight);
+                if (!dist.TryGetValue(neighbor.Coordinates, out int existing))
                 {
-                    var newPath = new List<Node>(path) { neighbor };
-                    queue.Enqueue((neighbor, newPath));
-                    visited.Add(neighbor.Coordinates);
+                    dist[neighbor.Coordinates] = nd;
+                    best[neighbor.Coordinates] = nw;
+                    parent[neighbor.Coordinates] = current;
+                    queue.Enqueue(neighbor);
+                }
+                else if (existing == nd && nw > best[neighbor.Coordinates])
+                {
+                    // Equal-distance alternative with a higher summed weight — prefer it.
+                    best[neighbor.Coordinates] = nw;
+                    parent[neighbor.Coordinates] = current;
                 }
             }
         }
 
-        return null; // No path found
+        if (anchor == null)
+            return (null, 0f);
+
+        // Walk parents from the anchor back to the destination. Parent links point toward the
+        // destination (parent[destination] == null), so this yields [anchor, ..., destination] directly.
+        var path = new List<Node>();
+        for (Node n = anchor; n != null; n = parent[n.Coordinates])
+            path.Add(n);
+
+        return (path, anchorWeight);
     }
 
     // Multi-source BFS seeded with every visited node at distance 0. Each unvisited node's value is
     // the minimum number of steps to reach the explored region (same semantics as a waypoint's
     // PathFromStart step count, but computed for the whole graph in a single O(V+E) pass so the
     // atlas list can sort/display steps without a per-node BFS). Unreachable nodes are omitted.
+    // Logs a swallowed exception only when Debug Mode is on. Hot draw/scrape paths read live game
+    // memory that can shift mid-frame; we must keep swallowing per-item so one bad read never aborts the
+    // whole frame, but routing those swallows through here makes them diagnosable on demand (enable
+    // Debug Mode) instead of vanishing silently.
+    private void DebugSwallow(string context, Exception e)
+    {
+        if (Settings.Features.DebugMode)
+            LogError($"{context}: {e.Message}");
+    }
+
     private Dictionary<Vector2i, int> ComputeStepCounts()
     {
+        // Memoized against the cache version: the multi-source BFS only changes when the cache is
+        // refreshed (which is what flips visited flags / neighbors), so reuse it across render frames.
+        if (cachedStepCounts != null && cachedStepCountsVersion == mapCacheVersion)
+            return cachedStepCounts;
+
         var stepCounts = new Dictionary<Vector2i, int>();
         var queue = new Queue<Node>();
 
@@ -1069,24 +1434,71 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             }
         }
 
+        cachedStepCounts = stepCounts;
+        cachedStepCountsVersion = mapCacheVersion;
         return stepCounts;
     }
 
-    private Node FindClosestVisitedNode(Node waypointNode)
+    // Memoized atlas-panel list: non-visited nodes filtered + sorted + capped, recomputed only when the
+    // cache version or any of the panel's filter/sort inputs change (otherwise the panel would rerun the
+    // whole pipeline every render frame). Returns an ordered List<Node> ready to enumerate.
+    private List<Node> GetAtlasPanelList(string filter, bool useRegex, string sortBy, string sortBy2, int maxSteps, int maxItems)
     {
-        if (waypointNode == null)
-            return null;
+        var sig = (mapCacheVersion, weightsRecalcVersion, filter ?? "", useRegex, sortBy ?? "", sortBy2 ?? "", maxSteps, maxItems);
+        if (cachedAtlasList != null && cachedAtlasSig.Equals(sig))
+            return cachedAtlasList;
 
-        return mapCache.Values
-            .Where(x => x.IsVisited)
-            .OrderBy(x => Vector2.Distance(waypointNode.MapNode.Element.GetClientRect().Center,
-                                           x.MapNode.Element.GetClientRect().Center))
-            .FirstOrDefault();
+        var stepCounts = ComputeStepCounts();
+        int GetSteps(Node n) => stepCounts.TryGetValue(n.Coordinates, out var s) ? s : int.MaxValue;
+
+        List<Node> nodes;
+        lock (mapCacheLock)
+            nodes = mapCache.Values.Where(x => !x.IsVisited).ToList();
+
+        IEnumerable<Node> q = nodes;
+        if (!string.IsNullOrEmpty(filter)) {
+            if (useRegex)
+                q = q.Where(n => Regex.IsMatch(n.Name, filter, RegexOptions.IgnoreCase) || n.Content.Any(c => c.Value.Name == filter));
+            else
+                q = q.Where(n => n.Name.Contains(filter, StringComparison.CurrentCultureIgnoreCase) || n.Content.Any(c => c.Value.Name == filter));
+        }
+        if (maxSteps > 0)
+            q = q.Where(n => GetSteps(n) <= maxSteps);
+
+        IOrderedEnumerable<Node> ordered = sortBy switch
+        {
+            "Name" => q.OrderBy(n => n.Name),
+            "Steps" => q.OrderBy(n => GetSteps(n)),
+            _ => q.OrderByDescending(n => n.Weight),
+        };
+        ordered = sortBy2 switch
+        {
+            "Name" => ordered.ThenBy(n => n.Name),
+            "Weight" => ordered.ThenByDescending(n => n.Weight),
+            "Steps" => ordered.ThenBy(n => GetSteps(n)),
+            _ => ordered,
+        };
+
+        cachedAtlasList = ordered.Take(maxItems).ToList();
+        cachedAtlasSig = sig;
+        return cachedAtlasList;
     }
-    private Node GetClosestNodeToCursor() {
-        var closestNode = AtlasPanel.Descriptions.OrderBy(x => Vector2.Distance(GameController.Game.IngameState.UIHoverElement.GetClientRect().Center, x.Element.GetClientRect().Center)).AsParallel().FirstOrDefault();
 
-        if (mapCache.TryGetValue(closestNode.Coordinate, out Node cachedNode))
+    private Node GetClosestNodeToCursor() {
+        // Measure distance from the actual mouse cursor, not UIHoverElement: over a revealed node the
+        // hover element is that node, but over fog/unrevealed atlas the hover element is the panel
+        // background, which would snap to whatever node sits near the panel center instead of the one
+        // under the cursor. The raw cursor position works for revealed and fog nodes alike (we draw on
+        // both, so both are in Descriptions/mapCache).
+        // ImGui's mouse pos is screen-space (same coords as GetClientRect) and stays valid over fog,
+        // unlike GameController.IngameState.MousePosX/Y (currently always 0) or UIHoverElement (which
+        // is the panel background when not over a revealed node).
+        var cursor = ImGui.GetMousePos();
+        var closestNode = AtlasPanel.Descriptions
+            .OrderBy(x => Vector2.Distance(cursor, x.Element.GetClientRect().Center))
+            .FirstOrDefault();
+
+        if (closestNode != null && mapCache.TryGetValue(closestNode.Coordinate, out Node cachedNode))
             return cachedNode;
         else
             return null;
@@ -1106,8 +1518,9 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     public void RefreshMapCache(bool clearCache = false)
     {
         refreshingCache = true;
+        cacheRefreshProgress = 0f;
 
-        if (clearCache)        
+        if (clearCache)
             lock (mapCacheLock)            
                 mapCache.Clear();
 
@@ -1134,14 +1547,28 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         var timer = new Stopwatch();
         timer.Start();
         long count = 0;
+        int total = atlasNodes.Count;
+        int processed = 0;
+        // Phase 1: cache every node first. Connections are built in a second pass below — building them
+        // inline here would miss forward edges to nodes not yet cached (the neighbor lookup fails), so a
+        // freshly-opened atlas had one-directional adjacency and waypoint BFS dead-ended until a manual
+        // refresh backfilled the missing edges.
         foreach (var node in atlasNodes) {
             if (mapCache.TryGetValue(node.Coordinate, out Node cachedNode))
                 count += RefreshCachedMapNode(node, cachedNode);
             else
                 count += CacheNewMapNode(node);
 
-            CacheMapConnections(mapCache[node.Coordinate], forwardPoints, reverseNeighbors);
+            // Cap the node loop at 0.8; the rest covers connections + weight/waypoint passes.
+            cacheRefreshProgress = total > 0 ? 0.8f * (++processed) / total : 0.8f;
+        }
 
+        // Phase 2: now that all nodes exist, resolve neighbor references (both directions complete).
+        processed = 0;
+        foreach (var node in atlasNodes) {
+            if (mapCache.TryGetValue(node.Coordinate, out Node cachedNode))
+                CacheMapConnections(cachedNode, forwardPoints, reverseNeighbors);
+            cacheRefreshProgress = total > 0 ? 0.8f + 0.1f * (++processed) / total : 0.9f;
         }
         // stop timer
         timer.Stop();
@@ -1155,6 +1582,11 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         SyncFavoriteWaypoints();
         UpdateWaypointPaths();
 
+        // Invalidate the memoized step-counts / atlas-panel list: the cache contents (and visited flags
+        // / neighbors that drive them) just changed.
+        mapCacheVersion++;
+
+        cacheRefreshProgress = 1f;
         refreshingCache = false;
         refreshCache = false;
         lastRefresh = DateTime.Now;
@@ -1162,29 +1594,184 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private void DrawWaypointPath(Waypoint waypoint)
     {
-        if (waypoint.PathFromStart == null || waypoint.PathFromStart.Count <= 1)
+        // Snapshot the path reference once. UpdateWaypointPaths rebuilds/nulls this field on the
+        // cache-refresh job thread, so re-reading waypoint.PathFromStart per access can NRE mid-draw
+        // (e.g. set to null between the Count check and an index access).
+        var path = waypoint.PathFromStart;
+        if (path == null || path.Count <= 1)
             return;
 
-        for (int i = 0; i < waypoint.PathFromStart.Count - 1; i++)
+        var g = Settings.Graphics;
+        float dashLen = g.WaypointDashLength;
+        float gap = g.WaypointDashGap;
+        float period = dashLen + gap;
+        // Color the path to match its own waypoint marker (each waypoint gets a distinct color).
+        var color = waypoint.Color;
+        bool dashed = dashLen > 0f && period > 0f;
+        // Tie the textured style to the global shapes/textures toggle: icons on = animated texture,
+        // off = plain flat line. Falls back to a line too if the selected sprite didn't load.
+        IntPtr pathTexId = default;
+        bool textured = g.UseNodeIcons && pathTextureIds.TryGetValue(g.WaypointPathTexture, out pathTexId);
+        // Textured path gets a thickness multiplier so the sprite reads at a usable size; a plain line
+        // keeps the raw width.
+        float width = textured ? g.WaypointLineWidth * g.WaypointPathTextureScale : g.WaypointLineWidth;
+
+        // Animated phase scrolls the dash pattern toward the destination. Arc length increases from
+        // path[0] (the anchor near explored territory) to the last node (the waypoint), so subtracting
+        // a growing phase makes the "on" dashes march in the +arc direction = toward the waypoint.
+        // Phase derives from the per-frame TickCount (no wall-clock needed) and is taken mod period so
+        // the float never grows unbounded.
+        float phase = (dashed && g.WaypointPathAnimated && g.WaypointDashSpeed > 0f)
+            ? (TickCount * g.WaypointDashSpeed.Value) % period
+            : 0f;
+
+        // Cumulative arc length along the WHOLE polyline (measured on the unclipped node centers). The
+        // dash pattern is positioned against this global arc so it stays continuous across corners and
+        // does not jump when a segment endpoint gets clipped off-screen.
+        float arc = 0f;
+
+        for (int i = 0; i < path.Count - 1; i++)
         {
-            var currentNode = waypoint.PathFromStart[i];
-            var nextNode = waypoint.PathFromStart[i + 1];
+            var currentNode = path[i];
+            var nextNode = path[i + 1];
 
-            if (currentNode == null || nextNode == null)
+            // Guard the whole chain: a refresh can swap a node's MapNode/Element out from under us.
+            // An unguarded read here throws into Render's waypoint loop and aborts EVERY remaining
+            // waypoint's path + arrow for the frame (reads as flicker), so swallow per-segment.
+            if (currentNode?.MapNode?.Element == null || nextNode?.MapNode?.Element == null)
                 continue;
 
-            Vector2 start = currentNode.MapNode.Element.GetClientRect().Center;
-            Vector2 end = nextNode.MapNode.Element.GetClientRect().Center;
+            Vector2 start, end;
+            try {
+                start = currentNode.MapNode.Element.GetClientRect().Center;
+                end = nextNode.MapNode.Element.GetClientRect().Center;
+            } catch (Exception e) {
+                DebugSwallow("DrawWaypointPath: segment rect read", e);
+                continue;
+            }
 
-            if (!IsLineVisible(start, end))
+            float segArcStart = arc;
+            arc += (end - start).Length();
+
+            // Clip the segment to the visible screen rect instead of dropping any segment that has
+            // an off-screen endpoint. This keeps the path connected right up to the screen edge as
+            // it heads toward an off-screen destination (the old IsLineVisible required BOTH ends
+            // on screen, so the most useful edge-crossing segment never drew).
+            if (!ClipLineToScreen(start, end, out Vector2 clippedStart, out Vector2 clippedEnd))
                 continue;
 
-            // Draw path line with a different color/style to distinguish from regular connections
-            Graphics.DrawLine(start, end, Settings.Graphics.WaypointLineWidth , Settings.Graphics.PathLineColor);
+            // Still skip segments that touch/cross an excluded UI rect (tooltip, title bar, etc.).
+            bool crossesExcluded = false;
+            foreach (var rect in cachedExcludeRects)
+                if (rect.Contains(clippedStart) || rect.Contains(clippedEnd) ||
+                    SegmentIntersectsRect(clippedStart, clippedEnd, rect)) {
+                    crossesExcluded = true;
+                    break;
+                }
+            if (crossesExcluded)
+                continue;
+
+            if (!dashed) {
+                if (textured)
+                    DrawTexturedSegment(clippedStart, clippedEnd, width, color, pathTexId);
+                else
+                    Graphics.DrawLine(clippedStart, clippedEnd, width, color);
+                continue;
+            }
+
+            // Map the clipped endpoints back onto the global arc so the dash pattern lines up across
+            // this and neighboring segments. Clipping happens along the same line, so the clipped
+            // endpoints' arc offsets are just their distances from the unclipped segment start.
+            float clipArcStart = segArcStart + (clippedStart - start).Length();
+            float clipArcEnd = segArcStart + (clippedEnd - start).Length();
+            DrawDashedSegment(clippedStart, clippedEnd, clipArcStart, clipArcEnd, width, color, dashLen, period, phase, textured, pathTexId);
+        }
+    }
+
+    // Draws the "on" dash intervals of a single straight segment whose endpoints sit at arc offsets
+    // [arcStart, arcEnd] along the overall path. A point at arc a is "on" where
+    // ((a - phase) mod period) is in [0, dashLen). Walks dash-start boundaries and clamps each dash to
+    // the segment, so a dash that straddles a corner or the screen edge still renders its visible part.
+    private void DrawDashedSegment(Vector2 a, Vector2 b, float arcStart, float arcEnd,
+        float width, Color color, float dashLen, float period, float phase, bool textured, IntPtr texId)
+    {
+        float span = arcEnd - arcStart;
+        if (span <= 0.01f)
+            return;
+
+        Vector2 dir = (b - a) / span; // unit vector (span == |b - a| for a clipped straight segment)
+
+        // First dash-start at or before arcStart, aligned to the phase lattice.
+        float firstDash = MathF.Floor((arcStart - phase) / period) * period + phase;
+        for (float dashStart = firstDash; dashStart < arcEnd; dashStart += period)
+        {
+            float on0 = MathF.Max(dashStart, arcStart);
+            float on1 = MathF.Min(dashStart + dashLen, arcEnd);
+            if (on1 <= on0)
+                continue;
+            Vector2 p0 = a + dir * (on0 - arcStart);
+            Vector2 p1 = a + dir * (on1 - arcStart);
+            if (textured)
+                DrawTexturedSegment(p0, p1, width, color, texId);
+            else
+                Graphics.DrawLine(p0, p1, width, color);
+        }
+    }
+
+    // Draws the chosen path sprite stretched over a straight segment as a width-thick rotated quad
+    // (UV 0..1, so the sprite maps once per call). Used per dash, so a dash sprite (chevron, glow, etc.)
+    // tiles along the path. No-op on a degenerate segment.
+    private void DrawTexturedSegment(Vector2 a, Vector2 b, float width, Color color, IntPtr texId)
+    {
+        Vector2 dir = b - a;
+        float len = dir.Length();
+        if (len < 0.001f)
+            return;
+        dir /= len;
+        Vector2 n = new Vector2(-dir.Y, dir.X) * (width * 0.5f); // half-width perpendicular offset
+        Graphics.DrawQuad(texId, a + n, b + n, b - n, a - n, color);
+    }
+
+    // Cohen–Sutherland clip of a segment to the cached on-screen rect. Returns false if the segment
+    // lies entirely outside the screen; on true, clippedStart/clippedEnd are the visible portion.
+    private bool ClipLineToScreen(Vector2 a, Vector2 b, out Vector2 clippedStart, out Vector2 clippedEnd)
+    {
+        RectangleF r = cachedScreenRect;
+        float xMin = r.Left, xMax = r.Right, yMin = r.Top, yMax = r.Bottom;
+
+        int Code(Vector2 p) {
+            int c = 0;
+            if (p.X < xMin) c |= 1; else if (p.X > xMax) c |= 2;
+            if (p.Y < yMin) c |= 4; else if (p.Y > yMax) c |= 8;
+            return c;
+        }
+
+        Vector2 p0 = a, p1 = b;
+        int c0 = Code(p0), c1 = Code(p1);
+        clippedStart = a;
+        clippedEnd = b;
+
+        while (true) {
+            if ((c0 | c1) == 0) { clippedStart = p0; clippedEnd = p1; return true; } // both inside
+            if ((c0 & c1) != 0) return false;                                        // both off the same side
+
+            int co = c0 != 0 ? c0 : c1;
+            Vector2 p;
+            if ((co & 8) != 0)      p = new Vector2(p0.X + (p1.X - p0.X) * (yMax - p0.Y) / (p1.Y - p0.Y), yMax);
+            else if ((co & 4) != 0) p = new Vector2(p0.X + (p1.X - p0.X) * (yMin - p0.Y) / (p1.Y - p0.Y), yMin);
+            else if ((co & 2) != 0) p = new Vector2(xMax, p0.Y + (p1.Y - p0.Y) * (xMax - p0.X) / (p1.X - p0.X));
+            else                    p = new Vector2(xMin, p0.Y + (p1.Y - p0.Y) * (xMin - p0.X) / (p1.X - p0.X));
+
+            if (co == c0) { p0 = p; c0 = Code(p0); }
+            else          { p1 = p; c1 = Code(p1); }
         }
     }
 
     private void RecalculateWeights() {
+
+        // Weight edits change the atlas-panel Weight sort without touching cache structure; bump this so
+        // the memoized list refreshes (step counts, which don't depend on weight, stay cached).
+        weightsRecalcVersion++;
 
         if (mapCache.Count == 0)
             return;
@@ -1224,7 +1811,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             Name = node.Element.Area.Name,
             Id = mapId,
             MapNode = node,
-            MapType = Settings.Maps.Maps.TryGetValue(shortID, out Map mapType) ? mapType : Settings.Maps.Maps.Where(x => x.Value.MatchID(mapId)).Select(x => x.Value).FirstOrDefault() ?? new Map()
+            MapType = ResolveMapType(shortID, mapId)
         };
 
         // Set Content
@@ -1232,7 +1819,6 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             // Check if the map has content
             try {
 
-                AddNodeContentTypesFromTextures(node, newNode);
                 AddNodeContentFromIdentity(node, newNode);
                 SetAtlasPassive(node, newNode);
 
@@ -1248,8 +1834,6 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             }
         }
     
-        // Tower tablet mods have been removed from the game, so effect scanning is disabled.
-        // Effects stays empty; weight/rendering/waypoint code handle the empty case.
         newNode.RecalculateWeight();
 
         lock (mapCacheLock)        
@@ -1267,25 +1851,52 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         cachedNode.Address = node.Element.Address;
         cachedNode.ParentAddress = node.Address;     
         cachedNode.MapNode = node;
-        cachedNode.MapType = Settings.Maps.Maps.TryGetValue(shortID, out Map mapType) ? mapType : Settings.Maps.Maps.Where(x => x.Value.MatchID(node.Element.Area.Id)).Select(x => x.Value).FirstOrDefault() ?? new Map();
+        cachedNode.MapType = ResolveMapType(shortID, node.Element.Area.Id);
 
         if (cachedNode.IsVisited)
             return 1;
 
         cachedNode.Content.Clear();
 
-        AddNodeContentTypesFromTextures(node, cachedNode);
         AddNodeContentFromIdentity(node, cachedNode);
         SetAtlasPassive(node, cachedNode);
-
-        // Tower tablet mods have been removed from the game, so effect scanning is disabled.
-        cachedNode.Effects.Clear();
 
         if (Settings.Features.RecalculateNodeWeightsOnRefresh)
             cachedNode.RecalculateWeight();
         return 1;
-    } 
-    
+    }
+
+    // Resolves a node's map type: direct hit on the short id, else an O(1) lookup in the id index
+    // (rebuilt only when the map dictionary grows), else a blank Map. Replaces a per-node O(n) scan.
+    private Map ResolveMapType(string shortId, string fullId)
+    {
+        if (Settings.Maps.Maps.TryGetValue(shortId, out Map mapType))
+            return mapType;
+
+        EnsureMapIdIndex();
+        if (!string.IsNullOrWhiteSpace(fullId) && mapIdIndex.TryGetValue(fullId, out var byId))
+            return byId;
+
+        return new Map();
+    }
+
+    // (Re)builds the id -> Map index when the map dictionary's entry count changes (entries are only
+    // added, via scrape). First id wins on collisions, matching the old Where(...).FirstOrDefault().
+    private void EnsureMapIdIndex()
+    {
+        if (mapIdIndex != null && mapIdIndexCount == Settings.Maps.Maps.Count)
+            return;
+
+        var idx = new Dictionary<string, Map>(StringComparer.OrdinalIgnoreCase);
+        foreach (var m in Settings.Maps.Maps.Values)
+            foreach (var id in m.IDs)
+                if (!string.IsNullOrWhiteSpace(id) && !idx.ContainsKey(id))
+                    idx[id] = m;
+
+        mapIdIndex = idx;
+        mapIdIndexCount = Settings.Maps.Maps.Count;
+    }
+
     private void CacheMapConnections(Node cachedNode,
         Dictionary<Vector2i, List<Vector2i>> forwardPoints,
         Dictionary<Vector2i, List<Vector2i>> reverseNeighbors) {
@@ -1308,34 +1919,6 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     cachedNode.Neighbors.TryAdd(source, neighborNode);
 
     }
-    private void AddNodeContentTypesFromTextures(AtlasNodeDescription node, Node toNode) {
-
-        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("Corrupt")))
-            if (Settings.Maps.Content.ContentTypes.TryGetValue("Corrupted", out Content corruption))
-                toNode.Content.TryAdd(corruption.Name, corruption);
-
-        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("CorruptionNexus")))
-            if (Settings.Maps.Content.ContentTypes.TryGetValue("Corrupted Nexus", out Content nexus))
-                toNode.Content.TryAdd(nexus.Name, nexus);
-
-        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("Sanctification")))
-            if (Settings.Maps.Content.ContentTypes.TryGetValue("Cleansed", out Content cleansed))
-                toNode.Content.TryAdd(cleansed.Name, cleansed);
-
-        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("UniqueMap")))
-            if (Settings.Maps.Content.ContentTypes.TryGetValue("Unique Map", out Content uniqueMap))
-                toNode.Content.TryAdd(uniqueMap.Name, uniqueMap);
-        
-        if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("MapBossSpecial")))
-            if (Settings.Maps.Content.ContentTypes.TryGetValue("Anomaly Map Boss", out Content mapBossSpecial))
-                toNode.Content.TryAdd(mapBossSpecial.Name, mapBossSpecial);
-
-                if (node.Element.GetChildAtIndex(0).GetChildAtIndex(0).Children.Any(x => x.TextureName.Contains("ContentMapBoss.dds")))
-            if (Settings.Maps.Content.ContentTypes.TryGetValue("Map Boss", out Content mapBoss))
-                toNode.Content.TryAdd(mapBoss.Name, mapBoss);
-
-    }
-
     // Named content used to live on AtlasPanelNode.Content; it is now exposed via
     // AtlasPanelNode.ContentIdentity, a list whose elements carry an .Id (e.g. "PowerfulMapBoss").
     // The Id is space-stripped, while ContentTypes keys/names have spaces ("Powerful Map Boss"),
@@ -1369,7 +1952,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             toNode.GivesAtlasPoint = grantsInside && !completed;
             toNode.HasAtlasQuest = (passiveId?.Contains("AtlasQuest", StringComparison.OrdinalIgnoreCase) ?? false) && !completed;
         }
-        catch { toNode.GivesAtlasPoint = false; toNode.HasAtlasQuest = false; }
+        catch (Exception e) { toNode.GivesAtlasPoint = false; toNode.HasAtlasQuest = false; DebugSwallow("SetAtlasPassive", e); }
     }
     #endregion
 
@@ -1470,7 +2053,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             
         // "Special" maps have wider node art. Skip the solid circle (it would cover the map art) —
         // they get an icon drawn above the node by DrawSpecialIndicator instead.
-        if (Settings.Graphics.ShowSpecialMapIndicator && nodeCurrentPosition.Width > SpecialMapWidthThreshold)
+        if (Settings.Graphics.ShowSpecialMapIndicator && nodeCurrentPosition.Width > Settings.Graphics.SpecialMapWidthThreshold)
             return;
 
         var radius = (nodeCurrentPosition.Right - nodeCurrentPosition.Left) / 4 * Settings.Graphics.NodeRadius;
@@ -1483,9 +2066,6 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             Graphics.DrawCircleFilled(nodeCurrentPosition.Center, radius, color, 16);
         }
     }
-
-    // Atlas node art wider than this is a "special" map (e.g. unique/pinnacle layouts).
-    private const float SpecialMapWidthThreshold = 90f;
 
     // Normalized UV RectangleF for a custom-atlas icon, adapting SpriteAtlas's corner-pair UVs to the
     // RectangleF (x, y, w, h) form ExileCore's Graphics.DrawImage expects.
@@ -1508,9 +2088,6 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         Graphics.DrawImage(CustomIconsName, new RectangleF(center.X - width / 2f, center.Y - h / 2f, width, h), GetSpriteUV(icon), color);
     }
 
-    // Pixels above the node center to place the special-map icon (independent of node size).
-    private const float SpecialIconCenterOffset = 40f;
-
     /// MARK: DrawSpecialIndicator
     /// Draws an icon above "special" map nodes (wider node art) instead of covering them with a fill.
     private void DrawSpecialIndicator(Node cachedNode, RectangleF nodeCurrentPosition)
@@ -1518,13 +2095,13 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         try {
             if (!Settings.Graphics.ShowSpecialMapIndicator || !Settings.Maps.HighlightMapNodes ||
                 cachedNode.IsVisited || cachedNode.MapType == null || !cachedNode.MapType.Highlight ||
-                nodeCurrentPosition.Width <= SpecialMapWidthThreshold)
+                nodeCurrentPosition.Width <= Settings.Graphics.SpecialMapWidthThreshold)
                 return;
 
             Vector2 iconSize = new Vector2(48, 48) * Settings.Graphics.SpecialMapIconScale;
 
             // Position above the node by a fixed offset from its center (independent of node size).
-            Vector2 iconPosition = nodeCurrentPosition.Center - new Vector2(iconSize.X / 2, SpecialIconCenterOffset + iconSize.Y / 2);
+            Vector2 iconPosition = nodeCurrentPosition.Center - new Vector2(iconSize.X / 2, Settings.Graphics.SpecialMapIconOffset + iconSize.Y / 2);
 
             RectangleF iconRect = new RectangleF(iconPosition.X, iconPosition.Y, iconSize.X, iconSize.Y);
             if (customIconsLoaded)
@@ -1547,7 +2124,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             if (!Settings.Graphics.ShowAtlasPointIndicator || !cachedNode.GivesAtlasPoint || cachedNode.IsVisited || !customIconsLoaded)
                 return;
 
-            float size = 20f;
+            float size = Settings.Graphics.AtlasIndicatorSize;
             Vector2 center = new Vector2(nodeCurrentPosition.Center.X, nodeCurrentPosition.Center.Y - nodeCurrentPosition.Height / 2f - size / 2f - 2f);
             DrawNodeSprite(center, size, size, SpriteIcon.Star8, AtlasPointColor, allowFlatten: false);
         } catch (Exception e) {
@@ -1566,7 +2143,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             if (!Settings.Graphics.ShowAtlasQuestIndicator || !cachedNode.HasAtlasQuest || cachedNode.IsVisited || !customIconsLoaded)
                 return;
 
-            float size = 20f;
+            float size = Settings.Graphics.AtlasIndicatorSize;
             // Offset right of the atlas-point star (which sits centered above the node) so both can show.
             Vector2 center = new Vector2(nodeCurrentPosition.Center.X + size, nodeCurrentPosition.Center.Y - nodeCurrentPosition.Height / 2f - size / 2f - 2f);
             DrawNodeSprite(center, size, size, SpriteIcon.Exclamation, AtlasQuestColor, allowFlatten: false);
@@ -1609,13 +2186,17 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             cachedNode.IsVisited || !cachedNode.MapType.Highlight)
             return;  
 
-        // get the map weight % relative to the average map weight
-        float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
+        // Normalized position in the clipped weight range — drives only the text color gradient.
+        float norm = (maxMapWeight - minMapWeight) > 0
+            ? (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight)
+            : 0.5f;
+        norm = Math.Clamp(norm, 0f, 1f);
 
         float offsetX = Settings.Maps.ShowMapNames ? (Graphics.MeasureText(cachedNode.Name.ToUpper()).X / 2) + 30 : 50;
         Vector2 position = new(nodeCurrentPosition.Center.X + offsetX + Settings.Graphics.MapNameOffsetX, nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY);
 
-        DrawCenteredTextWithBackground($"{(int)(weight*100)}%", position, ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, weight), Settings.Graphics.BackgroundColor, true, 10, 3);
+        // Show the actual computed node weight, not a relative percentage.
+        DrawCenteredTextWithBackground($"{cachedNode.Weight:0}", position, ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, norm), Settings.Graphics.BackgroundColor, true, 10, 3);
     }
     /// <summary>
     /// Draws the name of the map on the atlas.
@@ -1633,7 +2214,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         Color fontColor = Settings.Maps.UseColorsForMapNames ? cachedNode.MapType.NameColor : Settings.Graphics.FontColor;
         Color backgroundColor = Settings.Maps.UseColorsForMapNames ? cachedNode.MapType.BackgroundColor : Settings.Graphics.BackgroundColor;
 
-        bool isSpecial = nodeCurrentPosition.Width > SpecialMapWidthThreshold;
+        bool isSpecial = nodeCurrentPosition.Width > Settings.Graphics.SpecialMapWidthThreshold;
 
         if (isSpecial) {
             // Special maps get their own customizable name color (never weight-based).
@@ -1652,57 +2233,6 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         using (Graphics.SetTextScale(isSpecial ? 1.2f : 1.0f))
             DrawCenteredTextWithBackground(cachedNode.Name.ToUpper(), namePosition, fontColor, backgroundColor, true, 10, 3);
     }
-
-    // private void DrawBiomes(AtlasPanelNode mapNode)
-    // {
-    //     var currentPosition = mapNode.GetClientRect();
-    //     if (!IsOnScreen(currentPosition.Center) || !mapCache.ContainsKey(mapNode.Address))
-    //         return;
-
-    //     Node cachedNode = mapCache[mapNode.Address];
-    //     string mapName = mapNode.Area.Name.Trim();
-    //     if (cachedNode == null || !Settings.Maps.Biomes.ShowBiomes || cachedNode.Biomes.Count == 0)    
-    //         return; 
-
-    //     Dictionary<string, Color> biomes = new Dictionary<string, Color>();
-
-    //     var biomeList = new List<Biome>();
-    //     if (Settings.Maps.Biomes.ShowBiomes && !mapNode.IsVisited) {
-    //         biomeList = cachedNode.Biomes;
-    //     }
-
-    //     foreach (var biome in biomeList) {
-    //         biomes.Add(biome.ToString(), Settings.Maps.Biomes.Biomes[biome.ToString()].Color);
-    //     }
-
-    //     DrawBiomeText(biomes, currentPosition.Center);
-    // }
-
-    // private void DrawBiomeText(Dictionary<string, Color> biomes, Vector2 position)
-    // {      
-    //     using (Graphics.SetTextScale(Settings.Maps.Biomes.BiomeScale)) {
-    //         string fullText = string.Join("\n", biomes.Select(x => $"{x.Key}"));
-    //         var boxSize = Graphics.MeasureText(fullText) + new Vector2(10, 10);
-    //         var lineHeight = Graphics.MeasureText("A").Y;
-    //         position = position - new Vector2(boxSize.X / 2, boxSize.Y / 2);
-
-    //         // offset the box below the node
-    //         position += new Vector2(0, (boxSize.Y / 2) + Settings.Maps.Biomes.BiomeOffset);
-            
-    //         if (!IsOnScreen(boxSize + position))
-    //             return;
-
-    //         Graphics.DrawBox(position, boxSize + position, Settings.Graphics.BackgroundColor, 5.0f);
-
-    //         position += new Vector2(5, 5);
-
-    //         foreach (var biome in biomes)
-    //         {
-    //             Graphics.DrawText(biome.Key, position, biome.Value);
-    //             position += new Vector2(0, lineHeight);
-    //         }
-    //     }
-    // }
 
     #endregion
 
@@ -1792,16 +2322,16 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         {
             if (mapCache.TryGetValue(waypoint.Coordinates, out Node waypointNode))
             {
-                // Find the closest visited node to this specific waypoint
-                var startNode = FindClosestVisitedNode(waypointNode);
-                if (startNode == null)
-                    continue;
-
-                waypoint.PathFromStart = FindShortestPath(startNode, waypointNode);
+                // Shortest route from this waypoint out to the nearest completed map (one anchor only),
+                // tie-broken by highest summed map weight.
+                var (path, weight) = FindPathToNearestCompleted(waypointNode);
+                waypoint.PathFromStart = path;
+                waypoint.PathWeight = weight;
             }
             else
             {
                 waypoint.PathFromStart = null;
+                waypoint.PathWeight = 0f;
             }
         }
     }
@@ -1974,7 +2504,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
             Vector2 pos;
             try { pos = quickEditNode.MapNode.Element.GetClientRect().Center + new Vector2(30, 0); }
-            catch { pos = screenCenter; }
+            catch (Exception e) { pos = screenCenter; DebugSwallow("waypoint position read", e); }
             ImGui.SetNextWindowPos(pos, ImGuiCond.Appearing);
             ImGui.SetNextWindowSize(new Vector2(360, 0), ImGuiCond.Appearing);
             ImGui.SetNextWindowBgAlpha(0.93f);
@@ -1991,7 +2521,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
                 float weight = map.Weight;
                 ImGui.SetNextItemWidth(220);
-                if (ImGui.SliderFloat("Weight##qe", ref weight, -25f, 50f, "%.1f")) map.Weight = weight;
+                if (ImGui.SliderFloat("Weight##qe", ref weight, -50f, 50f, "%.1f")) map.Weight = weight;
 
                 QuickColorEdit("qe_node", map.NodeColor, c => map.NodeColor = c);
                 ImGui.SameLine(); ImGui.Text("Node");
@@ -2025,7 +2555,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                         ImGui.SameLine();
                         float cw = content.Weight;
                         ImGui.SetNextItemWidth(110);
-                        if (ImGui.SliderFloat("##cw", ref cw, -5f, 5f, "%.2f")) content.Weight = cw;
+                        if (ImGui.SliderFloat("##cw", ref cw, -100f, 100f, "%.0f")) content.Weight = cw;
                         ImGui.SameLine();
                         ImGui.TextUnformatted(content.Name);
                         ImGui.PopID();
@@ -2062,7 +2592,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
             Vector2 pos;
             try { pos = node.MapNode.Element.GetClientRect().Center + new Vector2(30, 0); }
-            catch { pos = screenCenter; }
+            catch (Exception e) { pos = screenCenter; DebugSwallow("waypoint position read", e); }
             ImGui.SetNextWindowPos(pos, ImGuiCond.Appearing);
             ImGui.SetNextWindowSize(new Vector2(360, 0), ImGuiCond.Appearing);
             ImGui.SetNextWindowBgAlpha(0.93f);
@@ -2187,13 +2717,37 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         // Collapse
         if (ImGui.CollapsingHeader("Waypoints", ImGuiTreeNodeFlags.DefaultOpen))
         {
+            // Filter (All / Manual / Auto) + bulk delete. Manual = user-placed, Auto = favorite-synced.
+            string[] wpFilters = { "All", "Manual", "Auto" };
+            ImGui.Text("Show:");
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(120);
+            ImGui.Combo("##wpListFilter", ref waypointListFilter, wpFilters, wpFilters.Length);
+            ImGui.SameLine();
+            ImGui.Spacing();
+            ImGui.SameLine();
+            if (ImGui.Button("Clear Auto")) {
+                foreach (var k in Settings.Waypoints.Waypoints.Where(x => x.Value.AutoCreated).Select(x => x.Key).ToList())
+                    Settings.Waypoints.Waypoints.Remove(k);
+                UpdateWaypointPaths();
+            }
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Remove all auto-created (favorite) waypoints. Manual ones are kept.");
+            ImGui.SameLine();
+            if (ImGui.Button("Clear All")) {
+                Settings.Waypoints.Waypoints.Clear();
+                UpdateWaypointPaths();
+            }
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Remove every waypoint, manual and auto.");
+            ImGui.Spacing();
+
             var flags = ImGuiTableFlags.BordersInnerH;
             ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(0, 0, 0, 0));
-            if (ImGui.BeginTable("waypoint_list_table", 9, flags))//, new Vector2(-1, panelSize.Y/3)))
+            if (ImGui.BeginTable("waypoint_list_table", 10, flags))//, new Vector2(-1, panelSize.Y/3)))
             {
-                ImGui.TableSetupColumn("Enable", ImGuiTableColumnFlags.WidthFixed, 50);                                                               
+                ImGui.TableSetupColumn("Enable", ImGuiTableColumnFlags.WidthFixed, 50);
                 ImGui.TableSetupColumn("Waypoint Name", ImGuiTableColumnFlags.WidthFixed, 280);
                 ImGui.TableSetupColumn("Steps", ImGuiTableColumnFlags.WidthFixed, 40);
+                ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 60);
                 ImGui.TableSetupColumn("X", ImGuiTableColumnFlags.WidthFixed, 40);                    
                 ImGui.TableSetupColumn("Y", ImGuiTableColumnFlags.WidthFixed, 40);     
                 ImGui.TableSetupColumn("Color", ImGuiTableColumnFlags.WidthFixed, 40);     
@@ -2202,7 +2756,13 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthStretch, 50);
                 ImGui.TableHeadersRow();                    
 
-                foreach (var waypoint in Settings.Waypoints.Waypoints.Values) {
+                // Snapshot the (filtered) rows so a per-row Del can mutate the dictionary without
+                // invalidating the enumerator. Filter: 1 = manual only, 2 = auto only, 0 = all.
+                var wpRows = Settings.Waypoints.Waypoints.Values.Where(w =>
+                    waypointListFilter == 0
+                    || (waypointListFilter == 1 && !w.AutoCreated)
+                    || (waypointListFilter == 2 && w.AutoCreated)).ToList();
+                foreach (var waypoint in wpRows) {
                     string id = waypoint.Address.ToString();
                     ImGui.PushID(id);
                     
@@ -2241,9 +2801,13 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                         ImGui.Text("-");
                     }
 
+                    // Path Weight
+                    ImGui.TableNextColumn();
+                    ImGui.Text(steps >= 0 ? waypoint.PathWeight.ToString("0") : "-");
+
 
                     // Coordinates
-                    ImGui.TableNextColumn();                    
+                    ImGui.TableNextColumn();
                     ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (ImGui.GetContentRegionAvail().X - 40.0f) / 2.0f);
                     ImGui.Text(waypoint.Coordinates.X.ToString());
 
@@ -2376,42 +2940,15 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             
             ImGui.Separator();
         
-            var tempCache = mapCache.Where(x => !x.Value.IsVisited).AsParallel().ToDictionary(x => x.Key, x => x.Value);
-            // if search isnt blank
-            if (!string.IsNullOrEmpty(Settings.Waypoints.WaypointPanelFilter)) {
-                if (useRegex) {
-                    tempCache = tempCache.Where(x => Regex.IsMatch(x.Value.Name, Settings.Waypoints.WaypointPanelFilter, RegexOptions.IgnoreCase) || x.Value.MatchEffect(Settings.Waypoints.WaypointPanelFilter) || x.Value.Content.Any(x => x.Value.Name == Settings.Waypoints.WaypointPanelFilter)).AsParallel().ToDictionary(x => x.Key, x => x.Value);
-                } else {
-                    tempCache = tempCache.Where(x => x.Value.Name.Contains(Settings.Waypoints.WaypointPanelFilter, StringComparison.CurrentCultureIgnoreCase) || x.Value.MatchEffect(Settings.Waypoints.WaypointPanelFilter) || x.Value.Content.Any(x => x.Value.Name == Settings.Waypoints.WaypointPanelFilter)).AsParallel().ToDictionary(x => x.Key, x => x.Value);
-                }
-            }
-
-            // Step counts (steps from the explored region) for every reachable node, computed once.
-            // Used for both the Steps sort options and the Steps column display below.
+            // Step counts (steps from the explored region) for every reachable node. Memoized; used for
+            // both the Steps sort options and the Steps column display below.
             var stepCounts = ComputeStepCounts();
             int GetSteps(Node n) => stepCounts.TryGetValue(n.Coordinates, out var s) ? s : int.MaxValue;
 
-            // Limit to maps within N steps of the explored region (0 = unlimited).
+            // Memoized non-visited list: filter -> step cap -> sort -> take, recomputed only when the
+            // cache or any of these inputs change (was rerunning the whole pipeline every render frame).
             int maxStepsFilter = Settings.Waypoints.WaypointPanelMaxSteps;
-            if (maxStepsFilter > 0)
-                tempCache = tempCache.Where(x => GetSteps(x.Value) <= maxStepsFilter).ToDictionary(x => x.Key, x => x.Value);
-
-            // Two-level sort: primary, then optional secondary tiebreak. Lets the user e.g. sort by
-            // Weight (desc) then Steps (asc) to surface the highest-weight map with the fewest steps.
-            var ordered = sortBy switch
-            {
-                "Name" => tempCache.OrderBy(x => x.Value.Name),
-                "Steps" => tempCache.OrderBy(x => GetSteps(x.Value)),
-                _ => tempCache.OrderByDescending(x => x.Value.Weight),
-            };
-            ordered = sortBy2 switch
-            {
-                "Name" => ordered.ThenBy(x => x.Value.Name),
-                "Weight" => ordered.ThenByDescending(x => x.Value.Weight),
-                "Steps" => ordered.ThenBy(x => GetSteps(x.Value)),
-                _ => ordered,
-            };
-            tempCache = ordered.Take(maxItems).ToDictionary(x => x.Key, x => x.Value);
+            var atlasList = GetAtlasPanelList(Settings.Waypoints.WaypointPanelFilter, useRegex, sortBy, sortBy2, maxStepsFilter, maxItems);
 
             var flags = ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.Resizable | ImGuiTableFlags.Reorderable | ImGuiTableFlags.Hideable | ImGuiTableFlags.NoSavedSettings;
             ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(2, 2)); // Adjust the padding values as needed
@@ -2429,8 +2966,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 Vector4 _colorVector;
                 Color _color;
 
-                if (tempCache != null) {
-                    foreach (var (key, node) in tempCache) {
+                if (atlasList != null) {
+                    foreach (var node in atlasList) {
                         string id = node.Address.ToString();
                         ImGui.PushID(id);                        
                         ImGui.TableNextRow();
@@ -2522,6 +3059,12 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (!Settings.Waypoints.ShowWaypoints || mapNode == null || !waypoint.Show)
             return;
 
+        // Draw the path first, independent of whether the destination node is on screen. The path
+        // has its own per-segment clipping (ClipLineToScreen), so a path leading toward an
+        // off-screen waypoint still draws up to the screen edge instead of vanishing entirely.
+        if (Settings.Graphics.ShowPaths)
+            DrawWaypointPath(waypoint);
+
         RectangleF nodeRect = mapNode.Element.GetClientRect();
         if (!IsOnScreen(nodeRect.Center))
             return;
@@ -2536,33 +3079,60 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         iconPosition -= new Vector2(0, 20);
         Vector2 waypointTextPosition = iconPosition - new Vector2(0, 10);
-        // Add step count to waypoint label if available
+        // Add step count + path weight to waypoint label if available
         string displayText = waypoint.StepCount >= 0
-            ? $"{waypoint.Name} ({waypoint.StepCount} steps)"
+            ? $"{waypoint.Name} ({waypoint.StepCount} steps, {waypoint.PathWeight:0} wt)"
             : waypoint.Name;
 
         DrawCenteredTextWithBackground(displayText, waypointTextPosition, Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 10, 4);
 
-        // Draw the path if enabled
-        if (Settings.Graphics.ShowPaths)
-            DrawWaypointPath(waypoint);
-
         iconPosition -= new Vector2(waypointSize.X / 2, 0);
         RectangleF iconSize = new RectangleF(iconPosition.X, iconPosition.Y, waypointSize.X, waypointSize.Y);
-        Graphics.DrawImage(IconsFile, iconSize, SpriteHelper.GetUV(waypoint.Icon), waypoint.Color);
+        if (customIconsLoaded)
+            DrawNodeSprite(iconSize.Center, iconSize.Width, iconSize.Height, waypoint.Icon, waypoint.Color, allowFlatten: false);
+        else
+            Graphics.DrawImage(IconsFile, iconSize, SpriteHelper.GetUV(MapIconsIndex.LootFilterLargeWhiteUpsideDownHouse), waypoint.Color);
 
 
+    }
+
+    private static readonly Random waypointColorRng = new();
+
+    // Picks a distinct-ish rainbow color for a new waypoint: a random hue from an evenly spaced palette
+    // that no existing waypoint already uses. As waypoints accumulate and a tier fills up, expand to
+    // finer hue steps and shifted shades so colors stay distinguishable instead of repeating.
+    private Color GetNextWaypointColor() {
+        var used = new HashSet<int>();
+        foreach (var (_, wp) in Settings.Waypoints.Waypoints)
+            used.Add(wp.Color.ToArgb());
+
+        for (int tier = 0; tier < 6; tier++) {
+            int count = 8 + tier * 8;                   // 8, 16, 24, ... distinct hues per tier
+            float sat = (tier % 2 == 0) ? 0.85f : 0.6f; // alternate saturation as tiers expand
+            float val = (tier < 2) ? 1.0f : 0.8f;       // then add dimmer shades
+            float hueOffset = tier * 15f;               // interleave later tiers between earlier hues
+
+            var candidates = new List<Color>();
+            for (int i = 0; i < count; i++) {
+                var c = ColorUtils.ColorFromHSV((360f * i / count) + hueOffset, sat, val);
+                if (!used.Contains(c.ToArgb()))
+                    candidates.Add(c);
+            }
+            if (candidates.Count > 0)
+                return candidates[waypointColorRng.Next(candidates.Count)];
+        }
+
+        // Everything's taken (very many waypoints) - hand back a random rainbow hue.
+        return ColorUtils.ColorFromHSV(waypointColorRng.Next(360), 0.8f, 1.0f);
     }
 
     private void AddWaypoint(Node cachedNode) {
         if (Settings.Waypoints.Waypoints.ContainsKey(cachedNode.Coordinates.ToString()))
             return;
 
-        float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
         Waypoint newWaypoint = cachedNode.ToWaypoint();
-        newWaypoint.Icon = MapIconsIndex.LootFilterLargeWhiteUpsideDownHouse;
-        //newWaypoint.Color = ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, weight);
-        newWaypoint.Color = Settings.Graphics.PathLineColor;
+        newWaypoint.Icon = SpriteIcon.TriangleDown;
+        newWaypoint.Color = GetNextWaypointColor();
 
         Settings.Waypoints.Waypoints.Add(cachedNode.Coordinates.ToString(), newWaypoint);
         UpdateWaypointPaths();
@@ -2597,8 +3167,8 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     continue;
 
                 Waypoint newWaypoint = node.ToWaypoint();
-                newWaypoint.Icon = MapIconsIndex.LootFilterLargeWhiteUpsideDownHouse;
-                newWaypoint.Color = Settings.Graphics.PathLineColor;
+                newWaypoint.Icon = SpriteIcon.TriangleDown;
+                newWaypoint.Color = GetNextWaypointColor();
                 newWaypoint.AutoCreated = true;
                 Settings.Waypoints.Waypoints.Add(key, newWaypoint);
             }
@@ -2634,7 +3204,7 @@ public class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         float distance = Vector2.Distance(screenCenter, waypointPosition);
 
-        if (distance < 400)
+        if (distance < Settings.Graphics.WaypointArrowMinDistance)
             return;
 
         Vector2 arrowSize = new(64, 64);
