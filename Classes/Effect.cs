@@ -32,7 +32,8 @@ namespace ExileMaps.Classes
         public string GetSources() => string.Join(", ", Sources.Select(x => $"({x.X}, {x.Y})"));
 
         public void RecalculateWeight() {
-            Weight = Enabled && Main.Settings.MapMods.MapModTypes.TryGetValue(ID.ToString(), out var mod) ? mod.Weight * Value1 : 0;
+            // MapMods removed - Weight now defaults to 0
+            Weight = 0;
         }
 
         public string Name

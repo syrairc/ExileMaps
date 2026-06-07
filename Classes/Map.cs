@@ -11,7 +11,6 @@ namespace ExileMaps.Classes
         private Color nameColor = Color.FromArgb(255, 255, 255, 255);
         private Color backgroundColor = Color.FromArgb(220, 0, 0, 0);
         private Color nodeColor = Color.FromArgb(200, 155, 155, 155);
-        private bool drawLine = false;
         private bool highlight = true;
         private bool colorNodesByWeight = true;
         private bool useWeightColorForName = true;
@@ -41,7 +40,6 @@ namespace ExileMaps.Classes
 
         public string[] IDs { get; set; } = [];
         public string ShortestId { get; set; }
-        public string[] Biomes { get; set; } = [];
 
         // Sprite drawn for this map's nodes (and special-map indicator). Serializes as int; default Circle.
         public SpriteIcon Icon { get; set; } = SpriteIcon.Circle;
@@ -61,11 +59,6 @@ namespace ExileMaps.Classes
             return Array.Exists(IDs, x => x.Equals(id, StringComparison.OrdinalIgnoreCase));
         }
 
-        public string BiomesToString() {
-            if (Biomes.Length == 0) return "None";
-            return string.Join(", ", Biomes.Where(x => !string.IsNullOrWhiteSpace(x)));
-        }
-        
         [JsonConverter(typeof(JsonColorConverter))]
         public Color NameColor
         {
@@ -104,19 +97,6 @@ namespace ExileMaps.Classes
                 {
                     nodeColor = value;
                     OnPropertyChanged(nameof(NodeColor));
-                }
-            }
-        }
-
-        public bool DrawLine
-        {
-            get => drawLine;
-            set
-            {
-                if (drawLine != value)
-                {
-                    drawLine = value;
-                    OnPropertyChanged(nameof(DrawLine));
                 }
             }
         }

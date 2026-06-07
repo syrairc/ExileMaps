@@ -12,6 +12,5 @@ namespace ExileMaps.Classes
         public Dictionary<string, float> Maps { get; set; } = [];
         public Dictionary<string, float> Content { get; set; } = [];
         public Dictionary<string, float> Biomes { get; set; } = [];
-        public Dictionary<string, float> Mods { get; set; } = [];
     }
 }
