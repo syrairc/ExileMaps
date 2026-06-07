@@ -21,5 +21,29 @@ namespace ExileMaps.Classes
             
             return Color.FromArgb(iA, iR, iG, iB);
         }
+
+        /// <summary>Builds an opaque RGB color from HSV. hue 0-360, sat/val 0-1.</summary>
+        public static Color ColorFromHSV(float hue, float saturation, float value)
+        {
+            hue = ((hue % 360f) + 360f) % 360f;
+            int hi = (int)(hue / 60f) % 6;
+            float f = hue / 60f - (int)(hue / 60f);
+
+            value *= 255f;
+            int v = Math.Max(0, Math.Min(255, (int)value));
+            int p = Math.Max(0, Math.Min(255, (int)(value * (1 - saturation))));
+            int q = Math.Max(0, Math.Min(255, (int)(value * (1 - f * saturation))));
+            int t = Math.Max(0, Math.Min(255, (int)(value * (1 - (1 - f) * saturation))));
+
+            return hi switch
+            {
+                0 => Color.FromArgb(255, v, t, p),
+                1 => Color.FromArgb(255, q, v, p),
+                2 => Color.FromArgb(255, p, v, t),
+                3 => Color.FromArgb(255, p, q, v),
+                4 => Color.FromArgb(255, t, p, v),
+                _ => Color.FromArgb(255, v, p, q),
+            };
+        }
     }
 }

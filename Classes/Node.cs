@@ -4,7 +4,6 @@ using System.Text;
 using GameOffsets2.Native;
 using System.Linq;
 using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 
 namespace ExileMaps.Classes;
 
@@ -28,8 +27,6 @@ public class Node
     public bool IsFailed => !IsUnlocked && IsVisited;
     [JsonIgnore]
     public bool IsAttempted => !IsUnlocked && IsVisited;
-    [JsonIgnore]
-    public bool IsTower => MapType.IsTower();
     // Favorited if the map type is a favorite, or any content present on the node is favorited.
     [JsonIgnore]
     public bool IsFavorited => (MapType?.Favorite ?? false) || Content.Values.Any(c => c.Favorite);
@@ -46,10 +43,6 @@ public class Node
     public Map MapType { get; set; }
     [JsonIgnore]
     public float Weight { get; set; }
-    [JsonIgnore]
-    public Dictionary<string, Effect> Effects { get; set; } = [];
-    [JsonIgnore]
-    public bool DrawTowers { get; set; }
     // True when the map grants an atlas passive point (AtlasEntry.PassiveSkill present).
     [JsonIgnore]
     public bool GivesAtlasPoint { get; set; }
@@ -59,9 +52,6 @@ public class Node
 
     public long Address { get; set; }
     public long ParentAddress { get; set; }
-
-    [JsonIgnore]
-    public string[] EffectText => [.. Effects.Select(x => x.Value.ToString())];
 
     [JsonIgnore]
     public AtlasNodeDescription MapNode { get; set; }
@@ -85,20 +75,21 @@ public class Node
             return;
         }
         
-        Weight = MapType.Weight;
-        
-        foreach (var effect in Effects.Values) {
-            effect.RecalculateWeight();
-            Weight += effect.Weight;
-        }
+        // Content weights are whole-number percentage bonuses (default 25, may be negative) that add
+        // together and scale by the MAGNITUDE of the base map weight, so positive content always raises
+        // the value even when the base weight is negative (and negative content always lowers it):
+        //   Weight = MapWeight + |MapWeight| * (cw1 + cw2 + ...) / 100 + (biome weights).
+        // For a positive base this is identical to the old MapWeight * (1 + sum/100). Base 0 -> content
+        // contributes 0 (nothing to scale).
+        float contentSum = 0f;
+        foreach (var content in Content)
+            contentSum += content.Value.Weight;
 
-        foreach (var content in Content) 
-            Weight += content.Value.Weight;
-        
+        Weight = MapType.Weight + System.Math.Abs(MapType.Weight) * (contentSum / 100f);
 
-        foreach (var biome in Biomes) 
+        foreach (var biome in Biomes)
             Weight += biome.Value.Weight;
-        
+
     }
         
     public override string ToString()
@@ -117,8 +108,7 @@ public class Node
         sb.AppendLine($"Neighbors: {string.Join(", ", NeighborCoordinates)}");
         sb.AppendLine($"Biomes: {string.Join(", ", Biomes.Where(x => x.Value != null).Select(x => x.Value.Name))}");
         sb.AppendLine($"Content: {string.Join(", ", Content.Select(x => x.Value.Name))}");
-        sb.AppendLine($"Effects: {string.Join(", ", Effects.Select(x => x.Value.ToString()))}");
-        
+
         return sb.ToString();
     }
 
@@ -134,20 +124,7 @@ public class Node
             sb.AppendLine($"Content: {string.Join(", ", Content.Select(x => x.Value.Name))}");
         }
 
-        var towers = Effects.SelectMany(x => x.Value.Sources).Distinct().Count();
-        if (towers > 0) {
-            sb.AppendLine($"Towers: {towers}");
-            var effects = Effects.Distinct().Count();
-            if (effects > 0)
-                sb.AppendLine($"Effects: {effects}");
-        }
-
         return sb.ToString();
-    }
-
-    // Use regex to match EffectText
-    public bool MatchEffect(string regex) {
-        return EffectText.Any(x => Regex.IsMatch(x, regex, RegexOptions.IgnoreCase));
     }
 
     public List<Vector2i> GetNeighborCoordinates() {

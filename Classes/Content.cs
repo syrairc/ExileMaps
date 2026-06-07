@@ -14,7 +14,7 @@ namespace ExileMaps.Classes
     public class Content : INotifyPropertyChanged
     {
         private string name;
-        private float weight = 1.0f;
+        private float weight = 25.0f;
         private Color color = Color.FromArgb(255, 255, 255, 255);
         private bool highlight = true;
         private bool favorite = false;

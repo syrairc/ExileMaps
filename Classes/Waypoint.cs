@@ -26,10 +26,15 @@ namespace ExileMaps.Classes
         public List<Node> PathFromStart { get; set; } = new List<Node>();
         [JsonIgnore]
         public int StepCount => PathFromStart?.Count > 0 ? PathFromStart.Count - 1 : -1;
+        // Summed Weight of every map on PathFromStart (completed anchor + incomplete maps + destination).
+        // Set alongside PathFromStart by UpdateWaypointPaths; used to break ties between equal-length paths.
+        [JsonIgnore]
+        public float PathWeight { get; set; }
 
         [JsonConverter(typeof(Vector2iConverter))]
         public Vector2i Coordinates;
-        public MapIconsIndex Icon { get; set; }
+        // Custom sprite-atlas icon (Icons_Desaturated.png). Defaults to the downward triangle marker.
+        public SpriteIcon Icon { get; set; } = SpriteIcon.TriangleDown;
         public Color Color { get; set; }
 
         [JsonIgnore]
@@ -43,8 +48,14 @@ namespace ExileMaps.Classes
 
         
         public AtlasNodeDescription MapNode () {
-            if (Main.AtlasPanel == null) return null;
-            return Main.AtlasPanel.Descriptions.FirstOrDefault(x => x.Coordinate.ToString() == Coordinates.ToString()) ?? null;
+            try {
+                var descriptions = Main?.AtlasPanel?.Descriptions;
+                if (descriptions == null) return null;
+                return descriptions.FirstOrDefault(x => x != null && x.Coordinate.ToString() == Coordinates.ToString());
+            } catch {
+                // Atlas memory can shift mid-read (refresh / panel teardown); treat as "no node this frame".
+                return null;
+            }
         }
 
 
