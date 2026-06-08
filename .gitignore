@@ -406,6 +406,9 @@ FodyWeavers.xsd
 json/maps_OLD.json
 json/missing_maps.json
 
+# AI agent docs
+docs/
+
 # AI assistants & coding agents
 # Claude / Claude Code
 CLAUDE.md

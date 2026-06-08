@@ -609,6 +609,33 @@ public class GraphicSettings
     [Menu("Atlas Marker Size", "Pixel size of the atlas-point star and atlas-quest exclamation markers.")]
     public RangeNode<float> AtlasIndicatorSize { get; set; } = new RangeNode<float>(20.0f, 8, 48);
 
+    // Per-atlas-point-type marker color. Key: "Generic" plus each content type. Persisted (Newtonsoft);
+    // edited via AtlasPointStylePicker. Rendering falls back to a default if a key is missing.
+    public Dictionary<string, ColorNode> AtlasPointColors { get; set; } = new() {
+        ["Generic"]   = new ColorNode(Color.FromArgb(255, 200, 200, 205)), // silver
+        ["Breach"]    = new ColorNode(Color.FromArgb(255, 180, 70, 255)),  // purple
+        ["Abyss"]     = new ColorNode(Color.FromArgb(255, 60, 200, 90)),   // green
+        ["Incursion"] = new ColorNode(Color.FromArgb(255, 255, 150, 40)),  // orange
+        ["Delirium"]  = new ColorNode(Color.FromArgb(255, 240, 240, 245)), // white
+        ["Ritual"]    = new ColorNode(Color.FromArgb(255, 220, 50, 50)),   // red
+    };
+
+    // Per-atlas-point-type marker icon. Same keys as AtlasPointColors.
+    public Dictionary<string, SpriteIcon> AtlasPointIcons { get; set; } = new() {
+        ["Generic"]   = SpriteIcon.Star8,
+        ["Breach"]    = SpriteIcon.Star8,
+        ["Abyss"]     = SpriteIcon.Star8,
+        ["Incursion"] = SpriteIcon.Star8,
+        ["Delirium"]  = SpriteIcon.Star8,
+        ["Ritual"]    = SpriteIcon.Star8,
+    };
+
+    [JsonIgnore]
+    public CustomNode AtlasPointStylePicker { get; set; } = new CustomNode
+    {
+        DrawDelegate = () => SettingsHelpers.AtlasPointStyleTable()
+    };
+
     [Menu("Special Map Indicator", "Draw an icon above 'special' map nodes (wider node art) instead of a solid circle, so the map art isn't covered")]
     public ToggleNode ShowSpecialMapIndicator { get; set; } = new ToggleNode(true);
 
@@ -1413,6 +1440,39 @@ public static class SettingsHelpers {
     /// grid of all atlas sprites (laid out to match the atlas columns). Selecting one calls
     /// <paramref name="set"/>. Falls back to plain numbered buttons if the atlas texture isn't loaded.
     /// </summary>
+    // Stable display order for the atlas-point style editor (Dictionary order isn't guaranteed).
+    public static readonly string[] AtlasPointStyleKeys = { "Generic", "Breach", "Abyss", "Incursion", "Delirium", "Ritual" };
+
+    // Editable table of per-atlas-point-type marker color + icon. Backs the AtlasPointStylePicker CustomNode.
+    public static void AtlasPointStyleTable() {
+        var g = Main.Settings.Graphics;
+        ImGui.TextDisabled("Atlas point markers — color and icon per content type ('Generic' = non-content points).");
+        if (!ImGui.BeginTable("atlaspointstyles", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit))
+            return;
+        ImGui.TableSetupColumn("Type");
+        ImGui.TableSetupColumn("Color");
+        ImGui.TableSetupColumn("Icon");
+        ImGui.TableHeadersRow();
+        foreach (var key in AtlasPointStyleKeys) {
+            ImGui.TableNextRow();
+
+            ImGui.TableNextColumn();
+            ImGui.Text(key);
+
+            ImGui.TableNextColumn();
+            if (!g.AtlasPointColors.TryGetValue(key, out var cn)) { cn = new ColorNode(Color.White); g.AtlasPointColors[key] = cn; }
+            Color col = cn;
+            Vector4 cv = new(col.R / 255.0f, col.G / 255.0f, col.B / 255.0f, col.A / 255.0f);
+            if (ImGui.ColorEdit4($"##apc_{key}", ref cv, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview | ImGuiColorEditFlags.NoInputs))
+                g.AtlasPointColors[key] = Color.FromArgb((int)(cv.W * 255), (int)(cv.X * 255), (int)(cv.Y * 255), (int)(cv.Z * 255));
+
+            ImGui.TableNextColumn();
+            SpriteIcon cur = g.AtlasPointIcons.TryGetValue(key, out var ic) ? ic : SpriteIcon.Star8;
+            IconPicker($"apicon_{key}", cur, i => g.AtlasPointIcons[key] = i);
+        }
+        ImGui.EndTable();
+    }
+
     public static void IconPicker(string id, SpriteIcon current, Action<SpriteIcon> set) {
         IntPtr tex = Main.customIconsId;
         string popupId = $"iconpick_{id}";

@@ -46,6 +46,10 @@ public class Node
     // True when the map grants an atlas passive point (AtlasEntry.PassiveSkill present).
     [JsonIgnore]
     public bool GivesAtlasPoint { get; set; }
+    // Content type of a content-specific atlas point (Breach/Abyss/Incursion/Delirium/Ritual),
+    // parsed from the passive id. Null/empty = generic atlas point. Used to tint the marker.
+    [JsonIgnore]
+    public string AtlasPointType { get; set; }
     // True when the map has atlas quest content (PassiveSkill.Id contains "AtlasQuest").
     [JsonIgnore]
     public bool HasAtlasQuest { get; set; }
@@ -75,12 +79,8 @@ public class Node
             return;
         }
         
-        // Content weights are whole-number percentage bonuses (default 25, may be negative) that add
-        // together and scale by the MAGNITUDE of the base map weight, so positive content always raises
-        // the value even when the base weight is negative (and negative content always lowers it):
-        //   Weight = MapWeight + |MapWeight| * (cw1 + cw2 + ...) / 100 + (biome weights).
-        // For a positive base this is identical to the old MapWeight * (1 + sum/100). Base 0 -> content
-        // contributes 0 (nothing to scale).
+        // Weight = MapWeight + |MapWeight| * sum(contentWeights) / 100 + sum(biomeWeights).
+        // Scaling by magnitude means positive content raises and negative content lowers regardless of sign.
         float contentSum = 0f;
         foreach (var content in Content)
             contentSum += content.Value.Weight;
