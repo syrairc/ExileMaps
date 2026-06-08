@@ -15,45 +15,52 @@ public partial class ExileMapsCore
         lastRefresh = DateTime.MinValue;
     }
 
-    // Resets live weights to bundled defaults and persists them so the change survives reload.
+    // Full plugin-defaults reset: weights AND content colors, persisted so it survives reload.
     public void ResetWeightsToDefaults() {
         LoadDefaultWeights();
+        ResetContentColorsToDefaults();
         Settings.Profiles.SaveCurrentProfile();
         weightsDirty = true;
+        refreshCache = true;
     }
 
-    public void LoadDefaultWeights() {
+    // Per-section "Reset All Weights": restores bundled default weights for that section only.
+    public void ResetMapWeightsToDefaults()     { ApplyDefaultWeights(true, false, false); Settings.Profiles.SaveCurrentProfile(); weightsDirty = true; }
+    public void ResetContentWeightsToDefaults() { ApplyDefaultWeights(false, true, false); Settings.Profiles.SaveCurrentProfile(); weightsDirty = true; }
+    public void ResetBiomeWeightsToDefaults()   { ApplyDefaultWeights(false, false, true); Settings.Profiles.SaveCurrentProfile(); weightsDirty = true; }
+
+    // Restores every content type's color to its per-mechanic plugin default. Colors persist via the
+    // ExileCore settings store (ContentTypes), so no separate save is needed here.
+    public void ResetContentColorsToDefaults() {
+        foreach (var (id, content) in Settings.Maps.Content.ContentTypes)
+            content.Color = ContentDefaultColor(id);
+    }
+
+    public void LoadDefaultWeights() => ApplyDefaultWeights(true, true, true);
+
+    // Loads bundled default weights from exilemaps_weights.json, limited to the requested sections.
+    private void ApplyDefaultWeights(bool maps, bool content, bool biomes) {
         try {
             var weightsPath = Path.Combine(DirectoryFullName, "json\\exilemaps_weights.json");
             if (!File.Exists(weightsPath))
                 return;
 
-            var json = File.ReadAllText(weightsPath);
-            var export = JsonSerializer.Deserialize<WeightExport>(json);
+            var export = JsonSerializer.Deserialize<WeightExport>(File.ReadAllText(weightsPath));
 
-            if (export?.Maps != null) {
-                foreach (var kvp in export.Maps) {
-                    if (Settings.Maps.Maps.TryGetValue(kvp.Key, out var map)) {
+            if (maps && export?.Maps != null)
+                foreach (var kvp in export.Maps)
+                    if (Settings.Maps.Maps.TryGetValue(kvp.Key, out var map))
                         map.Weight = kvp.Value;
-                    }
-                }
-            }
 
-            if (export?.Content != null) {
-                foreach (var kvp in export.Content) {
-                    if (Settings.Maps.Content.ContentTypes.TryGetValue(kvp.Key, out var content)) {
-                        content.Weight = kvp.Value;
-                    }
-                }
-            }
+            if (content && export?.Content != null)
+                foreach (var kvp in export.Content)
+                    if (Settings.Maps.Content.ContentTypes.TryGetValue(kvp.Key, out var c))
+                        c.Weight = kvp.Value;
 
-            if (export?.Biomes != null) {
-                foreach (var kvp in export.Biomes) {
-                    if (Settings.Maps.Biomes.Biomes.TryGetValue(kvp.Key, out var biome)) {
+            if (biomes && export?.Biomes != null)
+                foreach (var kvp in export.Biomes)
+                    if (Settings.Maps.Biomes.Biomes.TryGetValue(kvp.Key, out var biome))
                         biome.Weight = kvp.Value;
-                    }
-                }
-            }
         } catch (Exception e) {
             LogError("Error loading default weights: " + e.Message);
         }

@@ -93,6 +93,37 @@ public partial class ExileMapsCore
         return (path, anchorWeight);
     }
 
+    // Plain BFS over the adjacency graph from `from` to `to`. Returns [from, ..., to], or null if
+    // unreachable. Used to build tour segments between two arbitrary cache nodes.
+    private List<Node> FindPath(Node from, Node to)
+    {
+        if (from == null || to == null) return null;
+        if (from.Coordinates == to.Coordinates) return new List<Node> { from };
+
+        var parent = new Dictionary<Vector2i, Node> { [from.Coordinates] = null };
+        var queue = new Queue<Node>();
+        queue.Enqueue(from);
+
+        while (queue.Count > 0)
+        {
+            var current = queue.Dequeue();
+            foreach (var neighbor in current.Neighbors.Values)
+            {
+                if (neighbor == null || parent.ContainsKey(neighbor.Coordinates)) continue;
+                parent[neighbor.Coordinates] = current;
+                if (neighbor.Coordinates == to.Coordinates)
+                {
+                    var path = new List<Node>();
+                    for (Node n = neighbor; n != null; n = parent[n.Coordinates]) path.Add(n);
+                    path.Reverse(); // from -> to
+                    return path;
+                }
+                queue.Enqueue(neighbor);
+            }
+        }
+        return null;
+    }
+
     // Multi-source BFS from all visited nodes. Returns step distances from the explored region;
     // unreachable nodes are omitted.
     private Dictionary<Vector2i, int> ComputeStepCounts()

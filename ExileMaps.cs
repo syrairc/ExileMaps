@@ -72,6 +72,13 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private DateTime lastRefresh = DateTime.Now;
     private bool weightsDirty = false;
     private DateTime lastWeightRecalc = DateTime.Now;
+    // Live profile-stored edits (weights/colors/highlight/icon/favorite) that haven't been snapshotted
+    // into the active profile yet. Without this, edits live only in the working state and are lost on
+    // reload — LoadProfile overlays the stale snapshot back over them (user had to switch profiles to save).
+    private bool profileDirty = false;
+    private DateTime lastProfileSave = DateTime.Now;
+    // Transient per-refresh stats raise PropertyChanged but aren't persisted — don't mark the profile dirty.
+    private static readonly HashSet<string> TransientStatProps = new() { "Count", "LockedCount", "FogCount" };
     private int TickCount { get; set; }
 
     // Bumped each refresh. Memoized step counts and atlas-panel list recompute when this changes.
@@ -138,6 +145,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             customIconsId = Graphics.GetTextureId(CustomIconsName);
             customIconsLoaded = true;
         }
+
+        // Textured atlas panel buttons (waypoints / tours / atlas), with per-state + tooltip images.
+        LoadPanelButtonTextures();
 
         CanUseMultiThreading = true;
 
@@ -214,6 +224,19 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             RecalculateWeights();
         }
 
+        // Snapshot live edits into the active profile so they persist (ExileCore serializes the profile,
+        // not the working state). Debounced, and gated on gameFilesScraped so we never overwrite a profile
+        // with an empty live state before the game files are read. Fixes "had to switch profiles to save".
+        if (profileDirty && gameFilesScraped && !refreshingCache && DateTime.Now.Subtract(lastProfileSave).TotalMilliseconds > 1000) {
+            profileDirty = false;
+            lastProfileSave = DateTime.Now;
+            try {
+                Settings.Profiles.SaveCurrentProfile();
+            } catch (Exception e) {
+                LogError("Error saving current profile: " + e.Message);
+            }
+        }
+
         return;
     }
 
@@ -223,15 +246,27 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         CheckKeybinds();
 
-        if (WaypointPanelIsOpen) DrawWaypointPanel();
+        if (WaypointPanelIsOpen) DrawWaypointPanel(); else wpPanelWasOpen = false;
 
         if (quickEditOpen) DrawQuickEditPanel();
 
         if (debugNodeOpen) DrawNodeDebugPanel();
 
+        if (atlasOverviewOpen) DrawAtlasOverviewPanel(); else overviewWasOpen = false;
+
+        if (toursPanelOpen) DrawToursPanel(); else toursPanelWasOpen = false;
+
         TickCount++;
 
         if (!AtlasPanel.IsVisible) return;
+
+        // Floating panel buttons + search box: shown whenever the atlas is open, even if overlay drawing is off.
+        DrawPanelButtonBar();
+        DrawAtlasSearchBox();
+
+        // Master draw toggle (Scroll Lock by default). Keybinds still processed above so it can be re-enabled.
+        if (!Settings.Features.EnableDrawing) return;
+
         // Cache panel/tooltip bounds once per frame so IsOnScreen avoids repeated game-memory reads.
         UpdateScreenBounds();
 
@@ -299,6 +334,10 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             LogError("Error drawing waypoints: " + e.Message + "\n" + e.StackTrace);
         }
 
+        DrawProgressReadout();
+        DrawSearchPing();
+        DrawTours();
+
         DrawCacheProgressBar();
 
     }
@@ -361,19 +400,28 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private void SubscribeToEvents() {
         try {
-            Settings.Maps.Maps.CollectionChanged += (_, _) => { weightsDirty = true; };
-            Settings.Maps.Maps.PropertyChanged += (_, _) => { weightsDirty = true; };
-            Settings.Maps.Biomes.Biomes.PropertyChanged += (_, _) => { weightsDirty = true; };
-            Settings.Maps.Biomes.Biomes.CollectionChanged += (_, _) => { weightsDirty = true; };
-            Settings.Maps.Content.ContentTypes.CollectionChanged += (_, _) => { weightsDirty = true; };
-            Settings.Maps.Content.ContentTypes.PropertyChanged += (_, _) => { weightsDirty = true; };
+            Settings.Maps.Maps.CollectionChanged += (_, _) => { weightsDirty = true; profileDirty = true; };
+            Settings.Maps.Maps.PropertyChanged += (_, e) => OnSettingPropertyChanged(e?.PropertyName);
+            Settings.Maps.Biomes.Biomes.PropertyChanged += (_, e) => OnSettingPropertyChanged(e?.PropertyName);
+            Settings.Maps.Biomes.Biomes.CollectionChanged += (_, _) => { weightsDirty = true; profileDirty = true; };
+            Settings.Maps.Content.ContentTypes.CollectionChanged += (_, _) => { weightsDirty = true; profileDirty = true; };
+            Settings.Maps.Content.ContentTypes.PropertyChanged += (_, e) => OnSettingPropertyChanged(e?.PropertyName);
             Settings.Maps.Maps.CollectionChanged += (_, _) => { refreshCache = true; };
         } catch (Exception e) {
             LogError("Error subscribing to events: " + e.Message);
         }
     }
 
+    // A live Map/Content/Biome property changed. Always re-flags the weight recalc; flags the profile
+    // for snapshotting too, unless it's a transient per-refresh stat (Count/LockedCount/FogCount).
+    private void OnSettingPropertyChanged(string propertyName) {
+        weightsDirty = true;
+        if (propertyName == null || !TransientStatProps.Contains(propertyName))
+            profileDirty = true;
+    }
+
     private void RegisterHotkeys() {
+        RegisterHotkey(Settings.Keybinds.ToggleDrawingHotkey);
         RegisterHotkey(Settings.Keybinds.RefreshMapCacheHotkey);
         RegisterHotkey(Settings.Keybinds.DebugKey);
         RegisterHotkey(Settings.Keybinds.ToggleDebugModeHotkey);
@@ -390,6 +438,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         RegisterHotkey(Settings.Keybinds.ToggleVisitedNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleHiddenNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleWaypointsHotkey);
+        RegisterHotkey(Settings.Keybinds.ToggleAtlasOverviewHotkey);
+        RegisterHotkey(Settings.Keybinds.ToggleToursPanelHotkey);
+        RegisterHotkey(Settings.Keybinds.AddTourStopHotkey);
     }
     
     private static void RegisterHotkey(HotkeyNodeV2 hotkey)
@@ -400,6 +451,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private void CheckKeybinds() {
         if (!AtlasPanel.IsVisible)
             return;
+
+        if (Settings.Keybinds.ToggleDrawingHotkey.PressedOnce())
+            Settings.Features.EnableDrawing.Value = !Settings.Features.EnableDrawing.Value;
 
         if (Settings.Keybinds.RefreshMapCacheHotkey.PressedOnce()) {
             // Force past the throttle so the press refreshes immediately.
@@ -422,9 +476,18 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (Settings.Keybinds.UpdateBiomesKey.PressedOnce())
             UpdateBiomeData();
 
-        if (Settings.Keybinds.ToggleWaypointPanelHotkey.PressedOnce()) {  
+        if (Settings.Keybinds.ToggleWaypointPanelHotkey.PressedOnce()) {
             WaypointPanelIsOpen = !WaypointPanelIsOpen;
         }
+
+        if (Settings.Keybinds.ToggleAtlasOverviewHotkey.PressedOnce())
+            atlasOverviewOpen = !atlasOverviewOpen;
+
+        if (Settings.Keybinds.ToggleToursPanelHotkey.PressedOnce())
+            toursPanelOpen = !toursPanelOpen;
+
+        if (Settings.Keybinds.AddTourStopHotkey.PressedOnce())
+            AddStopToActiveTour(GetClosestNodeToCursor());
 
         if (Settings.Keybinds.AddWaypointHotkey.PressedOnce())
             AddWaypoint(GetClosestNodeToCursor());

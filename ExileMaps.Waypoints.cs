@@ -29,7 +29,13 @@ public partial class ExileMapsCore
     private void DrawWaypointPath(Waypoint waypoint)
     {
         // Snapshot once; UpdateWaypointPaths nulls/rebuilds this on the refresh thread.
-        var path = waypoint.PathFromStart;
+        DrawPath(waypoint.PathFromStart, waypoint.Color);
+    }
+
+    // Draws a node polyline with the configured waypoint path style (textured/dashed/animated),
+    // in the given color. Shared by waypoint paths and the multi-waypoint tour.
+    private void DrawPath(System.Collections.Generic.IReadOnlyList<Node> path, System.Drawing.Color color)
+    {
         if (path == null || path.Count <= 1)
             return;
 
@@ -37,7 +43,6 @@ public partial class ExileMapsCore
         float dashLen = g.WaypointDashLength;
         float gap = g.WaypointDashGap;
         float period = dashLen + gap;
-        var color = waypoint.Color;
         bool dashed = dashLen > 0f && period > 0f;
         // Textured when UseNodeIcons is on and the selected sprite loaded; falls back to plain line.
         IntPtr pathTexId = default;
@@ -67,7 +72,7 @@ public partial class ExileMapsCore
                 start = currentNode.MapNode.Element.GetClientRect().Center;
                 end = nextNode.MapNode.Element.GetClientRect().Center;
             } catch (Exception e) {
-                DebugSwallow("DrawWaypointPath: segment rect read", e);
+                DebugSwallow("DrawPath: segment rect read", e);
                 continue;
             }
 
@@ -145,13 +150,17 @@ public partial class ExileMapsCore
     }
 
     private void DrawWaypointPanel() {
-        Vector2 panelSize = new Vector2(UI.SettingsPanel.GetClientRect().Width, UI.SettingsPanel.GetClientRect().Height);
-        Vector2 panelPosition = UI.SettingsPanel.GetClientRect().TopLeft;
-        ImGui.SetNextWindowPos(panelPosition, ImGuiCond.Always);
-        ImGui.SetNextWindowSize(panelSize, ImGuiCond.Always);
+        // Default to the old left-side footprint on first open; restored from saved rect after, and
+        // the user can move/resize freely (saved each frame).
+        var settingsRect = UI.SettingsPanel.GetClientRect();
+        bool justOpened = !wpPanelWasOpen; wpPanelWasOpen = true;
+        BeginPersistedWindow(Settings.Waypoints.PanelRect, justOpened, settingsRect.TopLeft,
+            new Vector2(settingsRect.Width, settingsRect.Height));
+        ImGui.SetNextWindowSizeConstraints(new Vector2(420, 300), new Vector2(float.MaxValue, float.MaxValue));
         ImGui.SetNextWindowBgAlpha(0.8f);
 
-        ImGui.Begin("WaypointPanel", ref WaypointPanelIsOpen, ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoMove);
+        ImGui.Begin("Waypoints###WaypointPanel", ref WaypointPanelIsOpen, ImGuiWindowFlags.NoCollapse);
+        SavePersistedWindow(Settings.Waypoints.PanelRect);
 
         if (ImGui.BeginTable("waypoint_top_table", 2, ImGuiTableFlags.NoBordersInBody|ImGuiTableFlags.PadOuterX))
         {
