@@ -58,6 +58,7 @@ public partial class ExileMapsCore
         "Art/Textures/Interface/2D/2DArt/UIImages/Common/AtlasSearchBg.dds",
         "Art/Textures/Interface/2D/2DArt/UIImages/InGame/MapPinsWindow/MapPinLegendBG.dds",
         "Art/Textures/Interface/2D/2DArt/UIImages/InGame/MapLegend/LegendBg.dds",
+        "Art/Textures/Interface/2D/2DArt/UIImages/InGame/AtlasScreen/KeystonesUI/MainBgExpanded.dds",
     };
 
     // Recursively adds the client rect of any visible descendant whose texture is in
