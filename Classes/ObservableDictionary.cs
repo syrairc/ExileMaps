@@ -122,8 +122,7 @@ namespace ExileMaps.Classes
                 // drives the debounced weight recalc. Without this, only Add/Remove notified them.
                 OnPropertyChanged(e.PropertyName);
                 OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Replace, new KeyValuePair<TKey, TValue>(key, item), new KeyValuePair<TKey, TValue>(key, item)));            }
-            catch (Exception ex) {
-                //Console.WriteLine(ex);
+            catch (Exception) {
             }
         }
     }
