@@ -232,6 +232,10 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         TickCount++;
 
         if (!AtlasPanel.IsVisible) return;
+
+        // Master draw toggle (Scroll Lock by default). Keybinds still processed above so it can be re-enabled.
+        if (!Settings.Features.EnableDrawing) return;
+
         // Cache panel/tooltip bounds once per frame so IsOnScreen avoids repeated game-memory reads.
         UpdateScreenBounds();
 
@@ -374,6 +378,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
 
     private void RegisterHotkeys() {
+        RegisterHotkey(Settings.Keybinds.ToggleDrawingHotkey);
         RegisterHotkey(Settings.Keybinds.RefreshMapCacheHotkey);
         RegisterHotkey(Settings.Keybinds.DebugKey);
         RegisterHotkey(Settings.Keybinds.ToggleDebugModeHotkey);
@@ -400,6 +405,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private void CheckKeybinds() {
         if (!AtlasPanel.IsVisible)
             return;
+
+        if (Settings.Keybinds.ToggleDrawingHotkey.PressedOnce())
+            Settings.Features.EnableDrawing.Value = !Settings.Features.EnableDrawing.Value;
 
         if (Settings.Keybinds.RefreshMapCacheHotkey.PressedOnce()) {
             // Force past the throttle so the press refreshes immediately.

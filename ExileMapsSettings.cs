@@ -374,6 +374,9 @@ public class ExileMapsSettings : ISettings
 [Submenu(CollapsedByDefault = false)]
 public class FeatureSettings
 {
+    [Menu("Enable Atlas Drawing", "Master switch for all atlas overlay drawing (nodes, lines, rings, labels, waypoints). Toggle with the Atlas Drawing hotkey (default Scroll Lock).")]
+    public ToggleNode EnableDrawing { get; set; } = new ToggleNode(true);
+
     [Menu("Atlas Range", "Range (from your current viewpoint) to process atlas nodes.")]
     public RangeNode<int> AtlasRange { get; set; } = new(1500, 100, 20000);
     [Menu("Use Atlas Range for Node Connections", "Drawing node connections is performance intensive. By default it uses a range of 1000, but you can change it to use the Atlas range.")]
@@ -414,6 +417,9 @@ public class HotkeySettings
 
     [JsonIgnore]
     public CustomNode SepGeneral { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("General") };
+
+    [Menu("Toggle Atlas Drawing Hotkey", "Show/hide all atlas overlay drawing. Default: Scroll Lock")]
+    public HotkeyNodeV2 ToggleDrawingHotkey { get; set; } = new HotkeyNodeV2(Keys.Scroll);
 
     [Menu("Map Cache Refresh Hotkey", "Default: Home")]
     public HotkeyNodeV2 RefreshMapCacheHotkey { get; set; } = new HotkeyNodeV2(Keys.Home);
