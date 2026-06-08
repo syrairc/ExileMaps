@@ -22,6 +22,8 @@ public class Node
     [JsonIgnore]
     public bool IsVisited;
     [JsonIgnore]
+    public bool IsCompleted;
+    [JsonIgnore]
     public bool IsWaypoint;
     [JsonIgnore]
     public bool IsFailed => !IsUnlocked && IsVisited;

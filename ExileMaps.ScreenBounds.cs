@@ -88,8 +88,8 @@ public partial class ExileMapsCore
             if (UI.OpenRightPanel.IsVisible)
                 right -= UI.OpenRightPanel.GetClientRect().Width;
 
-            if (UI.OpenLeftPanel.IsVisible || WaypointPanelIsOpen)
-                left += Math.Max(UI.OpenLeftPanel.GetClientRect().Width, UI.SettingsPanel.GetClientRect().Width);
+            if (UI.OpenLeftPanel.IsVisible)
+                left += UI.OpenLeftPanel.GetClientRect().Width;
 
             cachedScreenRect = new RectangleF(left, 0, right - left, size.Y);
 

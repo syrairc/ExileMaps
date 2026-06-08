@@ -111,6 +111,7 @@ public partial class ExileMapsCore
             IsVisible = node.Element.IsVisible,
             IsVisited = node.Element.IsVisited,
             IsActive = node.Element.IsActive,
+            IsCompleted = node.Element.IsCompleted,
             ParentAddress = node.Address,
             Address = node.Element.Address,
             Coordinates = node.Coordinate,
@@ -146,6 +147,7 @@ public partial class ExileMapsCore
         cachedNode.IsVisible = node.Element.IsVisible;
         cachedNode.IsVisited = node.Element.IsVisited || (!node.Element.IsUnlocked && node.Element.IsVisited);
         cachedNode.IsActive = node.Element.IsActive;
+        cachedNode.IsCompleted = node.Element.IsCompleted;
         cachedNode.Address = node.Element.Address;
         cachedNode.ParentAddress = node.Address;     
         cachedNode.MapNode = node;
@@ -252,7 +254,33 @@ public partial class ExileMapsCore
             toNode.AtlasPointType = (grantsInside || contentType == null) ? null : contentType;
             toNode.GivesAtlasPoint = (grantsInside || contentType != null) && !completed;
             toNode.HasAtlasQuest = (passiveId?.Contains("AtlasQuest", StringComparison.OrdinalIgnoreCase) ?? false) && !completed;
+
+            // An uncompleted content-type atlas point (e.g. a Breach point) means the map yields that
+            // mechanic when run - mark the node as also having that content so it gets a ring, weight,
+            // and shows in the reachable-content tally. TryAdd dedups if it already has it from ContentIdentity.
+            if (contentType != null && !completed) {
+                var apContent = ResolveAtlasPointContent(contentType);
+                if (apContent != null)
+                    toNode.Content.TryAdd(apContent.Name, apContent);
+            }
         }
         catch (Exception e) { toNode.GivesAtlasPoint = false; toNode.HasAtlasQuest = false; toNode.AtlasPointType = null; DebugSwallow("SetAtlasPassive", e); }
+    }
+
+    // Resolves an atlas-point content word ("Breach", "Ritual", ...) to the matching Content definition.
+    // Prefers an exact (space-stripped, case-insensitive) name match to avoid picking boss/variant entries,
+    // then falls back to the first content whose name or key contains the word. Null if no match.
+    private Content ResolveAtlasPointContent(string type) {
+        if (string.IsNullOrEmpty(type))
+            return null;
+        var types = Settings.Maps.Content.ContentTypes;
+        foreach (var c in types.Values)
+            if (c?.Name != null && c.Name.Replace(" ", "").Equals(type, StringComparison.OrdinalIgnoreCase))
+                return c;
+        foreach (var (key, c) in types)
+            if ((c?.Name != null && c.Name.Contains(type, StringComparison.OrdinalIgnoreCase))
+                || (key != null && key.Contains(type, StringComparison.OrdinalIgnoreCase)))
+                return c;
+        return null;
     }
 }

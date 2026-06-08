@@ -104,14 +104,19 @@ public partial class ExileMapsCore
             !cachedNode.MapType.Highlight || !cachedContent.Highlight)            
             return 0;
 
-        float radius = (Count * Settings.Graphics.RingWidth) + 1 + ((nodeCurrentPosition.Right - nodeCurrentPosition.Left) / 2 * Settings.Graphics.RingRadius);
+        float baseRadius = 1 + ((nodeCurrentPosition.Right - nodeCurrentPosition.Left) / 2 * Settings.Graphics.RingRadius);
         if (customIconsLoaded && Settings.Graphics.UseNodeIcons) {
-            // User-tunable scale (default 1.0 = original ring size).
+            // Icons are scaled up by ContentRingIconScale, so the per-ring step must widen too or
+            // stacked icons overlap. ContentRingIconSpacing adds the extra gap.
+            float step = Settings.Graphics.RingWidth * Settings.Graphics.ContentRingIconSpacing;
+            float radius = (Count * step) + baseRadius;
             float d = radius * 2f * Settings.Graphics.ContentRingIconScale;
             DrawNodeSprite(nodeCurrentPosition.Center, d, d, SpriteIcon.CircleOutline, cachedContent.Color);
         }
-        else
+        else {
+            float radius = (Count * Settings.Graphics.RingWidth) + baseRadius;
             Graphics.DrawCircle(nodeCurrentPosition.Center, radius, cachedContent.Color, Settings.Graphics.RingWidth, 32);
+        }
 
         return 1;
     }

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -92,34 +93,104 @@ public partial class ExileMapsCore
       }
     }
 
-    // Scrapes content types from EndgameMapContent, adds missing entries, migrates legacy name-keyed
-    // entries to id keys. Returns false if the file list isn't loaded yet.
+    // Untouched content color (matches Content's ctor default) — only entries still at this value get
+    // recolored on update, so user customizations are preserved.
+    private static readonly Color ContentColorDefault = Color.FromArgb(255, 255, 255, 255);
+    private static readonly Color ContentColorFallback = Color.FromArgb(255, 220, 220, 220);
+
+    // Default display color per content type, chosen by id keyword (first match wins). Picked to match
+    // each mechanic's in-game identity. Covers all current EndgameMapContentVisualIdentity ids; unknown
+    // ids fall back to a neutral grey.
+    private static Color ContentDefaultColor(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return ContentColorFallback;
+        string s = id.ToLowerInvariant();
+
+        // Biomes
+        if (s.Contains("waterbiome")) return Color.FromArgb(255, 80, 170, 230);
+        if (s.Contains("mountainbiome")) return Color.FromArgb(255, 170, 175, 185);
+        if (s.Contains("grassbiome")) return Color.FromArgb(255, 130, 210, 90);
+        if (s.Contains("forestbiome")) return Color.FromArgb(255, 60, 150, 70);
+        if (s.Contains("swampbiome")) return Color.FromArgb(255, 130, 140, 60);
+        if (s.Contains("desertbiome")) return Color.FromArgb(255, 220, 195, 130);
+
+        // League mechanics
+        if (s.Contains("breach")) return Color.FromArgb(255, 170, 90, 230);
+        if (s.Contains("ritual")) return Color.FromArgb(255, 210, 40, 40);
+        if (s.Contains("abyss")) return Color.FromArgb(255, 120, 70, 200);
+        if (s.Contains("expedition")) return Color.FromArgb(255, 215, 175, 95);
+        if (s.Contains("delirium") || s.Contains("simulacrum")) return Color.FromArgb(255, 205, 205, 230);
+        if (s.Contains("incursion")) return Color.FromArgb(255, 60, 200, 190);
+        if (s.Contains("essence")) return Color.FromArgb(255, 100, 200, 230);
+        if (s.Contains("azmeri")) return Color.FromArgb(255, 80, 200, 140);
+
+        // Strongboxes / shrines / exiles
+        if (s.Contains("strongbox")) return Color.FromArgb(255, 230, 180, 60);
+        if (s.Contains("shrine")) return Color.FromArgb(255, 80, 200, 180);
+        if (s.Contains("stonecircle")) return Color.FromArgb(255, 220, 170, 70);
+        if (s.Contains("rogueexile") || s.Contains("exile")) return Color.FromArgb(255, 90, 150, 230);
+
+        // Rewards / rarity / uniques
+        if (s.Contains("headhunter")) return Color.FromArgb(255, 230, 60, 60);
+        if (s.Contains("ultimarum") || s.Contains("ultimatum")) return Color.FromArgb(255, 200, 150, 60);
+        if (s.Contains("sanctif") || s.Contains("sanctum")) return Color.FromArgb(255, 240, 210, 120);
+        if (s.Contains("unique")) return Color.FromArgb(255, 175, 96, 37);
+        if (s.Contains("itemrarity") || s.Contains("rarity") || s.Contains("rarecurrency")) return Color.FromArgb(255, 230, 215, 90);
+        if (s.Contains("experience")) return Color.FromArgb(255, 150, 190, 230);
+
+        // Corruption
+        if (s.Contains("corrupt")) return Color.FromArgb(255, 170, 35, 35);
+        if (s.Contains("irradiated")) return Color.FromArgb(255, 120, 230, 80);
+
+        // Monsters / bosses
+        if (s.Contains("boss")) return Color.FromArgb(255, 230, 70, 70);
+        if (s.Contains("magicmonsters")) return Color.FromArgb(255, 110, 130, 230);
+        if (s.Contains("giant")) return Color.FromArgb(255, 230, 140, 60);
+        if (s.Contains("rare")) return Color.FromArgb(255, 230, 215, 90);
+
+        // Misc
+        if (s.Contains("trader")) return Color.FromArgb(255, 90, 160, 230);
+        if (s.Contains("hideout")) return Color.FromArgb(255, 170, 170, 170);
+        if (s.Contains("quest")) return Color.FromArgb(255, 255, 200, 40);
+
+        return ContentColorFallback;
+    }
+
+    // "PowerfulMapBoss" -> "Powerful Map Boss". Inserts a space between a lower/digit and an upper.
+    private static string SplitPascalCase(string s) =>
+        string.IsNullOrEmpty(s) ? s
+            : System.Text.RegularExpressions.Regex.Replace(s, "(?<=[a-z0-9])(?=[A-Z])", " ");
+
+    // Scrapes content types from EndgameMapContentVisualIdentity (the authoritative marker set that
+    // node.ContentIdentity is drawn from — 73 entries incl. biome/rarity markers the old
+    // EndgameMapContent file lacks). That file has Id + AtlasIcon but no Name, so display names come
+    // from a PascalCase split of the Id, enriched by EndgameMapContent.Name where it still exists.
+    // Adds missing entries, migrates legacy name-keyed entries to id keys. False if not loaded yet.
     private bool UpdateContentData(bool writeToFile = true) {
       try {
-        var contentEntries = GameController.Files.EndgameMapContent?.EntriesList;
-        if (contentEntries == null || contentEntries.Count == 0)
+        var visuals = GameController.Files.EndgameMapContentVisualIdentity?.EntriesList;
+        if (visuals == null || visuals.Count == 0)
             return false;
 
-        // Build Id -> AtlasIcon lookup from the visual identity file list.
-        var iconLookup = new Dictionary<string, string>();
-        var visuals = GameController.Files.EndgameMapContentVisualIdentity?.EntriesList;
-        if (visuals != null)
-            foreach (var vi in visuals) {
-                var vid = vi?.Id;
-                if (!string.IsNullOrEmpty(vid))
-                    iconLookup[vid] = vi.AtlasIcon?.ToString();
+        // Build Id -> Name lookup from EndgameMapContent for nicer display names (optional).
+        var nameLookup = new Dictionary<string, string>();
+        var contentEntries = GameController.Files.EndgameMapContent?.EntriesList;
+        if (contentEntries != null)
+            foreach (var ce in contentEntries) {
+                var cid = ce?.Id;
+                if (!string.IsNullOrEmpty(cid) && !string.IsNullOrEmpty(ce.Name))
+                    nameLookup[cid] = ce.Name;
             }
 
         int added = 0, updated = 0;
-        foreach (var entry in contentEntries) {
+        foreach (var entry in visuals) {
             var id = entry?.Id;
-            var name = entry?.Name;
             if (string.IsNullOrEmpty(id))
                 continue;
-            if (string.IsNullOrEmpty(name))
-                name = id;
 
-            iconLookup.TryGetValue(id, out var icon);
+            var icon = entry.AtlasIcon?.ToString();
+            var name = nameLookup.TryGetValue(id, out var nicer) ? nicer : SplitPascalCase(id);
+            var defaultColor = ContentDefaultColor(id);
 
             // Find an existing entry under the Id key or a legacy spaced-Name key.
             var existingKey = Settings.Maps.Content.ContentTypes.Keys.FirstOrDefault(k => k == id || k.Replace(" ", "") == id);
@@ -128,12 +199,15 @@ public partial class ExileMapsCore
                 existing.Name = name;
                 if (!string.IsNullOrEmpty(icon))
                     existing.AtlasIcon = icon;
+                // Recolor only entries still at the default white — don't clobber user choices.
+                if (existing.Color.ToArgb() == ContentColorDefault.ToArgb())
+                    existing.Color = defaultColor;
                 if (existingKey != id) {
                     Settings.Maps.Content.ContentTypes.Remove(existingKey);
                     Settings.Maps.Content.ContentTypes.TryAdd(id, existing);
                 }
                 updated++;
-            } else if (Settings.Maps.Content.ContentTypes.TryAdd(id, new Content { Name = name, Weight = 25.0f, AtlasIcon = icon })) {
+            } else if (Settings.Maps.Content.ContentTypes.TryAdd(id, new Content { Name = name, Weight = 25.0f, AtlasIcon = icon, Color = defaultColor })) {
                 added++;
                 LogMessage($"Added Content Type: {id}");
             }

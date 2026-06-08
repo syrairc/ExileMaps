@@ -139,6 +139,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             customIconsLoaded = true;
         }
 
+        // Textured atlas panel buttons (waypoints / tours / atlas), with per-state + tooltip images.
+        LoadPanelButtonTextures();
+
         CanUseMultiThreading = true;
 
         return true;
@@ -223,15 +226,23 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         CheckKeybinds();
 
-        if (WaypointPanelIsOpen) DrawWaypointPanel();
+        if (WaypointPanelIsOpen) DrawWaypointPanel(); else wpPanelWasOpen = false;
 
         if (quickEditOpen) DrawQuickEditPanel();
 
         if (debugNodeOpen) DrawNodeDebugPanel();
 
+        if (atlasOverviewOpen) DrawAtlasOverviewPanel(); else overviewWasOpen = false;
+
+        if (toursPanelOpen) DrawToursPanel(); else toursPanelWasOpen = false;
+
         TickCount++;
 
         if (!AtlasPanel.IsVisible) return;
+
+        // Floating panel buttons + search box: shown whenever the atlas is open, even if overlay drawing is off.
+        DrawPanelButtonBar();
+        DrawAtlasSearchBox();
 
         // Master draw toggle (Scroll Lock by default). Keybinds still processed above so it can be re-enabled.
         if (!Settings.Features.EnableDrawing) return;
@@ -302,6 +313,10 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         catch (Exception e) {
             LogError("Error drawing waypoints: " + e.Message + "\n" + e.StackTrace);
         }
+
+        DrawProgressReadout();
+        DrawSearchPing();
+        DrawTours();
 
         DrawCacheProgressBar();
 
@@ -395,6 +410,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         RegisterHotkey(Settings.Keybinds.ToggleVisitedNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleHiddenNodesHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleWaypointsHotkey);
+        RegisterHotkey(Settings.Keybinds.ToggleAtlasOverviewHotkey);
+        RegisterHotkey(Settings.Keybinds.ToggleToursPanelHotkey);
+        RegisterHotkey(Settings.Keybinds.AddTourStopHotkey);
     }
     
     private static void RegisterHotkey(HotkeyNodeV2 hotkey)
@@ -430,9 +448,18 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (Settings.Keybinds.UpdateBiomesKey.PressedOnce())
             UpdateBiomeData();
 
-        if (Settings.Keybinds.ToggleWaypointPanelHotkey.PressedOnce()) {  
+        if (Settings.Keybinds.ToggleWaypointPanelHotkey.PressedOnce()) {
             WaypointPanelIsOpen = !WaypointPanelIsOpen;
         }
+
+        if (Settings.Keybinds.ToggleAtlasOverviewHotkey.PressedOnce())
+            atlasOverviewOpen = !atlasOverviewOpen;
+
+        if (Settings.Keybinds.ToggleToursPanelHotkey.PressedOnce())
+            toursPanelOpen = !toursPanelOpen;
+
+        if (Settings.Keybinds.AddTourStopHotkey.PressedOnce())
+            AddStopToActiveTour(GetClosestNodeToCursor());
 
         if (Settings.Keybinds.AddWaypointHotkey.PressedOnce())
             AddWaypoint(GetClosestNodeToCursor());

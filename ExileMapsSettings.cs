@@ -26,6 +26,15 @@ public enum PathTextureStyle
     Capsule,
 }
 
+// Atlas corner for the always-on progress readout HUD.
+public enum ReadoutCorner
+{
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 public class ExileMapsSettings : ISettings
 {
     public ToggleNode Enable { get; set; } = new ToggleNode(false);
@@ -364,6 +373,11 @@ public class ExileMapsSettings : ISettings
     public FeatureSettings Features { get; set; } = new FeatureSettings();
     public HotkeySettings Keybinds { get; set; } = new HotkeySettings();
     public GraphicSettings Graphics { get; set; } = new GraphicSettings();
+    [Menu("Atlas Overview")]
+    public AtlasOverviewSettings AtlasOverview { get; set; } = new AtlasOverviewSettings();
+
+    [Menu("Tours")]
+    public TourSettings Tours { get; set; } = new TourSettings();
 
     [Menu("Maps")]
     public MapSettings Maps { get; set; } = new MapSettings();
@@ -407,6 +421,12 @@ public class FeatureSettings
     [Menu("Debug Mode")]
     public ToggleNode DebugMode { get; set; } = new ToggleNode(false);
 
+    [Menu("Show Panel Buttons", "Show a floating button bar at the bottom-center of the atlas to open the Waypoints, Atlas Overview and Tours panels.")]
+    public ToggleNode ShowPanelButtons { get; set; } = new ToggleNode(true);
+
+    [Menu("Show Atlas Search Box", "Show a floating search box at the top-center of the atlas that pings matching nodes (same as the Atlas Overview search).")]
+    public ToggleNode ShowAtlasSearchBox { get; set; } = new ToggleNode(true);
+
 }
 [Submenu(CollapsedByDefault = true)]
 public class HotkeySettings
@@ -428,6 +448,24 @@ public class HotkeySettings
     public HotkeyNodeV2 QuickEditNodeHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
     [JsonIgnore]
+    public CustomNode SepPanels { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Panels") };
+
+    [Menu("Toggle Atlas Overview Panel", "Show/hide the Atlas Overview panel (reachable-content tally + node search). Default: Pause")]
+    public HotkeyNodeV2 ToggleAtlasOverviewHotkey { get; set; } = new HotkeyNodeV2(Keys.Pause);
+
+    [Menu("Waypoint Panel Hotkey", "Show/hide the Waypoints panel. Default: End")]
+    public HotkeyNodeV2 ToggleWaypointPanelHotkey { get; set; } = new HotkeyNodeV2(Keys.End);
+
+    [JsonIgnore]
+    public CustomNode SepTours { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Tours") };
+
+    [Menu("Toggle Tours Panel", "Show/hide the Tours panel (create/manage named tour routes). Unbound by default - set a key.")]
+    public HotkeyNodeV2 ToggleToursPanelHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
+
+    [Menu("Add Tour Stop Hotkey", "Hover a node on the Atlas and press to add/remove it from the active tour. Unbound by default - set a key.")]
+    public HotkeyNodeV2 AddTourStopHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
+
+    [JsonIgnore]
     public CustomNode SepWaypoints { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Waypoints") };
 
     [Menu("Add Waypoint Hotkey", "Default: Insert")]
@@ -435,9 +473,6 @@ public class HotkeySettings
 
     [Menu("Remove Waypoint Hotkey", "Default: Delete")]
     public HotkeyNodeV2 DeleteWaypointHotkey { get; set; } = new HotkeyNodeV2(Keys.Delete);
-
-    [Menu("Waypoint Panel Hotkey", "Default: End")]
-    public HotkeyNodeV2 ToggleWaypointPanelHotkey { get; set; } = new HotkeyNodeV2(Keys.End);
 
     [Menu("Toggle Waypoints Hotkey", "Show/hide waypoints and their arrows. Unbound by default - set a key.")]
     public HotkeyNodeV2 ToggleWaypointsHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
@@ -508,6 +543,9 @@ public class GraphicSettings
 
     [Menu("Content Ring Icon Size", "Scale of the outline-circle icon used for content rings (icon mode only).")]
     public RangeNode<float> ContentRingIconScale { get; set; } = new RangeNode<float>(1.0f, 0.3f, 3f);
+
+    [Menu("Content Ring Icon Spacing", "Extra gap between stacked content ring icons when a node has multiple content types (icon mode only).")]
+    public RangeNode<float> ContentRingIconSpacing { get; set; } = new RangeNode<float>(1.5f, 0.5f, 4f);
 
     [Menu("Content Ring Width", "Width of the rings used to indicate map content")]
     public RangeNode<float> RingWidth { get; set; } = new RangeNode<float>(5.0f, 0, 10);
@@ -682,6 +720,65 @@ public class GraphicSettings
     public RangeNode<int> MapNameOffsetX { get; set; } = new RangeNode<int>(0, -200, 200);
     [Menu("Map Name Offset Y", "Vertical pixel offset of the map name/weight text relative to the node center.")]
     public RangeNode<int> MapNameOffsetY { get; set; } = new RangeNode<int>(25, -200, 200);
+}
+
+[Submenu(CollapsedByDefault = true)]
+public class AtlasOverviewSettings
+{
+    [Menu("Reachable Step Window", "How many steps from your explored frontier count as 'reachable' for the content tally and atlas-point counter.")]
+    public RangeNode<int> ReachableSteps { get; set; } = new RangeNode<int>(10, 1, 50);
+
+    [Menu("Show Progress Readout", "Draw an always-on counter (maps run/completed, atlas points reachable) in an atlas corner.")]
+    public ToggleNode ShowProgressReadout { get; set; } = new ToggleNode(true);
+
+    // Edited via the combo below; no [Menu] so it isn't auto-rendered as a raw enum.
+    public ReadoutCorner ReadoutCorner { get; set; } = ReadoutCorner.TopLeft;
+
+    [JsonIgnore]
+    public CustomNode ReadoutCornerPicker { get; set; } = new CustomNode
+    {
+        DrawDelegate = () =>
+        {
+            if (Main == null) return;
+            string[] labels = { "Top Left", "Top Right", "Bottom Left", "Bottom Right" };
+            int idx = (int)Main.Settings.AtlasOverview.ReadoutCorner;
+            if (idx < 0 || idx >= labels.Length) idx = 0;
+            ImGui.Text("Readout Corner");
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(160);
+            if (ImGui.Combo("##readoutcorner", ref idx, labels, labels.Length))
+                Main.Settings.AtlasOverview.ReadoutCorner = (ReadoutCorner)idx;
+        }
+    };
+
+    [Menu("Search Ping Color", "Color of the pulsing ring drawn on atlas nodes matching the Atlas Overview search box.")]
+    public ColorNode SearchPingColor { get; set; } = new ColorNode(Color.FromArgb(255, 80, 230, 255));
+
+    public PanelRect PanelRect { get; set; } = new PanelRect();
+}
+
+[Submenu(CollapsedByDefault = true)]
+public class TourSettings
+{
+    [Menu("Show Tours", "Master switch for drawing all enabled tour routes on the atlas.")]
+    public ToggleNode ShowTours { get; set; } = new ToggleNode(true);
+
+    // Id of the tour the Add-Tour-Stop hotkey targets. Empty = none active.
+    public string ActiveTourId { get; set; } = "";
+
+    public ObservableDictionary<string, Tour> Tours { get; set; } = [];
+
+    // ---- Auto Create Tour ----
+    // Content names (matching the Atlas Overview content list) the auto-tour builder targets.
+    public List<string> AutoTourContent { get; set; } = new();
+
+    [Menu("Auto Tour Max Steps", "When auto-creating a tour, the most steps allowed between consecutive matching stops before the route stops growing.")]
+    public RangeNode<int> AutoTourStepRange { get; set; } = new RangeNode<int>(3, 1, 10);
+
+    [Menu("Auto Tour Off-screen Margin %", "How far beyond the visible screen (as a percent of screen size) a matching node may sit and still be included, so auto-tours don't sprawl across the whole atlas.")]
+    public RangeNode<int> AutoTourScreenMarginPct { get; set; } = new RangeNode<int>(25, 0, 200);
+
+    public PanelRect PanelRect { get; set; } = new PanelRect();
 }
 
 [Submenu(CollapsedByDefault = true)]
@@ -990,8 +1087,7 @@ public class MapSettings
             ImGui.EndTable();
 
             SettingsHelpers.DrawResetWeightsButton("maps", ref mapResetConfirm, () => {
-                foreach (var (_, m) in Maps)
-                    m.Weight = 0;
+                Main?.ResetMapWeightsToDefaults();
             });
             ImGui.SameLine();
             SettingsHelpers.DrawResetToDefaultsButton("maps", ref defaultWeightsConfirm);
@@ -1117,8 +1213,7 @@ public class BiomeSettings
                 ImGui.EndTable();
 
                 SettingsHelpers.DrawResetWeightsButton("biomes", ref biomeResetConfirm, () => {
-                    foreach (var (_, b) in Biomes)
-                        b.Weight = 0;
+                    Main?.ResetBiomeWeightsToDefaults();
                 });
             }
         };
@@ -1283,8 +1378,7 @@ public class ContentSettings
                 ImGui.EndTable();
 
                 SettingsHelpers.DrawResetWeightsButton("content", ref contentResetConfirm, () => {
-                    foreach (var (_, c) in ContentTypes)
-                        c.Weight = 0f;
+                    Main?.ResetContentWeightsToDefaults();
                 });
                 ImGui.SameLine();
                 SettingsHelpers.DrawResetToDefaultsButton("content", ref defaultWeightsConfirm);
@@ -1332,6 +1426,7 @@ public class WaypointSettings
     public bool ShowUnlockedOnly { get; set; } = false;
     
     public string WaypointPanelFilter { get; set; } = "";
+    public PanelRect PanelRect { get; set; } = new PanelRect();
     public ObservableDictionary<string, Waypoint> Waypoints { get; set; } = [];
     public WaypointSettings() {    
         CustomWaypointSettings = new CustomNode
