@@ -160,8 +160,8 @@ public class ExileMapsSettings : ISettings
             }
         }
 
-        // Creates a blank profile (every live map/content/biome at neutral defaults) and switches to it,
-        // resetting the live working state. Current edits to the active profile are preserved first.
+        // Creates a profile seeded with the plugin's default weights and colors, and switches to it.
+        // Current edits to the active profile are preserved first.
         public void NewProfile(string name)
         {
             if (Profiles.ContainsKey(name) || Main == null)
@@ -169,6 +169,8 @@ public class ExileMapsSettings : ISettings
 
             SaveCurrentProfile();
 
+            // Start from a blank profile: map colors/icons/flags reset to their constructor (plugin)
+            // defaults, clearing any carry-over from the previous profile's live state.
             var profile = new WeightProfile();
             foreach (var k in Main.Settings.Maps.Maps.Keys)
                 profile.Maps[k] = new MapProfileEntry();
@@ -180,6 +182,11 @@ public class ExileMapsSettings : ISettings
             Profiles[name] = profile;
             ActiveProfile = name;
             LoadProfile(name);
+
+            // Overlay the bundled default weights + per-mechanic content colors onto live state and
+            // snapshot them into the now-active new profile (a blank profile alone uses neutral
+            // weight=1.0 and white content colors, ignoring the plugin defaults).
+            Main.ResetWeightsToDefaults();
         }
 
         // Duplicates the active profile (capturing any unsaved live edits first) under a new name and

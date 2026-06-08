@@ -72,6 +72,13 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private DateTime lastRefresh = DateTime.Now;
     private bool weightsDirty = false;
     private DateTime lastWeightRecalc = DateTime.Now;
+    // Live profile-stored edits (weights/colors/highlight/icon/favorite) that haven't been snapshotted
+    // into the active profile yet. Without this, edits live only in the working state and are lost on
+    // reload — LoadProfile overlays the stale snapshot back over them (user had to switch profiles to save).
+    private bool profileDirty = false;
+    private DateTime lastProfileSave = DateTime.Now;
+    // Transient per-refresh stats raise PropertyChanged but aren't persisted — don't mark the profile dirty.
+    private static readonly HashSet<string> TransientStatProps = new() { "Count", "LockedCount", "FogCount" };
     private int TickCount { get; set; }
 
     // Bumped each refresh. Memoized step counts and atlas-panel list recompute when this changes.
@@ -215,6 +222,19 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             weightsDirty = false;
             lastWeightRecalc = DateTime.Now;
             RecalculateWeights();
+        }
+
+        // Snapshot live edits into the active profile so they persist (ExileCore serializes the profile,
+        // not the working state). Debounced, and gated on gameFilesScraped so we never overwrite a profile
+        // with an empty live state before the game files are read. Fixes "had to switch profiles to save".
+        if (profileDirty && gameFilesScraped && !refreshingCache && DateTime.Now.Subtract(lastProfileSave).TotalMilliseconds > 1000) {
+            profileDirty = false;
+            lastProfileSave = DateTime.Now;
+            try {
+                Settings.Profiles.SaveCurrentProfile();
+            } catch (Exception e) {
+                LogError("Error saving current profile: " + e.Message);
+            }
         }
 
         return;
@@ -380,16 +400,24 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private void SubscribeToEvents() {
         try {
-            Settings.Maps.Maps.CollectionChanged += (_, _) => { weightsDirty = true; };
-            Settings.Maps.Maps.PropertyChanged += (_, _) => { weightsDirty = true; };
-            Settings.Maps.Biomes.Biomes.PropertyChanged += (_, _) => { weightsDirty = true; };
-            Settings.Maps.Biomes.Biomes.CollectionChanged += (_, _) => { weightsDirty = true; };
-            Settings.Maps.Content.ContentTypes.CollectionChanged += (_, _) => { weightsDirty = true; };
-            Settings.Maps.Content.ContentTypes.PropertyChanged += (_, _) => { weightsDirty = true; };
+            Settings.Maps.Maps.CollectionChanged += (_, _) => { weightsDirty = true; profileDirty = true; };
+            Settings.Maps.Maps.PropertyChanged += (_, e) => OnSettingPropertyChanged(e?.PropertyName);
+            Settings.Maps.Biomes.Biomes.PropertyChanged += (_, e) => OnSettingPropertyChanged(e?.PropertyName);
+            Settings.Maps.Biomes.Biomes.CollectionChanged += (_, _) => { weightsDirty = true; profileDirty = true; };
+            Settings.Maps.Content.ContentTypes.CollectionChanged += (_, _) => { weightsDirty = true; profileDirty = true; };
+            Settings.Maps.Content.ContentTypes.PropertyChanged += (_, e) => OnSettingPropertyChanged(e?.PropertyName);
             Settings.Maps.Maps.CollectionChanged += (_, _) => { refreshCache = true; };
         } catch (Exception e) {
             LogError("Error subscribing to events: " + e.Message);
         }
+    }
+
+    // A live Map/Content/Biome property changed. Always re-flags the weight recalc; flags the profile
+    // for snapshotting too, unless it's a transient per-refresh stat (Count/LockedCount/FogCount).
+    private void OnSettingPropertyChanged(string propertyName) {
+        weightsDirty = true;
+        if (propertyName == null || !TransientStatProps.Contains(propertyName))
+            profileDirty = true;
     }
 
     private void RegisterHotkeys() {

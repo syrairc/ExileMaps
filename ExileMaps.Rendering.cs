@@ -30,6 +30,11 @@ public partial class ExileMapsCore
     private void DrawNodeRings(Node cachedNode, RectangleF nodeCurrentPosition)
     {
         try {
+            // Special maps (wider node art) get an icon above the node, not a covering fill —
+            // don't ring them either, the rings would overlap the map art.
+            if (Settings.Graphics.ShowSpecialMapIndicator && nodeCurrentPosition.Width > Settings.Graphics.SpecialMapWidthThreshold)
+                return;
+
             var ringCount = 0;
             foreach (var contentName in cachedNode.Content.Keys)
                 ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, contentName);

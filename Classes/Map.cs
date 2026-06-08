@@ -15,7 +15,8 @@ namespace ExileMaps.Classes
         private bool colorNodesByWeight = true;
         private bool useWeightColorForName = true;
         private bool favorite = false;
-        
+        private SpriteIcon icon = SpriteIcon.Circle;
+
         [JsonIgnore]
         private int count = 0;
 
@@ -42,7 +43,19 @@ namespace ExileMaps.Classes
         public string ShortestId { get; set; }
 
         // Sprite drawn for this map's nodes (and special-map indicator). Serializes as int; default Circle.
-        public SpriteIcon Icon { get; set; } = SpriteIcon.Circle;
+        // Raises PropertyChanged so icon edits flag the profile dirty and get snapshotted/persisted.
+        public SpriteIcon Icon
+        {
+            get => icon;
+            set
+            {
+                if (icon != value)
+                {
+                    icon = value;
+                    OnPropertyChanged(nameof(Icon));
+                }
+            }
+        }
 
         public override string ToString()
         {
