@@ -770,6 +770,12 @@ public class TourSettings
     [Menu("Show Tours", "Master switch for drawing all enabled tour routes on the atlas.")]
     public ToggleNode ShowTours { get; set; } = new ToggleNode(true);
 
+    [Menu("Show Next-Stop Target", "Draw a pulsing Target icon above the next uncompleted stop in each visible tour.")]
+    public ToggleNode ShowNextStopTarget { get; set; } = new ToggleNode(true);
+
+    [Menu("Auto-clear Completed Stops", "When rebuilding a tour, automatically drop stops whose map you've already completed.")]
+    public ToggleNode AutoClearCompleted { get; set; } = new ToggleNode(true);
+
     // Id of the tour the Add-Tour-Stop hotkey targets. Empty = none active.
     public string ActiveTourId { get; set; } = "";
 
@@ -784,6 +790,9 @@ public class TourSettings
 
     [Menu("Auto Tour Off-screen Margin %", "How far beyond the visible screen (as a percent of screen size) a matching node may sit and still be included, so auto-tours don't sprawl across the whole atlas.")]
     public RangeNode<int> AutoTourScreenMarginPct { get; set; } = new RangeNode<int>(25, 0, 200);
+
+    [Menu("Auto Tour Only Atlas-point Content", "When auto-creating a tour, only include nodes whose content awards an atlas point (league content points), skipping plain content maps.")]
+    public ToggleNode AutoTourOnlyAtlasPoints { get; set; } = new ToggleNode(false);
 
     public PanelRect PanelRect { get; set; } = new PanelRect();
 }
@@ -1424,6 +1433,7 @@ public class WaypointSettings
     public bool ShowWaypointArrows { get; set; } = true;
     public bool InverWaypointArrowsColors { get; set; } = true;
     public bool AutoWaypointFavorites { get; set; } = false;
+    public bool AutoRemoveCompletedWaypoints { get; set; } = false;
 
     public int WaypointPanelMaxItems { get; set; } = 30;
     public int WaypointPanelMaxSteps { get; set; } = 50; // 0 = unlimited
@@ -1494,6 +1504,19 @@ public class WaypointSettings
 
                     ImGui.TableNextColumn();
                     ImGui.Text("Auto Create Waypoints for Favorite Maps");
+
+                    ImGui.TableNextRow();
+
+                    // auto-remove waypoints whose map is completed/visited
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+
+                    bool _autoRemoveCompleted = AutoRemoveCompletedWaypoints;
+                    if(ImGui.Checkbox($"##auto_remove_completed_waypoints", ref _autoRemoveCompleted))
+                        AutoRemoveCompletedWaypoints = _autoRemoveCompleted;
+
+                    ImGui.TableNextColumn();
+                    ImGui.Text("Auto Remove Completed Waypoints");
 
                     ImGui.TableNextRow();
 

@@ -64,6 +64,7 @@ public partial class ExileMapsCore
         RecalculateWeights();
 
         SyncFavoriteWaypoints();
+        RemoveCompletedWaypoints();
         UpdateWaypointPaths();
 
         // Invalidate memoized step counts and atlas-panel list.
@@ -242,15 +243,21 @@ public partial class ExileMapsCore
     private static readonly string[] AtlasPointContentTypes = { "Breach", "Abyss", "Incursion", "Delirium", "Ritual" };
 
     // Sets GivesAtlasPoint when the passive grants a point and node is not completed.
-    // Generic points have ids containing "Inside"; content points embed the content type
-    // (e.g. "AtlasLeagueBreachOuterNode14") -> AtlasPointType records it for tinting.
+    // Generic points have passive ids containing "Inside". Content (league) points are identified by
+    // the PassiveSkill.Id prefix: "AtlasLeague<ContentType>..." awards a content point, while the
+    // "AtlasNormal<ContentType>..." variant carries the same content but awards nothing.
     private void SetAtlasPassive(AtlasNodeDescription node, Node toNode) {
         try {
             var passiveId = node.Element?.AtlasEntry?.PassiveSkill?.Id;
             bool completed = node.Element?.IsCompleted ?? false;
             bool grantsInside = passiveId?.Contains("Inside", StringComparison.OrdinalIgnoreCase) ?? false;
-            string contentType = passiveId == null ? null
-                : AtlasPointContentTypes.FirstOrDefault(t => passiveId.Contains(t, StringComparison.OrdinalIgnoreCase));
+
+            // Only "AtlasLeague..." passives award a content point; match the embedded content type by
+            // name. "AtlasNormal..." passives contain the content type too but grant nothing.
+            bool isLeague = passiveId?.StartsWith("AtlasLeague", StringComparison.OrdinalIgnoreCase) ?? false;
+            string contentType = isLeague
+                ? AtlasPointContentTypes.FirstOrDefault(t => passiveId.Contains(t, StringComparison.OrdinalIgnoreCase))
+                : null;
             toNode.AtlasPointType = (grantsInside || contentType == null) ? null : contentType;
             toNode.GivesAtlasPoint = (grantsInside || contentType != null) && !completed;
             toNode.HasAtlasQuest = (passiveId?.Contains("AtlasQuest", StringComparison.OrdinalIgnoreCase) ?? false) && !completed;

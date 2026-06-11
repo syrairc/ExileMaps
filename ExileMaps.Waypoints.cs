@@ -630,6 +630,30 @@ public partial class ExileMapsCore
         }
     }
 
+    // Removes waypoints whose map has been completed/run. Gated on AutoRemoveCompletedWaypoints.
+    // Runs on the refresh thread (called from RefreshMapCache) so the cache read is stable; still
+    // snapshots under the lock to match SyncFavoriteWaypoints.
+    private void RemoveCompletedWaypoints() {
+        if (!Settings.Waypoints.AutoRemoveCompletedWaypoints)
+            return;
+
+        try {
+            HashSet<string> completed;
+            lock (mapCacheLock)
+                completed = mapCache.Values
+                    .Where(x => x.IsVisited || x.IsCompleted)
+                    .Select(x => x.Coordinates.ToString())
+                    .ToHashSet();
+
+            foreach (var key in Settings.Waypoints.Waypoints
+                .Where(x => completed.Contains(x.Value.Coordinates.ToString()))
+                .Select(x => x.Key).ToList())
+                Settings.Waypoints.Waypoints.Remove(key);
+        } catch (Exception e) {
+            LogError("Error removing completed waypoints: " + e.Message);
+        }
+    }
+
     private void RemoveWaypoint(Node cachedNode) {
         if (!Settings.Waypoints.Waypoints.ContainsKey(cachedNode.Coordinates.ToString()))
             return;

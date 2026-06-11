@@ -37,6 +37,41 @@ public partial class ExileMapsCore
     private Node quickEditNode;
     private bool quickEditOpen;
 
+    // Quick edit the map type of the area the player is currently in (atlas closed). The current
+    // area's WorldArea.Id shares the id space of atlas node ids, so we resolve it against the map
+    // dictionary. Unknown ids fail silently. Builds a MapNode-less Node; DrawQuickEditPanel falls
+    // back to screen center for positioning and skips the (empty) content section.
+    private void OpenQuickEditForCurrentArea()
+    {
+        try {
+            string areaId = GameController?.IngameState?.Data?.CurrentArea?.Id;
+            LogMessage($"QuickEdit(in-map): CurrentArea.Area.Id = '{areaId ?? "<null>"}'");
+            if (string.IsNullOrWhiteSpace(areaId)) { LogMessage("QuickEdit(in-map): area id null/empty, aborting."); return; }
+
+            Map map = ResolveMapForId(areaId.Trim());
+            if (map == null) {
+                LogMessage($"QuickEdit(in-map): '{areaId.Trim()}' not found in map dictionary ({Settings.Maps.Maps.Count} maps). Failing silently.");
+                return;
+            }
+
+            LogMessage($"QuickEdit(in-map): resolved map '{map.Name}', opening panel.");
+            quickEditNode = new Node { Name = map.Name, MapType = map };
+            quickEditOpen = true;
+        } catch (Exception e) {
+            LogError("OpenQuickEditForCurrentArea: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    // Map for a full area id, or null if unknown (no blank-Map fallback). Mirrors ResolveMapType's
+    // lookup order: direct short-id hit, then the id index.
+    private Map ResolveMapForId(string fullId)
+    {
+        string shortId = fullId.Replace("_NoBoss", "");
+        if (Settings.Maps.Maps.TryGetValue(shortId, out Map m)) return m;
+        EnsureMapIdIndex();
+        return mapIdIndex.TryGetValue(fullId, out Map byId) ? byId : null;
+    }
+
     private static void QuickColorEdit(string id, Color color, Action<Color> set) {
         Vector4 v = new(color.R / 255f, color.G / 255f, color.B / 255f, color.A / 255f);
         if (ImGui.ColorEdit4($"##{id}", ref v, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview | ImGuiColorEditFlags.NoInputs))

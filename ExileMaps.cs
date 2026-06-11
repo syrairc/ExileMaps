@@ -449,8 +449,12 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         hotkey.OnValueChanged += () => { Input.RegisterKey(hotkey.Value); };
     }
     private void CheckKeybinds() {
-        if (!AtlasPanel.IsVisible)
+        if (!AtlasPanel.IsVisible) {
+            // In a map (atlas closed): quick edit the current area's map type, if we know it.
+            if (Settings.Keybinds.QuickEditNodeHotkey.PressedOnce())
+                OpenQuickEditForCurrentArea();
             return;
+        }
 
         if (Settings.Keybinds.ToggleDrawingHotkey.PressedOnce())
             Settings.Features.EnableDrawing.Value = !Settings.Features.EnableDrawing.Value;

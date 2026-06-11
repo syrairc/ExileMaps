@@ -112,6 +112,15 @@ public partial class ExileMapsCore
         t.Skipped = new();
         try
         {
+            // Auto-drop stops the player has finished. Only prune when the stop resolves to a live
+            // node — an off-scan (unresolvable) stop is left in place rather than assumed done.
+            if (Settings.Tours.AutoClearCompleted)
+                t.Stops.RemoveAll(s =>
+                {
+                    var n = ResolveStop(s);
+                    return n != null && (n.IsVisited || n.IsCompleted);
+                });
+
             var nodes = new List<Node>();
             foreach (var s in t.Stops)
             {
@@ -217,13 +226,36 @@ public partial class ExileMapsCore
                 foreach (var seg in t.Segments)
                     DrawPath(seg, t.Color);
 
+                // First not-yet-completed stop in route order gets a Target marker.
+                Node nextStop = Settings.Tours.ShowNextStopTarget
+                    ? t.ResolvedStops.FirstOrDefault(n => n != null && !n.IsVisited && !n.IsCompleted)
+                    : null;
+
                 for (int i = 0; i < t.ResolvedStops.Count; i++)
                 {
                     var node = t.ResolvedStops[i];
                     if (node?.MapNode?.Element == null) continue;
-                    Vector2 center;
-                    try { center = node.MapNode.Element.GetClientRect().Center; }
+                    Vector2 center; float width, height;
+                    try { var rect = node.MapNode.Element.GetClientRect(); center = rect.Center; width = rect.Right - rect.Left; height = rect.Bottom - rect.Top; }
                     catch (Exception e) { DebugSwallow("DrawTours: stop rect", e); continue; }
+
+                    if (ReferenceEquals(node, nextStop) && customIconsLoaded)
+                    {
+                        // Larger base than a node icon so it reads as the "go here next" marker.
+                        float baseSize = width * 0.9f * Settings.Graphics.NodeRadius;
+                        // Pulse the size ~±18% on a ~1.1s cycle so it draws the eye.
+                        double secs = DateTime.Now.TimeOfDay.TotalSeconds;
+                        float pulse = 1f + 0.18f * (float)Math.Sin(secs * (Math.PI * 2.0 / 1.1));
+                        float size = baseSize * pulse;
+                        // Float the marker above the node, clear of the number/art. When the node has
+                        // content, the in-game atlas floats a circular content icon above it (sized to
+                        // the node) — bump the Target up by ~a node height so it clears that icon.
+                        float topY = center.Y - height / 2f - baseSize / 2f - 4f;
+                        if (node.Content.Count > 0)
+                            topY -= height;
+                        DrawNodeSprite(new Vector2(center.X, topY), size, size, SpriteIcon.Target, t.Color, allowFlatten: false);
+                    }
+
                     DrawCenteredTextWithBackground((i + 1).ToString(), center,
                         Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 8, 4);
                 }
@@ -350,11 +382,13 @@ public partial class ExileMapsCore
             var stepCounts = ComputeStepCounts();
             int Steps(Node node) => stepCounts.TryGetValue(node.Coordinates, out var s) ? s : int.MaxValue;
 
+            bool onlyAtlasPoints = Settings.Tours.AutoTourOnlyAtlasPoints;
             List<Node> candidates;
             lock (mapCacheLock)
             {
                 candidates = mapCache.Values
                     .Where(x => !x.IsVisited
+                                && (!onlyAtlasPoints || x.GivesAtlasPoint)
                                 && NodeMatchesContent(x, selected)
                                 && CenterInBounds(x, minX, minY, maxX, maxY))
                     .ToList();
@@ -448,6 +482,10 @@ public partial class ExileMapsCore
         int m = Settings.Tours.AutoTourScreenMarginPct;
         ImGui.SetNextItemWidth(160);
         if (ImGui.SliderInt("Off-screen margin %", ref m, 0, 200)) Settings.Tours.AutoTourScreenMarginPct.Value = m;
+
+        bool onlyPoints = Settings.Tours.AutoTourOnlyAtlasPoints;
+        if (ImGui.Checkbox("Only atlas-point content", ref onlyPoints)) Settings.Tours.AutoTourOnlyAtlasPoints.Value = onlyPoints;
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Only route through nodes whose content awards an atlas point.");
 
         if (ImGui.Button("Create Auto Tour")) AutoCreateTour();
         ImGui.SameLine();
