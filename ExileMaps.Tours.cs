@@ -14,6 +14,11 @@ public partial class ExileMapsCore
 {
     private bool toursPanelOpen = false;
 
+    // Interactive Build Tour mode: while active, clicking on/near an atlas node adds it to the active
+    // tour (right-click removes). Transient — not persisted. Toggled by the panel button / hotkey,
+    // cancelled by Escape or the atlas closing.
+    private bool buildModeActive = false;
+
     // ---- Persisted panel window rects ----
     // Track per-panel "was open last frame" so we only force-restore the saved rect on the open frame,
     // then let the user drag/resize freely (saving the current rect each frame).
@@ -264,6 +269,97 @@ public partial class ExileMapsCore
         }
     }
 
+    // ---- Build Mode ----
+
+    // Per-frame Build Mode handling. Finds the node under/near the cursor, rings it (green = will add,
+    // red = already a stop / will remove), and places an invisible ImGui button over it so the click
+    // is captured by the overlay (WantCaptureMouse) and never reaches the game. When the cursor isn't
+    // over a node we emit nothing, so empty-space click-drag still pans the atlas camera.
+    private void HandleBuildMode()
+    {
+        try
+        {
+            var cursor = ImGui.GetMousePos();
+
+            bool hasBest = false;
+            Vector2i bestCoord = default;
+            ExileCore2.Shared.RectangleF bestRect = default;
+            float bestDist = float.MaxValue;
+            foreach (var d in AtlasPanel.Descriptions)
+            {
+                ExileCore2.Shared.RectangleF r;
+                try { r = d.Element.GetClientRect(); } catch { continue; }
+                float dist = Vector2.Distance(cursor, r.Center);
+                if (dist < bestDist) { bestDist = dist; bestCoord = d.Coordinate; bestRect = r; hasBest = true; }
+            }
+            if (!hasBest) return;
+
+            // "On / very near" test: cursor inside the node rect inflated by a margin. Outside this,
+            // leave the click alone so it reaches the game (camera drag).
+            float margin = bestRect.Width * 0.35f;
+            bool near = cursor.X >= bestRect.Left - margin && cursor.X <= bestRect.Right + margin
+                     && cursor.Y >= bestRect.Top - margin && cursor.Y <= bestRect.Bottom + margin;
+            if (!near) return;
+
+            Node node;
+            lock (mapCacheLock)
+                mapCache.TryGetValue(bestCoord, out node);
+            if (node == null) return;
+
+            var active = GetActiveTour();
+            bool isStop = active != null &&
+                active.Stops.FindIndex(s => s.X == node.Coordinates.X && s.Y == node.Coordinates.Y) >= 0;
+            Color ringColor = isStop ? Color.FromArgb(255, 235, 80, 80) : Color.FromArgb(255, 80, 230, 120);
+            Graphics.DrawCircle(bestRect.Center, bestRect.Width * 0.6f, ringColor, 3f, 32);
+
+            // Invisible button over the (inflated) node rect captures left/right clicks. Borderless,
+            // no-background window mirrors DrawPanelButtonBar.
+            var flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove
+                      | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoBackground
+                      | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing;
+
+            Vector2 winPos = new(bestRect.Left - margin, bestRect.Top - margin);
+            Vector2 winSize = new(bestRect.Width + margin * 2f, bestRect.Height + margin * 2f);
+            ImGui.SetNextWindowPos(winPos, ImGuiCond.Always);
+            ImGui.SetNextWindowSize(winSize, ImGuiCond.Always);
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(0, 0));
+            if (ImGui.Begin("##buildmodecapture", flags))
+            {
+                ImGui.InvisibleButton("##buildmodenode", winSize);
+                if (ImGui.IsItemHovered()) ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+                if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) AddStopToActiveTourIfAbsent(node);
+                if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) RemoveStopFromActiveTour(node);
+            }
+            ImGui.End();
+            ImGui.PopStyleVar();
+        }
+        catch (Exception e) { DebugSwallow("HandleBuildMode", e); }
+    }
+
+    // Top-center banner shown while Build Mode is active.
+    private void DrawBuildModeIndicator()
+    {
+        try
+        {
+            var active = GetActiveTour();
+            string tourName = active?.Name ?? "(new tour)";
+            string exitKey = Settings.Keybinds.BuildModeExitHotkey.Value.ToString();
+            string text = $"BUILD MODE  -  {tourName}    L-click add  |  R-click remove  |  {exitKey} exit";
+            Color accent = active != null ? active.Color : Color.FromArgb(255, 80, 230, 120);
+
+            var size = ImGui.CalcTextSize(text);
+            const float padX = 12f, padY = 6f;
+            Vector2 boxSize = new(size.X + padX * 2f, size.Y + padY * 2f);
+            var r = cachedScreenRect;
+            Vector2 pos = new(r.Center.X - boxSize.X / 2f, r.Top + 48f);
+
+            Graphics.DrawBox(pos, pos + boxSize, Color.FromArgb(210, 0, 0, 0), 5f);
+            Graphics.DrawBox(pos, new Vector2(pos.X + 4f, pos.Y + boxSize.Y), accent, 0f);
+            Graphics.DrawText(text, pos + new Vector2(padX, padY), Color.White);
+        }
+        catch (Exception e) { DebugSwallow("DrawBuildModeIndicator", e); }
+    }
+
     // ---- Mutation helpers ----
 
     private Tour GetActiveTour()
@@ -304,6 +400,31 @@ public partial class ExileMapsCore
         int idx = t.Stops.FindIndex(s => s.X == x && s.Y == y);
         if (idx >= 0) t.Stops.RemoveAt(idx);
         else t.Stops.Add(new TourStop { X = x, Y = y });
+        t.BuiltVersion = -1;
+    }
+
+    // Build Mode left-click: add the node to the active tour if it isn't already a stop. Auto-creates
+    // a tour if none is active so the first click just works.
+    private void AddStopToActiveTourIfAbsent(Node node)
+    {
+        if (node == null) return;
+        var t = GetActiveTour() ?? AddTour();
+        int x = node.Coordinates.X, y = node.Coordinates.Y;
+        if (t.Stops.FindIndex(s => s.X == x && s.Y == y) >= 0) return;
+        t.Stops.Add(new TourStop { X = x, Y = y });
+        t.BuiltVersion = -1;
+    }
+
+    // Build Mode right-click: remove the node from the active tour if present.
+    private void RemoveStopFromActiveTour(Node node)
+    {
+        if (node == null) return;
+        var t = GetActiveTour();
+        if (t == null) return;
+        int x = node.Coordinates.X, y = node.Coordinates.Y;
+        int idx = t.Stops.FindIndex(s => s.X == x && s.Y == y);
+        if (idx < 0) return;
+        t.Stops.RemoveAt(idx);
         t.BuiltVersion = -1;
     }
 
@@ -474,6 +595,20 @@ public partial class ExileMapsCore
             }
         }
 
+        // Selected content that is no longer reachable (e.g. removed quest content like Great Beast)
+        // won't appear in ContentCounts above, leaving it stuck selected. Render it here so it can
+        // still be unchecked.
+        var orphaned = sel.Where(k => !stats.ContentCounts.ContainsKey(k)).ToList();
+        foreach (var key in orphaned)
+        {
+            bool on = true;
+            if (ImGui.Checkbox($"{key} (unavailable)##autosel_{key}", ref on))
+            {
+                if (!on) sel.Remove(key);
+            }
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("No longer reachable on the atlas. Uncheck to remove.");
+        }
+
         ImGui.Spacing();
         int n = Settings.Tours.AutoTourStepRange;
         ImGui.SetNextItemWidth(160);
@@ -510,6 +645,11 @@ public partial class ExileMapsCore
                 if (ImGui.Checkbox("Show Tours", ref showAll)) Settings.Tours.ShowTours.Value = showAll;
                 ImGui.SameLine();
                 if (ImGui.Button("Add Tour")) AddTour();
+                ImGui.SameLine();
+                if (buildModeActive) ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.16f, 0.55f, 0.30f, 1f));
+                if (ImGui.Button(buildModeActive ? $"Building... ({Settings.Keybinds.BuildModeExitHotkey.Value})" : "Build Mode")) buildModeActive = !buildModeActive;
+                if (buildModeActive) ImGui.PopStyleColor();
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Left-click atlas nodes to add stops to the active tour; right-click removes. Press the Build Mode exit key (default Tab) to exit.");
                 ImGui.Separator();
 
                 DrawAutoTourSection();
@@ -545,9 +685,7 @@ public partial class ExileMapsCore
                     ImGui.TextDisabled($"{t.Stops.Count} stops");
 
                     if (ImGui.Button("Optimize")) OptimizeTour(t);
-                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("Reorder stops by shortest route from your explored frontier.");
-                    ImGui.SameLine();
-                    if (ImGui.Button("Build")) { t.BuiltVersion = -1; BuildTour(t); }
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("Reorder stops by shortest route from your explored frontier, then rebuild.");
                     ImGui.SameLine();
                     if (ImGui.Button("Delete")) toDelete = t;
 

@@ -472,6 +472,12 @@ public class HotkeySettings
     [Menu("Add Tour Stop Hotkey", "Hover a node on the Atlas and press to add/remove it from the active tour. Unbound by default - set a key.")]
     public HotkeyNodeV2 AddTourStopHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
+    [Menu("Build Tour Mode Hotkey", "Toggle interactive Build Mode: left-click atlas nodes to add them to the active tour, right-click to remove. Unbound by default - set a key.")]
+    public HotkeyNodeV2 BuildModeHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
+
+    [Menu("Build Tour Mode Exit Key", "Key that exits Build Mode. Default: Tab (avoid Escape - it also closes the Atlas).")]
+    public HotkeyNodeV2 BuildModeExitHotkey { get; set; } = new HotkeyNodeV2(Keys.Tab);
+
     [JsonIgnore]
     public CustomNode SepWaypoints { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Waypoints") };
 

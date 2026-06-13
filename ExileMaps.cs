@@ -264,6 +264,13 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         DrawPanelButtonBar();
         DrawAtlasSearchBox();
 
+        // Build Tour mode: capture node clicks + show the indicator. Runs even if overlay drawing is
+        // off so the mode stays usable; only emits ImGui geometry over the hovered node.
+        if (buildModeActive) {
+            HandleBuildMode();
+            DrawBuildModeIndicator();
+        }
+
         // Master draw toggle (Scroll Lock by default). Keybinds still processed above so it can be re-enabled.
         if (!Settings.Features.EnableDrawing) return;
 
@@ -441,6 +448,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         RegisterHotkey(Settings.Keybinds.ToggleAtlasOverviewHotkey);
         RegisterHotkey(Settings.Keybinds.ToggleToursPanelHotkey);
         RegisterHotkey(Settings.Keybinds.AddTourStopHotkey);
+        RegisterHotkey(Settings.Keybinds.BuildModeHotkey);
+        RegisterHotkey(Settings.Keybinds.BuildModeExitHotkey);
     }
     
     private static void RegisterHotkey(HotkeyNodeV2 hotkey)
@@ -450,6 +459,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
     private void CheckKeybinds() {
         if (!AtlasPanel.IsVisible) {
+            // Build Mode is an atlas-only interaction; drop out of it when the atlas closes.
+            buildModeActive = false;
             // In a map (atlas closed): quick edit the current area's map type, if we know it.
             if (Settings.Keybinds.QuickEditNodeHotkey.PressedOnce())
                 OpenQuickEditForCurrentArea();
@@ -492,6 +503,12 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         if (Settings.Keybinds.AddTourStopHotkey.PressedOnce())
             AddStopToActiveTour(GetClosestNodeToCursor());
+
+        if (Settings.Keybinds.BuildModeHotkey.PressedOnce())
+            buildModeActive = !buildModeActive;
+
+        if (buildModeActive && Settings.Keybinds.BuildModeExitHotkey.PressedOnce())
+            buildModeActive = false;
 
         if (Settings.Keybinds.AddWaypointHotkey.PressedOnce())
             AddWaypoint(GetClosestNodeToCursor());
