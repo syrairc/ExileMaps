@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using ExileCore2.PoEMemory.Elements.AtlasElements;
 using System.Text;
@@ -56,11 +57,82 @@ public class Node
     [JsonIgnore]
     public bool HasAtlasQuest { get; set; }
 
+    // Raw, zoom-independent node art width (Element.Width, captured in the map cache). Ordinary maps
+    // render at one of NormalArtWidths; special landmark/boss/tower maps are a different size. Used by
+    // IsSpecial. (The screen rect width scales with atlas zoom and is NOT reliable for this — that was
+    // the old detection bug.)
+    [JsonIgnore]
+    public float ArtWidth { get; set; }
+
+    // Ordinary map nodes use one of these raw art widths (40 = most maps, 65 = Bluff/Alpine Ridge/Mesa
+    // and other larger-tile maps). Anything else is a wide landmark. Width is non-monotonic with
+    // "special": some specials are 60 wide (smaller than 65-wide normal maps), so a single threshold
+    // can't separate them — we exclude the known normal sizes instead.
+    private static readonly float[] NormalArtWidths = { 40f, 65f };
+
+    // Known special maps whose art is the SAME size as ordinary maps (40 wide: Sealed Vault + the three
+    // Gateways; 65 wide: the Precursor Tower "initial tower" variant), so the size test can't see them.
+    // These are the only specials that must be hard-coded — every special with distinctive (60 or 70+)
+    // art is detected by width, so new wide-art specials need no code change. Names collapse biome/quest
+    // variants (all "Precursor Tower"s share a name). Keep in sync with SpecialMapIds in
+    // ExileMaps.HtmlExport.cs.
+    private static readonly HashSet<string> SameSizeSpecialNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Sealed Vault",
+        "Western Gateway",
+        "Ancient Gateway",
+        "Eastern Gateway",
+        "Precursor Tower",
+    };
+
+    // User-added special map names (from Settings.Maps.SpecialMaps). Lets the user flag any map the
+    // size/name heuristics miss, without a code change. Reference-swapped (not mutated in place) so the
+    // render/cache threads never see a torn set. Synced via SetSpecialConfig. Case-insensitive.
+    private static HashSet<string> UserSpecialNames = new(StringComparer.OrdinalIgnoreCase);
+
+    // When set, non-visited special maps are forced to SpecialMaxWeight (so they always rank highest).
+    private static bool SpecialUseMaxWeight;
+    private static float SpecialMaxWeight = 50f;
+
+    // Replaces the user special-map config. Call on settings load and whenever the list/options change.
+    public static void SetSpecialConfig(IEnumerable<string> names, bool useMaxWeight, float maxWeight)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (names != null)
+            foreach (var n in names)
+                if (!string.IsNullOrWhiteSpace(n))
+                    set.Add(n.Trim());
+        UserSpecialNames = set;          // atomic reference swap
+        SpecialUseMaxWeight = useMaxWeight;
+        SpecialMaxWeight = maxWeight;
+    }
+
+    // Two-prong "special map" test: distinctive art width (auto-covers current and future wide-art
+    // specials) OR a known/user-added special that reuses a normal art size (caught by name).
+    [JsonIgnore]
+    public bool IsSpecial =>
+        (ArtWidth > 0f && !IsNormalArtWidth(ArtWidth))
+        || (!string.IsNullOrEmpty(Name)
+            && (SameSizeSpecialNames.Contains(Name) || UserSpecialNames.Contains(Name)));
+
+    private static bool IsNormalArtWidth(float w)
+    {
+        foreach (var n in NormalArtWidths)
+            if (Math.Abs(w - n) < 0.5f)
+                return true;
+        return false;
+    }
+
     public long Address { get; set; }
     public long ParentAddress { get; set; }
 
     [JsonIgnore]
     public AtlasNodeDescription MapNode { get; set; }
+
+    // True once immutable per-coordinate data (MapType, Content, atlas passive) has been resolved, so
+    // periodic refreshes skip the expensive re-read. A full cache rebuild creates a fresh node (false).
+    [JsonIgnore]
+    public bool StaticResolved { get; set; }
 
     public bool MatchID(string id) {
         return MapType.MatchID(id);
@@ -80,7 +152,13 @@ public class Node
             Weight = 500;
             return;
         }
-        
+
+        // Optionally pin special maps to a fixed max weight so they always rank highest.
+        if (SpecialUseMaxWeight && IsSpecial) {
+            Weight = SpecialMaxWeight;
+            return;
+        }
+
         // Weight = MapWeight + |MapWeight| * sum(contentWeights) / 100 + sum(biomeWeights).
         // Scaling by magnitude means positive content raises and negative content lowers regardless of sign.
         float contentSum = 0f;

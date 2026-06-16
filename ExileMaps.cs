@@ -1,4 +1,5 @@
-﻿using System;
+﻿// Core plugin: fields, Initialise, AreaChange, Tick, Render, keybinds, events.
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -51,14 +52,30 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private Vector2 screenCenter;
     private readonly List<Node> selectedNodes = [];
+    // On-screen special maps, recomputed with selectedNodes. Drawn independently of the Process* node
+    // filters so landmark specials (Ziggurat, Hilda's, etc.) show even when visited or locked.
+    private readonly List<Node> specialNodes = [];
     // Frames between on-screen node set recomputes. The cull is expensive; the draw still runs every frame.
     private const int OnScreenRecomputeInterval = 5;
     // Waypoint-panel list filter: 0 = All, 1 = Manual only, 2 = Auto-created only.
     private int waypointListFilter = 0;
     // Reused each frame to avoid per-render allocation.
     private readonly List<(Node node, RectangleF rect)> nodePositions = [];
+    // Content-icon rects drawn this frame + their content name, for hover tooltips. Cleared each frame
+    // before the content-icon pass; consulted by DrawContentIconTooltip after all nodes are drawn.
+    private readonly List<(RectangleF rect, string content)> contentIconRects = [];
+    // Top Y of the content-icon row we drew this frame, per node. Lets the atlas-point/quest indicators
+    // sit above our content icons. Cleared with contentIconRects.
+    private readonly Dictionary<Vector2i, float> contentRowTopByCoord = [];
+    // Per-frame memo of node screen rects. Element.GetClientRect() walks the parent chain (a
+    // process-memory read per ancestor) on every call, and the same node is needed by the line and
+    // path passes within one frame. Cleared + reseeded once per frame in Render; render-thread only.
+    private readonly Dictionary<Vector2i, RectangleF> frameRectCache = [];
     private RectangleF cachedScreenRect;
     private readonly List<RectangleF> cachedExcludeRects = [];
+    // True when a map node tooltip is up this frame. The tooltip's exclude rect drops the hovered
+    // node from selectedNodes, so its icon/name are redrawn separately on top (DrawHoveredNodeOverTooltip).
+    private bool mapTooltipVisible;
     private Dictionary<Vector2i, Node> mapCache = [];
     public bool refreshCache = false;
     private bool refreshingCache = false;
@@ -73,13 +90,20 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private bool weightsDirty = false;
     private DateTime lastWeightRecalc = DateTime.Now;
     // Live profile-stored edits (weights/colors/highlight/icon/favorite) that haven't been snapshotted
-    // into the active profile yet. Without this, edits live only in the working state and are lost on
-    // reload — LoadProfile overlays the stale snapshot back over them (user had to switch profiles to save).
+    // into the active profile yet. Without this, edits are lost on reload: LoadProfile restores the
+    // stale snapshot, discarding live changes (user had to switch profiles to force a save).
     private bool profileDirty = false;
     private DateTime lastProfileSave = DateTime.Now;
-    // Transient per-refresh stats raise PropertyChanged but aren't persisted — don't mark the profile dirty.
+    // Transient per-refresh stats raise PropertyChanged but aren't persisted. Don't mark the profile dirty.
     private static readonly HashSet<string> TransientStatProps = new() { "Count", "LockedCount", "FogCount" };
     private int TickCount { get; set; }
+
+    // High-resolution monotonic clock for animations. Frame-count (TickCount) drives animation by a
+    // fixed phase-step per frame, so irregular frame delivery (e.g. the heavier every-Nth-frame cull)
+    // makes motion stutter; DateTime.Now only has ~15ms resolution so it steps at high FPS. Wall-clock
+    // seconds advance animations by real elapsed time → smooth regardless of frame timing.
+    private readonly System.Diagnostics.Stopwatch animClock = System.Diagnostics.Stopwatch.StartNew();
+    private float AnimSeconds => (float)animClock.Elapsed.TotalSeconds;
 
     // Bumped each refresh. Memoized step counts and atlas-panel list recompute when this changes.
     private int mapCacheVersion = 0;
@@ -101,6 +125,11 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private bool customIconsLoaded = false;
     // Loaded path sprite textures keyed by style.
     private readonly Dictionary<PathTextureStyle, IntPtr> pathTextureIds = new();
+    // Per-content-type icon PNGs: icon-<contenttype>.png, keyed by file name.
+    private readonly HashSet<string> loadedContentIcons = new(StringComparer.OrdinalIgnoreCase);
+    // Largest screen-px-per-art-unit magnification seen (== full zoom). Self-calibrates the content
+    // icon zoom factor so settings tuned "at full zoom" scale down correctly as the atlas zooms out.
+    private float maxNodeZoomMagnification = 0f;
 
     private bool AtlasHasBeenClosed = true;
     private bool gameFilesScraped = false;
@@ -119,6 +148,11 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         // Map/Content/Biome dicts are populated by game-file scraping in Tick(), not here.
         Settings.Profiles.EnsureDefaultProfile();
+
+        // Mirror the persisted special-map config (names + max-weight) into the Node statics that
+        // detection/weighting read. Re-synced on edit via RequestSpecialMapsRefresh.
+        Classes.Node.SetSpecialConfig(Settings.Maps.SpecialMaps.Names(),
+            Settings.Maps.SpecialMaps.UseMaxWeight, Settings.Maps.SpecialMaps.MaxWeight);
 
         // Backs up v1 settings before ExileCore overwrites them on the next save.
         DetectOldSettings();
@@ -146,6 +180,20 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             customIconsLoaded = true;
         }
 
+        // Load per-content-type icon PNGs from textures/icon-*.png (icon-breach.png etc.).
+        var texturesDir = Path.Combine(DirectoryFullName, "textures");
+        foreach (var file in Directory.GetFiles(texturesDir, "icon-*.png")) {
+            var name = Path.GetFileName(file);
+            try {
+                Graphics.InitImage(name, file);
+                Graphics.GetTextureId(name);
+                loadedContentIcons.Add(name);
+            } catch (Exception e) {
+                LogError($"Failed to load content icon {name}: {e.Message}");
+            }
+        }
+        LogMessage($"ExileMaps: loaded {loadedContentIcons.Count} content icons.");
+
         // Textured atlas panel buttons (waypoints / tours / atlas), with per-state + tooltip images.
         LoadPanelButtonTextures();
 
@@ -156,6 +204,16 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     public override void AreaChange(AreaInstance area)
     {
         refreshCache = true;
+    }
+
+    // Called from the Special Maps settings editor when the name list or max-weight option changes:
+    // re-mirror the config into Node's statics and rebuild the cache so detection + weights re-apply.
+    public void RequestSpecialMapsRefresh()
+    {
+        Classes.Node.SetSpecialConfig(Settings.Maps.SpecialMaps.Names(),
+            Settings.Maps.SpecialMaps.UseMaxWeight, Settings.Maps.SpecialMaps.MaxWeight);
+        refreshCache = true;
+        clearCacheOnRefresh = true;
     }
 
     public override void Tick()
@@ -242,19 +300,21 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     public override void Render()
     {
-        ProcessPendingWeightFile();
+        bool perf = Settings.Features.ShowPerfMonitor;
+        long t0;
 
+        ProcessPendingWeightFile();
         CheckKeybinds();
 
+        t0 = Stopwatch.GetTimestamp();
         if (WaypointPanelIsOpen) DrawWaypointPanel(); else wpPanelWasOpen = false;
-
         if (quickEditOpen) DrawQuickEditPanel();
-
         if (debugNodeOpen) DrawNodeDebugPanel();
-
         if (atlasOverviewOpen) DrawAtlasOverviewPanel(); else overviewWasOpen = false;
-
         if (toursPanelOpen) DrawToursPanel(); else toursPanelWasOpen = false;
+        if (perf) PerfMonitor.Record("Panels", Stopwatch.GetTimestamp() - t0);
+
+        DrawPerfMonitorOverlay();
 
         TickCount++;
 
@@ -277,8 +337,13 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         // Cache panel/tooltip bounds once per frame so IsOnScreen avoids repeated game-memory reads.
         UpdateScreenBounds();
 
+        // Reset the per-frame node-rect memo. Seeded by the nodePositions build below; consumed by
+        // the line + waypoint-path passes. Cleared unconditionally so minimap mode reads fresh too.
+        frameRectCache.Clear();
+
         // Recompute on-screen set every N frames (expensive cull); redraw cached set every frame.
         if (TickCount % OnScreenRecomputeInterval == 0 || selectedNodes.Count == 0) {
+            t0 = Stopwatch.GetTimestamp();
             lock (mapCacheLock) {
                 selectedNodes.Clear();
                 selectedNodes.AddRange(mapCache.Values.AsParallel()
@@ -286,15 +351,32 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     .Where(x => (Settings.Features.ProcessHiddenNodes && !x.IsVisible) || x.IsVisible)
                     .Where(x => (Settings.Features.ProcessLockedNodes && !x.IsUnlocked) || x.IsUnlocked)
                     .Where(x => (Settings.Features.ProcessUnlockedNodes && x.IsUnlocked) || !x.IsUnlocked)
-                    .Where(x => IsOnScreen(x.MapNode.Element.GetClientRect().Center)));
+                    // EXPERIMENT (Change C): GetClientRectCache is the engine's last-computed rect
+                    // (a cheap struct read) instead of GetClientRect(), which re-walks the parent
+                    // chain for all ~1000 nodes every cull. VERIFY IN-GAME: pan/zoom the atlas and
+                    // confirm nodes stay aligned and Render.NodeCull drops. If overlays lag/freeze
+                    // while panning, or nodes stop appearing, the cache is stale/unpopulated.
+                    // Revert this one line to GetClientRect().Center.
+                    .Where(x => IsOnScreen(x.MapNode.Element.GetClientRectCache.Center)));
+
+                // Special maps draw their indicator regardless of visited/locked/highlight filters.
+                specialNodes.Clear();
+                specialNodes.AddRange(mapCache.Values.AsParallel()
+                    .Where(x => x.IsSpecial)
+                    .Where(x => IsOnScreen(x.MapNode.Element.GetClientRectCache.Center)));
             }
+            if (perf) PerfMonitor.Record("Render.NodeCull", Stopwatch.GetTimestamp() - t0);
         }
 
         if (!ShowMinimap) {
             // Resolve rects once, then draw in fixed z-layers: lines -> fills -> rings -> labels.
             nodePositions.Clear();
             foreach (var node in selectedNodes) {
-                try { nodePositions.Add((node, node.MapNode.Element.GetClientRect())); }
+                try {
+                    var rect = node.MapNode.Element.GetClientRect();
+                    frameRectCache[node.Coordinates] = rect;   // seed memo for line + path passes
+                    nodePositions.Add((node, rect));
+                }
                 catch (Exception e) { DebugSwallow("Render: node rect read", e); }
             }
 
@@ -303,50 +385,90 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     DrawDebugging(node);
             } else {
                 // 1. Lines
+                t0 = Stopwatch.GetTimestamp();
                 foreach (var (node, rect) in nodePositions)
                     DrawNodeLines(node, rect);
+                if (perf) PerfMonitor.Record("Render.Lines", Stopwatch.GetTimestamp() - t0);
+
                 // 2. Node fills
+                t0 = Stopwatch.GetTimestamp();
                 foreach (var (node, rect) in nodePositions) {
                     try { DrawMapNode(node, rect); }
                     catch (Exception e) { LogError("Error drawing node fill: " + e.Message); }
                 }
+                if (perf) PerfMonitor.Record("Render.Fills", Stopwatch.GetTimestamp() - t0);
+
                 // 3. Rings
+                t0 = Stopwatch.GetTimestamp();
                 foreach (var (node, rect) in nodePositions)
                     DrawNodeRings(node, rect);
-                // 3b. Favorite star markers (above rings, below labels)
+                if (perf) PerfMonitor.Record("Render.Rings", Stopwatch.GetTimestamp() - t0);
+
+                // 3b. Content icons (game-style per-type PNGs above each node)
+                t0 = Stopwatch.GetTimestamp();
+                contentIconRects.Clear();
+                contentRowTopByCoord.Clear();
+                foreach (var (node, rect) in nodePositions)
+                    DrawContentIcons(node, rect);
+                if (perf) PerfMonitor.Record("Render.ContentIcons", Stopwatch.GetTimestamp() - t0);
+
+                // 3c-3f. Indicators (favorites, special, atlas-point, atlas-quest)
+                t0 = Stopwatch.GetTimestamp();
                 foreach (var (node, rect) in nodePositions)
                     DrawFavoriteIndicator(node, rect);
-                // 3c. Special map markers (icon above the node instead of a covering fill)
-                foreach (var (node, rect) in nodePositions)
-                    DrawSpecialIndicator(node, rect);
-                // 3d. Atlas-point markers (small silver star just above the node)
+                // Special indicators use their own on-screen set so visited/locked specials still draw.
+                foreach (var node in specialNodes) {
+                    try { DrawSpecialIndicator(node, node.MapNode.Element.GetClientRect()); }
+                    catch (Exception e) { DebugSwallow("Render: special indicator", e); }
+                }
                 foreach (var (node, rect) in nodePositions)
                     DrawAtlasPointIndicator(node, rect);
-                // 3e. Atlas-quest markers (small golden exclamation above the node)
                 foreach (var (node, rect) in nodePositions)
                     DrawAtlasQuestIndicator(node, rect);
+                if (perf) PerfMonitor.Record("Render.Indicators", Stopwatch.GetTimestamp() - t0);
+
                 // 4. Labels
+                t0 = Stopwatch.GetTimestamp();
                 foreach (var (node, rect) in nodePositions)
                     DrawNodeLabels(node, rect);
+                // Special names from the dedicated set so visited/locked specials get labelled too.
+                foreach (var node in specialNodes) {
+                    try { DrawSpecialMapName(node, node.MapNode.Element.GetClientRect()); }
+                    catch (Exception e) { DebugSwallow("Render: special name", e); }
+                }
+                if (perf) PerfMonitor.Record("Render.Labels", Stopwatch.GetTimestamp() - t0);
+
+                // Keep the hovered node's icon + name on top of its tooltip (the tooltip rect
+                // otherwise culls it from the passes above).
+                DrawHoveredNodeOverTooltip();
+
+                // Content-icon hover tooltip (drawn last so it sits on top of everything).
+                DrawContentIconTooltip();
             }
         }
 
+        t0 = Stopwatch.GetTimestamp();
         try {
             foreach (var (k,waypoint) in Settings.Waypoints.Waypoints) {
-                DrawWaypoint(waypoint);
-                DrawWaypointArrow(waypoint);
+                // Resolve the atlas node once per waypoint, not separately in each draw method.
+                var mapNode = waypoint.MapNode();
+                DrawWaypoint(waypoint, mapNode);
+                DrawWaypointArrow(waypoint, mapNode);
             }
         }
         catch (Exception e) {
             LogError("Error drawing waypoints: " + e.Message + "\n" + e.StackTrace);
         }
+        if (perf) PerfMonitor.Record("Render.Waypoints", Stopwatch.GetTimestamp() - t0);
 
         DrawProgressReadout();
         DrawSearchPing();
+
+        t0 = Stopwatch.GetTimestamp();
         DrawTours();
+        if (perf) PerfMonitor.Record("Render.Tours", Stopwatch.GetTimestamp() - t0);
 
         DrawCacheProgressBar();
-
     }
 
     // Fill color for the cache reload bar.
@@ -413,7 +535,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             Settings.Maps.Biomes.Biomes.CollectionChanged += (_, _) => { weightsDirty = true; profileDirty = true; };
             Settings.Maps.Content.ContentTypes.CollectionChanged += (_, _) => { weightsDirty = true; profileDirty = true; };
             Settings.Maps.Content.ContentTypes.PropertyChanged += (_, e) => OnSettingPropertyChanged(e?.PropertyName);
-            Settings.Maps.Maps.CollectionChanged += (_, _) => { refreshCache = true; };
+            // Full rebuild on map-list add/remove so static data (map type) re-resolves for the change.
+            Settings.Maps.Maps.CollectionChanged += (_, _) => { refreshCache = true; clearCacheOnRefresh = true; };
         } catch (Exception e) {
             LogError("Error subscribing to events: " + e.Message);
         }
@@ -471,8 +594,10 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             Settings.Features.EnableDrawing.Value = !Settings.Features.EnableDrawing.Value;
 
         if (Settings.Keybinds.RefreshMapCacheHotkey.PressedOnce()) {
-            // Force past the throttle so the press refreshes immediately.
+            // Force past the throttle and do a full rebuild so static node data (map type, content,
+            // passives) is re-resolved. The manual refresh is the user's "re-read everything" escape.
             refreshCache = true;
+            clearCacheOnRefresh = true;
             lastRefresh = DateTime.MinValue;
         }
 

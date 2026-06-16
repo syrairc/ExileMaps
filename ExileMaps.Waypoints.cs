@@ -1,4 +1,5 @@
-﻿using System;
+﻿// Waypoint drawing, path rendering, add/remove waypoints, favorite sync.
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -49,9 +50,11 @@ public partial class ExileMapsCore
         bool textured = g.UseNodeIcons && pathTextureIds.TryGetValue(g.WaypointPathTexture, out pathTexId);
         float width = textured ? g.WaypointLineWidth * g.WaypointPathTextureScale : g.WaypointLineWidth;
 
-        // Phase derived from TickCount (mod period); subtracted so dashes march toward destination.
+        // Phase derived from wall-clock seconds (mod period); subtracted so dashes march toward
+        // destination. Real-time based so speed/smoothness stay constant under frame-time jitter.
+        // *60 keeps the old per-frame DashSpeed feel (was advanced once per ~60fps frame).
         float phase = (dashed && g.WaypointPathAnimated && g.WaypointDashSpeed > 0f)
-            ? (TickCount * g.WaypointDashSpeed.Value) % period
+            ? (AnimSeconds * g.WaypointDashSpeed.Value * 60f) % period
             : 0f;
 
         // Arc length along the whole polyline. Dash pattern positions against global arc so it
@@ -67,14 +70,13 @@ public partial class ExileMapsCore
             if (currentNode?.MapNode?.Element == null || nextNode?.MapNode?.Element == null)
                 continue;
 
-            Vector2 start, end;
-            try {
-                start = currentNode.MapNode.Element.GetClientRect().Center;
-                end = nextNode.MapNode.Element.GetClientRect().Center;
-            } catch (Exception e) {
-                DebugSwallow("DrawPath: segment rect read", e);
+            // Reuse memoized rects (seeded by the node-position pass) instead of re-reading per segment.
+            var startRect = GetNodeRect(currentNode);
+            var endRect = GetNodeRect(nextNode);
+            if (startRect.Width <= 0 || endRect.Width <= 0)   // null element or failed read, skip segment
                 continue;
-            }
+            Vector2 start = startRect.Center;
+            Vector2 end = endRect.Center;
 
             float segArcStart = arc;
             arc += (end - start).Length();
@@ -150,12 +152,12 @@ public partial class ExileMapsCore
     }
 
     private void DrawWaypointPanel() {
-        // Default to the old left-side footprint on first open; restored from saved rect after, and
-        // the user can move/resize freely (saved each frame).
+        // Default footprint on first open: inset 30px from the screen's top-left, and 85% of the
+        // interface height. Restored from saved rect after; the user can move/resize freely.
         var settingsRect = UI.SettingsPanel.GetClientRect();
         bool justOpened = !wpPanelWasOpen; wpPanelWasOpen = true;
-        BeginPersistedWindow(Settings.Waypoints.PanelRect, justOpened, settingsRect.TopLeft,
-            new Vector2(settingsRect.Width, settingsRect.Height));
+        BeginPersistedWindow(Settings.Waypoints.PanelRect, justOpened, new Vector2(30, 30),
+            new Vector2(settingsRect.Width, settingsRect.Height * 0.85f));
         ImGui.SetNextWindowSizeConstraints(new Vector2(420, 300), new Vector2(float.MaxValue, float.MaxValue));
         ImGui.SetNextWindowBgAlpha(0.8f);
 
@@ -419,91 +421,95 @@ public partial class ExileMapsCore
             var atlasList = GetAtlasPanelList(Settings.Waypoints.WaypointPanelFilter, useRegex, sortBy, sortBy2, maxStepsFilter, maxItems);
 
             var flags = ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.Resizable | ImGuiTableFlags.Reorderable | ImGuiTableFlags.Hideable | ImGuiTableFlags.NoSavedSettings;
-            ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(2, 2)); // Adjust the padding values as needed
-            ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, new Vector2(2, 2)); // A
-            if (ImGui.BeginTable("atlas_list_table", 7, flags))//, new Vector2(-1, panelSize.Y/3)))
+            ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(2, 2));
+            ImGui.PushStyleVar(ImGuiStyleVar.CellPadding, new Vector2(2, 2));
+            try
             {
-                ImGui.TableSetupColumn("Map Name", ImGuiTableColumnFlags.WidthFixed, 200);
-                ImGui.TableSetupColumn("Content", ImGuiTableColumnFlags.WidthFixed, 110);
-                ImGui.TableSetupColumn("Steps", ImGuiTableColumnFlags.WidthFixed, 50);
-                ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 80);
-                ImGui.TableSetupColumn("Unlocked", ImGuiTableColumnFlags.WidthFixed, 28);
-                ImGui.TableSetupColumn("Way", ImGuiTableColumnFlags.WidthFixed, 32);
-                ImGui.TableHeadersRow();
+                if (ImGui.BeginTable("atlas_list_table", 7, flags))
+                {
+                    try
+                    {
+                        ImGui.TableSetupColumn("Map Name", ImGuiTableColumnFlags.WidthFixed, 200);
+                        ImGui.TableSetupColumn("Content", ImGuiTableColumnFlags.WidthFixed, 110);
+                        ImGui.TableSetupColumn("Steps", ImGuiTableColumnFlags.WidthFixed, 50);
+                        ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 80);
+                        ImGui.TableSetupColumn("Unlocked", ImGuiTableColumnFlags.WidthFixed, 28);
+                        ImGui.TableSetupColumn("Way", ImGuiTableColumnFlags.WidthFixed, 32);
+                        ImGui.TableHeadersRow();
 
-                Vector4 _colorVector;
-                Color _color;
+                        Vector4 _colorVector;
+                        Color _color;
 
-                if (atlasList != null) {
-                    foreach (var node in atlasList) {
-                        string id = node.Address.ToString();
-                        ImGui.PushID(id);                        
-                        ImGui.TableNextRow();
+                        if (atlasList != null) {
+                            foreach (var node in atlasList) {
+                                string id = node.Address.ToString();
+                                ImGui.PushID(id);
+                                ImGui.TableNextRow();
 
-                        // Name
-                        ImGui.TableNextColumn();
-                        ImGui.TextUnformatted(node.Name);
+                                // Name
+                                ImGui.TableNextColumn();
+                                ImGui.TextUnformatted(node.Name);
 
-                        ImGui.SetWindowFontScale(0.9f);
-                        ImGui.TableNextColumn();
-                        foreach(var (k,content) in node.Content) {
-                            _color = content.Color;
-                            _colorVector = new Vector4(_color.R / 255.0f, _color.G / 255.0f, _color.B / 255.0f, _color.A / 255.0f);
-                            ImGui.PushStyleColor(ImGuiCol.Text, _colorVector);
-                            ImGui.TextUnformatted(content.Name);
-                            ImGui.PopStyleColor();
-                        }
+                                ImGui.SetWindowFontScale(0.9f);
+                                ImGui.TableNextColumn();
+                                foreach(var (k,content) in node.Content) {
+                                    _color = content.Color;
+                                    _colorVector = new Vector4(_color.R / 255.0f, _color.G / 255.0f, _color.B / 255.0f, _color.A / 255.0f);
+                                    ImGui.PushStyleColor(ImGuiCol.Text, _colorVector);
+                                    ImGui.TextUnformatted(content.Name);
+                                    ImGui.PopStyleColor();
+                                }
 
-                        ImGui.SetWindowFontScale(1.0f);
-                        ImGui.TableNextColumn();
-                        int steps = GetSteps(node);
-                        if (steps >= 0 && steps != int.MaxValue)
-                        {
-                            Color stepsColor = steps <= 3 ? Color.Green : (steps <= 7 ? Color.Yellow : Color.Red);
-                            Vector4 stepsColorVector = new Vector4(stepsColor.R / 255.0f, stepsColor.G / 255.0f, stepsColor.B / 255.0f, stepsColor.A / 255.0f);
-                            ImGui.PushStyleColor(ImGuiCol.Text, stepsColorVector);
-                            ImGui.TextUnformatted(steps.ToString());
-                            ImGui.PopStyleColor();
-                        }
-                        else
-                        {
-                            ImGui.TextUnformatted("-");
-                        }
-                        ImGui.TableNextColumn();
-                        float weight = (node.Weight - minMapWeight) / (maxMapWeight - minMapWeight);        
-                        _color = ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor,Settings.Maps.GoodNodeColor, weight);
-                        _colorVector = new Vector4(_color.R / 255.0f, _color.G / 255.0f, _color.B / 255.0f, _color.A / 255.0f);
-                        ImGui.PushStyleColor(ImGuiCol.Text, _colorVector);
-                        ImGui.TextUnformatted(node.Weight.ToString("0.0"));
-                        ImGui.PopStyleColor();
+                                ImGui.SetWindowFontScale(1.0f);
+                                ImGui.TableNextColumn();
+                                int steps = GetSteps(node);
+                                if (steps >= 0 && steps != int.MaxValue)
+                                {
+                                    Color stepsColor = steps <= 3 ? Color.Green : (steps <= 7 ? Color.Yellow : Color.Red);
+                                    Vector4 stepsColorVector = new Vector4(stepsColor.R / 255.0f, stepsColor.G / 255.0f, stepsColor.B / 255.0f, stepsColor.A / 255.0f);
+                                    ImGui.PushStyleColor(ImGuiCol.Text, stepsColorVector);
+                                    ImGui.TextUnformatted(steps.ToString());
+                                    ImGui.PopStyleColor();
+                                }
+                                else
+                                {
+                                    ImGui.TextUnformatted("-");
+                                }
+                                ImGui.TableNextColumn();
+                                float weight = (node.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
+                                _color = ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor,Settings.Maps.GoodNodeColor, weight);
+                                _colorVector = new Vector4(_color.R / 255.0f, _color.G / 255.0f, _color.B / 255.0f, _color.A / 255.0f);
+                                ImGui.PushStyleColor(ImGuiCol.Text, _colorVector);
+                                ImGui.TextUnformatted(node.Weight.ToString("0.0"));
+                                ImGui.PopStyleColor();
 
-                        
+                                ImGui.TableNextColumn();
+                                ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (ImGui.GetContentRegionAvail().X - 30.0f) / 2.0f);
+                                bool _unlocked = node.IsUnlocked;
+                                ImGui.BeginDisabled();
+                                ImGui.Checkbox($"##{id}_enabled", ref _unlocked);
+                                ImGui.EndDisabled();
+                                ImGui.TableNextColumn();
+                                RectangleF icon = SpriteHelper.GetUV(MapIconsIndex.Waypoint);
 
-                        ImGui.TableNextColumn();
-                        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (ImGui.GetContentRegionAvail().X - 30.0f) / 2.0f);
-                        bool _unlocked = node.IsUnlocked;
-                        ImGui.BeginDisabled();                        
-                        ImGui.Checkbox($"##{id}_enabled", ref _unlocked);
-                        ImGui.EndDisabled();
-                        ImGui.TableNextColumn();
-                        RectangleF icon = SpriteHelper.GetUV(MapIconsIndex.Waypoint);
-                        
-                        if (!node.IsWaypoint){
-                            ImGui.PushStyleColor(ImGuiCol.Button, ImGui.GetColorU32(ImGuiCol.TableRowBg));
-                            if (ImGui.ImageButton($"$${id}_wp", iconsId, new Vector2(32,32), icon.TopLeft, icon.BottomRight)) {
-                                AddWaypoint(node);
-                            } else if (ImGui.IsItemHovered()) {
-                                ImGui.SetTooltip("Add Waypoint");
+                                if (!node.IsWaypoint){
+                                    ImGui.PushStyleColor(ImGuiCol.Button, ImGui.GetColorU32(ImGuiCol.TableRowBg));
+                                    if (ImGui.ImageButton($"$${id}_wp", iconsId, new Vector2(32,32), icon.TopLeft, icon.BottomRight)) {
+                                        AddWaypoint(node);
+                                    } else if (ImGui.IsItemHovered()) {
+                                        ImGui.SetTooltip("Add Waypoint");
+                                    }
+                                    ImGui.PopStyleColor();
+                                }
+
+                                ImGui.PopID();
                             }
-                            ImGui.PopStyleColor();
                         }
-
-                        ImGui.PopID();
                     }
+                    finally { ImGui.EndTable(); }
                 }
             }
-            ImGui.EndTable();
-            ImGui.PopStyleVar(2);
+            finally { ImGui.PopStyleVar(2); }
             #endregion
             
         }
@@ -511,8 +517,7 @@ public partial class ExileMapsCore
         ImGui.End();
     }
 
-    private void DrawWaypoint(Waypoint waypoint) {
-        var mapNode = waypoint.MapNode();
+    private void DrawWaypoint(Waypoint waypoint, AtlasNodeDescription mapNode) {
         if (!Settings.Waypoints.ShowWaypoints || mapNode == null || !waypoint.Show)
             return;
 
@@ -666,8 +671,7 @@ public partial class ExileMapsCore
         UpdateWaypointPaths();
     }
 
-    private void DrawWaypointArrow(Waypoint waypoint) {
-        var mapNode = waypoint.MapNode();
+    private void DrawWaypointArrow(Waypoint waypoint, AtlasNodeDescription mapNode) {
         if (!Settings.Waypoints.ShowWaypointArrows || mapNode == null)
             return;
 

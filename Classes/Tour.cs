@@ -14,7 +14,7 @@ namespace ExileMaps.Classes
         public Color Color { get; set; }                        // route + order-number color
         public List<TourStop> Stops { get; set; } = new();      // ordered, manual order
 
-        // Runtime only — rebuilt by BuildTour against the current map cache, never persisted.
+        // Runtime only; rebuilt by BuildTour against the current map cache, never persisted.
         [JsonIgnore] public List<List<Node>> Segments { get; set; } = new();
         [JsonIgnore] public List<Node> ResolvedStops { get; set; } = new();
         [JsonIgnore] public List<string> Skipped { get; set; } = new();

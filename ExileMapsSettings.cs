@@ -1,4 +1,5 @@
-﻿using System;
+﻿// All ISettings classes and ImGui UI widgets for the plugin.
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
@@ -33,6 +34,22 @@ public enum ReadoutCorner
     TopRight,
     BottomLeft,
     BottomRight,
+}
+
+// Source for a map-label color (name text or border) in the new bordered style.
+public enum LabelColorSource
+{
+    Static,
+    Weight,
+    MapColor,
+}
+
+// Which visual is used to indicate a node's content.
+public enum ContentIndicatorMode
+{
+    Rings,
+    Icons,
+    Both,
 }
 
 public class ExileMapsSettings : ISettings
@@ -113,7 +130,7 @@ public class ExileMapsSettings : ISettings
 
         // Overlays a stored profile's values onto the live Map/Content/Biome objects. The live
         // dictionaries hold the map *definitions* (name/id/icon scraped from the game) and are the
-        // working state that rendering reads — we must NOT clear them, only update matching entries.
+        // working state that rendering reads. We must NOT clear them, only update matching entries.
         public void LoadProfile(string name)
         {
             if (!Profiles.TryGetValue(name, out var profile))
@@ -428,6 +445,9 @@ public class FeatureSettings
     [Menu("Debug Mode")]
     public ToggleNode DebugMode { get; set; } = new ToggleNode(false);
 
+    [Menu("Show Performance Monitor", "Display a real-time overlay showing 60-frame average CPU time for each rendering and cache section.")]
+    public ToggleNode ShowPerfMonitor { get; set; } = new ToggleNode(false);
+
     [Menu("Show Panel Buttons", "Show a floating button bar at the bottom-center of the atlas to open the Waypoints, Atlas Overview and Tours panels.")]
     public ToggleNode ShowPanelButtons { get; set; } = new ToggleNode(true);
 
@@ -438,9 +458,8 @@ public class FeatureSettings
 [Submenu(CollapsedByDefault = true)]
 public class HotkeySettings
 {
-    // HotkeyNodeV2 renders as a uniform label + picker button (the deprecated HotkeyNode rendered as a
-    // single button sized to its label, producing the inconsistent widths). [JsonIgnore] separator
-    // CustomNodes group related binds. Most default to F13 (effectively unbound) — the user sets them.
+    // HotkeyNodeV2 renders as a uniform label + picker button (unlike old HotkeyNode which sized to its
+    // label, producing inconsistent widths). [JsonIgnore] CustomNodes group related binds. Most default to F13.
 
     [JsonIgnore]
     public CustomNode SepGeneral { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("General") };
@@ -452,7 +471,7 @@ public class HotkeySettings
     public HotkeyNodeV2 RefreshMapCacheHotkey { get; set; } = new HotkeyNodeV2(Keys.Home);
 
     [Menu("Quick Edit Node Hotkey", "Hover a node on the Atlas and press to open a popup that edits that map type and its content without opening settings. Unbound by default - set a key.")]
-    public HotkeyNodeV2 QuickEditNodeHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
+    public HotkeyNodeV2 QuickEditNodeHotkey { get; set; } = new HotkeyNodeV2(Keys.Multiply);
 
     [JsonIgnore]
     public CustomNode SepPanels { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Panels") };
@@ -470,7 +489,7 @@ public class HotkeySettings
     public HotkeyNodeV2 ToggleToursPanelHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
 
     [Menu("Add Tour Stop Hotkey", "Hover a node on the Atlas and press to add/remove it from the active tour. Unbound by default - set a key.")]
-    public HotkeyNodeV2 AddTourStopHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
+    public HotkeyNodeV2 AddTourStopHotkey { get; set; } = new HotkeyNodeV2(Keys.NumPad7);
 
     [Menu("Build Tour Mode Hotkey", "Toggle interactive Build Mode: left-click atlas nodes to add them to the active tour, right-click to remove. Unbound by default - set a key.")]
     public HotkeyNodeV2 BuildModeHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
@@ -509,19 +528,19 @@ public class HotkeySettings
     public CustomNode SepDataUpdates { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Game Data Updates") };
 
     [Menu("Update Map Type Data", "Re-scrape map types from game files. Unbound by default - set a key.")]
-    public HotkeyNodeV2 UpdateMapsKey { get; set; } = new HotkeyNodeV2(Keys.F13);
+    public HotkeyNodeV2 UpdateMapsKey { get; set; } = new HotkeyNodeV2(Keys.F9);
 
     [Menu("Update Content Type Data", "Re-scrape content types from game files. Unbound by default - set a key.")]
-    public HotkeyNodeV2 UpdateContentKey { get; set; } = new HotkeyNodeV2(Keys.F13);
+    public HotkeyNodeV2 UpdateContentKey { get; set; } = new HotkeyNodeV2(Keys.F10);
 
     [Menu("Update Biome Data", "Re-scrape biomes from game files. Unbound by default - set a key.")]
-    public HotkeyNodeV2 UpdateBiomesKey { get; set; } = new HotkeyNodeV2(Keys.F13);
+    public HotkeyNodeV2 UpdateBiomesKey { get; set; } = new HotkeyNodeV2(Keys.F11);
 
     [JsonIgnore]
     public CustomNode SepDebug { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Debug") };
 
     [Menu("Debug Node Hotkey", "Hover a node on the Atlas and press to open a popup showing that node's debug info and element flags. Unbound by default - set a key.")]
-    public HotkeyNodeV2 DebugNodeHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
+    public HotkeyNodeV2 DebugNodeHotkey { get; set; } = new HotkeyNodeV2(Keys.Divide);
 
     [Menu("Print Node Debug Data", "Unbound by default - set a key.")]
     public HotkeyNodeV2 DebugKey { get; set; } = new HotkeyNodeV2(Keys.F13);
@@ -540,13 +559,13 @@ public class GraphicSettings
     public CustomNode SepPerformance { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Performance") };
 
     [Menu("Map Cache Refresh Rate", "Throttle the map cache refresh rate. Default is 5 seconds.")]
-    public RangeNode<int> MapCacheRefreshRate { get; set; } = new RangeNode<int>(5, 1, 60);
+    public RangeNode<int> MapCacheRefreshRate { get; set; } = new RangeNode<int>(10, 1, 60);
 
     [JsonIgnore]
     public CustomNode SepNodes { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Nodes") };
 
     [Menu("Node Radius", "Radius of the circles used to highlight map nodes")]
-    public RangeNode<float> NodeRadius { get; set; } = new RangeNode<float>(1.5f, 0, 10);
+    public RangeNode<float> NodeRadius { get; set; } = new RangeNode<float>(1.856f, 0, 10);
 
     [Menu("Use Icons for Nodes", "Draw the per-map sprite icon for map nodes. Disable to use plain filled circles (the original look).")]
     public ToggleNode UseNodeIcons { get; set; } = new ToggleNode(true);
@@ -554,17 +573,67 @@ public class GraphicSettings
     [Menu("Lay Icons Flat", "Vertically squash node icons so round sprites read as flat discs lying on the tilted atlas plane. 0 = upright. Tune by eye.")]
     public RangeNode<float> IconFlatten { get; set; } = new RangeNode<float>(0.180f, 0f, 0.9f);
 
+    [JsonIgnore]
+    public CustomNode SepContentIcons { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Content Indicators") };
+
+    // How content is shown: rings, icon PNGs, or both. Persisted; edited via the combo below (no [Menu]
+    // so the raw enum isn't auto-rendered).
+    public ContentIndicatorMode ContentIndicators { get; set; } = ContentIndicatorMode.Icons;
+
+    [JsonIgnore]
+    public CustomNode ContentIndicatorPicker { get; set; } = new CustomNode
+    {
+        DrawDelegate = () =>
+        {
+            if (Main == null) return;
+            string[] labels = { "Rings", "Icons", "Both" };
+            int idx = (int)Main.Settings.Graphics.ContentIndicators;
+            if (idx < 0 || idx >= labels.Length) idx = 0;
+            ImGui.Text("Content Indicator");
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(160);
+            if (ImGui.Combo("##contentindicator", ref idx, labels, labels.Length))
+                Main.Settings.Graphics.ContentIndicators = (ContentIndicatorMode)idx;
+            ImGui.SameLine();
+            ImGui.TextDisabled("(Icons need icon-<content>.png)");
+        }
+    };
+
+    [Menu("Content Ring Width", "Width of the rings used to indicate map content (rings mode).")]
+    public RangeNode<float> RingWidth { get; set; } = new RangeNode<float>(3.258f, 0, 10);
+
+    [Menu("Content Radius", "Radius of the rings used to indicate map content (rings mode).")]
+    public RangeNode<float> RingRadius { get; set; } = new RangeNode<float>(1.042f, 0, 10);
+
     [Menu("Content Ring Icon Size", "Scale of the outline-circle icon used for content rings (icon mode only).")]
-    public RangeNode<float> ContentRingIconScale { get; set; } = new RangeNode<float>(1.0f, 0.3f, 3f);
+    public RangeNode<float> ContentRingIconScale { get; set; } = new RangeNode<float>(1.003f, 0.3f, 3f);
 
     [Menu("Content Ring Icon Spacing", "Extra gap between stacked content ring icons when a node has multiple content types (icon mode only).")]
     public RangeNode<float> ContentRingIconSpacing { get; set; } = new RangeNode<float>(1.5f, 0.5f, 4f);
 
-    [Menu("Content Ring Width", "Width of the rings used to indicate map content")]
-    public RangeNode<float> RingWidth { get; set; } = new RangeNode<float>(5.0f, 0, 10);
+    [Menu("Unknown Content Color", "Tint for the blank icon (icon-blank.png) drawn when a node has content with no matching icon-<content>.png. Icons mode only.")]
+    public ColorNode UnknownContentColor { get; set; } = new ColorNode(Color.FromArgb(255, 180, 180, 185));
 
-    [Menu("Content Radius", "Radius of the rings used to indicate map content")]
-    public RangeNode<float> RingRadius { get; set; } = new RangeNode<float>(1f, 0, 10);
+    [Menu("Skip Game-drawn Content", "On visible nodes the game draws its own icon for any content that has one, so skip our duplicate there. Fogged (non-visible) nodes show no in-game content, so our icons always draw on them. Turn off to always draw our icons.")]
+    public ToggleNode ContentIconsSkipGameDrawn { get; set; } = new ToggleNode(true);
+
+    [Menu("Stack Above In-game Icons", "Anchor the content icon row above the node's in-game icon cluster instead of the node center. Off = offset from node center.")]
+    public ToggleNode ContentIconsAboveGameIcons { get; set; } = new ToggleNode(true);
+
+    [Menu("Content Icon Size", "Width (and height before flatten) of each content icon in pixels, at full zoom. Scales down as you zoom out.")]
+    public RangeNode<float> ContentIconSize { get; set; } = new RangeNode<float>(49f, 4f, 120f);
+
+    [Menu("Content Icon Flatten", "Vertically squash content icons for atlas perspective. 0 = upright, 0.5 = half height.")]
+    public RangeNode<float> ContentIconFlatten { get; set; } = new RangeNode<float>(0f, 0f, 0.9f);
+
+    [Menu("Content Icon Offset Y", "Vertical pixel offset (at full zoom) from node center to the content icon row. Negative = upward. Scales with zoom.")]
+    public RangeNode<float> ContentIconOffsetY { get; set; } = new RangeNode<float>(-52f, -200f, 200f);
+
+    [Menu("Content Icon Spacing", "Horizontal gap in pixels between icons when a node has multiple content types.")]
+    public RangeNode<float> ContentIconSpacing { get; set; } = new RangeNode<float>(2f, 0f, 32f);
+
+    [Menu("Content Icon Tint", "Tint color applied to all content icons. White = full color.")]
+    public ColorNode ContentIconTint { get; set; } = new ColorNode(Color.White);
 
     [JsonIgnore]
     public CustomNode SepColors { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Colors") };
@@ -588,16 +657,16 @@ public class GraphicSettings
     public ToggleNode DrawGradientLines { get; set; } = new ToggleNode(true);
 
     [Menu("Visited Line Color", "Color of the map connection lines when an both nodes are visited.")]
-    public ColorNode VisitedLineColor { get; set; } = new ColorNode(Color.FromArgb(80, 255, 255, 255));
+    public ColorNode VisitedLineColor { get; set; } = new ColorNode(Color.FromArgb(196, 152, 152, 152));
 
     [Menu("Unlocked Line Color", "Color of the map connection lines when an adjacent node is unlocked.")]
-    public ColorNode UnlockedLineColor { get; set; } = new ColorNode(Color.FromArgb(170, 90, 255, 90));
+    public ColorNode UnlockedLineColor { get; set; } = new ColorNode(Color.FromArgb(170, 18, 228, 18));
 
     [Menu("Locked Line Color", "Color of the map connection lines when no adjacent nodes are unlocked.")]
-    public ColorNode LockedLineColor { get; set; } = new ColorNode(Color.FromArgb(170, 255, 90, 90));
+    public ColorNode LockedLineColor { get; set; } = new ColorNode(Color.FromArgb(51, 149, 20, 20));
 
     [Menu("Distance Marker Scale", "Interpolation factor for distance markers on lines")]
-    public RangeNode<float> LabelInterpolationScale { get; set; } = new RangeNode<float>(0.5f, 0, 1);
+    public RangeNode<float> LabelInterpolationScale { get; set; } = new RangeNode<float>(0.83f, 0, 1);
 
     [JsonIgnore]
     public CustomNode SepWaypoints { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Waypoints") };
@@ -606,7 +675,7 @@ public class GraphicSettings
     public ToggleNode ShowPaths { get; set; } = new ToggleNode(true);
 
     [Menu("Waypoint Line Width", "Width of the map waypoint path (px).")]
-    public RangeNode<float> WaypointLineWidth { get; set; } = new RangeNode<float>(9.0f, 0, 24);
+    public RangeNode<float> WaypointLineWidth { get; set; } = new RangeNode<float>(5.051f, 0, 24);
 
     // Persisted enum (no [Menu]; edited via WaypointPathTexturePicker below, like SpecialMapIcon).
     public PathTextureStyle WaypointPathTexture { get; set; } = PathTextureStyle.Comet;
@@ -640,19 +709,19 @@ public class GraphicSettings
     public RangeNode<float> WaypointDashGap { get; set; } = new RangeNode<float>(10.0f, 0, 60);
 
     [Menu("Waypoint Dash Speed", "How fast dashes scroll toward the waypoint (px per tick). 0 = static.")]
-    public RangeNode<float> WaypointDashSpeed { get; set; } = new RangeNode<float>(1.5f, 0, 8);
+    public RangeNode<float> WaypointDashSpeed { get; set; } = new RangeNode<float>(0.792f, 0, 8);
 
     [Menu("Waypoint Texture Scale", "Thickness multiplier applied to the path width when using a textured path. Plain-line mode ignores this.")]
     public RangeNode<float> WaypointPathTextureScale { get; set; } = new RangeNode<float>(2.0f, 0.5f, 6);
 
     [Menu("Waypoint Arrow Min Distance", "Only show the off-screen waypoint arrow when the waypoint is farther than this (px) from screen center. Lower = arrow shows for nearer waypoints.")]
-    public RangeNode<float> WaypointArrowMinDistance { get; set; } = new RangeNode<float>(1200.0f, 50, 1500);
+    public RangeNode<float> WaypointArrowMinDistance { get; set; } = new RangeNode<float>(641.454f, 50, 1500);
 
     [Menu("Favorite Marker Color", "Color of the star marker drawn above favorite map nodes")]
     public ColorNode FavoriteColor { get; set; } = new ColorNode(Color.FromArgb(255, 255, 215, 0));
 
     [Menu("Favorite Marker Scale", "Size of the star marker drawn above favorite map nodes")]
-    public RangeNode<float> FavoriteIconScale { get; set; } = new RangeNode<float>(1.0f, 0, 3);
+    public RangeNode<float> FavoriteIconScale { get; set; } = new RangeNode<float>(1.038f, 0, 3);
 
     [JsonIgnore]
     public CustomNode SepSpecialMaps { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Special Maps") };
@@ -664,12 +733,12 @@ public class GraphicSettings
     public ToggleNode ShowAtlasQuestIndicator { get; set; } = new ToggleNode(true);
 
     [Menu("Atlas Marker Size", "Pixel size of the atlas-point star and atlas-quest exclamation markers.")]
-    public RangeNode<float> AtlasIndicatorSize { get; set; } = new RangeNode<float>(20.0f, 8, 48);
+    public RangeNode<float> AtlasIndicatorSize { get; set; } = new RangeNode<float>(18.918f, 8, 48);
 
     // Per-atlas-point-type marker color. Key: "Generic" plus each content type. Persisted (Newtonsoft);
     // edited via AtlasPointStylePicker. Rendering falls back to a default if a key is missing.
     public Dictionary<string, ColorNode> AtlasPointColors { get; set; } = new() {
-        ["Generic"]   = new ColorNode(Color.FromArgb(255, 200, 200, 205)), // silver
+        ["Generic"]   = new ColorNode(Color.FromArgb(255, 248, 255, 151)), // pale yellow
         ["Breach"]    = new ColorNode(Color.FromArgb(255, 180, 70, 255)),  // purple
         ["Abyss"]     = new ColorNode(Color.FromArgb(255, 60, 200, 90)),   // green
         ["Incursion"] = new ColorNode(Color.FromArgb(255, 255, 150, 40)),  // orange
@@ -700,10 +769,7 @@ public class GraphicSettings
     public ColorNode SpecialMapColor { get; set; } = new ColorNode(Color.FromArgb(255, 200, 80, 255));
 
     [Menu("Special Map Marker Scale", "Size of the icon drawn above special map nodes")]
-    public RangeNode<float> SpecialMapIconScale { get; set; } = new RangeNode<float>(1.0f, 0, 3);
-
-    [Menu("Special Map Width Threshold", "Node art wider than this (px) counts as a 'special' map: skips the covering fill and gets an icon above instead. Raise if normal maps are wrongly flagged, lower if specials are missed (may vary with resolution/UI scale).")]
-    public RangeNode<float> SpecialMapWidthThreshold { get; set; } = new RangeNode<float>(90.0f, 40, 200);
+    public RangeNode<float> SpecialMapIconScale { get; set; } = new RangeNode<float>(1.501f, 0, 3);
 
     [Menu("Special Map Marker Offset", "Pixels above the node center to place the special-map icon.")]
     public RangeNode<float> SpecialMapIconOffset { get; set; } = new RangeNode<float>(40.0f, 0, 120);
@@ -732,17 +798,71 @@ public class GraphicSettings
     [Menu("Map Name Offset X", "Horizontal pixel offset of the map name/weight text relative to the node center.")]
     public RangeNode<int> MapNameOffsetX { get; set; } = new RangeNode<int>(0, -200, 200);
     [Menu("Map Name Offset Y", "Vertical pixel offset of the map name/weight text relative to the node center.")]
-    public RangeNode<int> MapNameOffsetY { get; set; } = new RangeNode<int>(25, -200, 200);
+    public RangeNode<int> MapNameOffsetY { get; set; } = new RangeNode<int>(30, -200, 200);
+
+    [Menu("Legacy Map Name Styling", "Use the old plain-background label for normal map names instead of the new bordered box.")]
+    public ToggleNode LegacyMapNameStyling { get; set; } = new ToggleNode(false);
+
+    // New-style label colors. Source: Static / Weight / MapColor. Edited via MapNameStylePicker; no
+    // [Menu] so the raw enums/colors aren't auto-rendered.
+    public LabelColorSource MapNameTextColorSource { get; set; } = LabelColorSource.Static;
+    public LabelColorSource MapNameBorderColorSource { get; set; } = LabelColorSource.Weight;
+    public Color MapNameTextStaticColor { get; set; } = Color.White;
+    public Color MapNameBorderStaticColor { get; set; } = Color.FromArgb(255, 120, 120, 130);
+
+    [JsonIgnore]
+    public CustomNode MapNameStylePicker { get; set; } = new CustomNode
+    {
+        DrawDelegate = () =>
+        {
+            if (Main == null) return;
+            var g = Main.Settings.Graphics;
+            if (g.LegacyMapNameStyling) {
+                ImGui.TextDisabled("New-style label colors (turn off Legacy Map Name Styling to use)");
+                return;
+            }
+
+            string[] sources = { "Static Color", "By Weight", "By Map Color" };
+
+            DrawLabelColorRow("Name Color", "##namecolorsrc", "##namestatic", sources,
+                () => (int)g.MapNameTextColorSource, v => g.MapNameTextColorSource = (LabelColorSource)v,
+                () => g.MapNameTextStaticColor, c => g.MapNameTextStaticColor = c);
+
+            DrawLabelColorRow("Border Color", "##bordercolorsrc", "##borderstatic", sources,
+                () => (int)g.MapNameBorderColorSource, v => g.MapNameBorderColorSource = (LabelColorSource)v,
+                () => g.MapNameBorderStaticColor, c => g.MapNameBorderStaticColor = c);
+        }
+    };
+
+    // One label-color row: a label, a source combo, and a static color picker shown only for Static.
+    private static void DrawLabelColorRow(string label, string comboId, string colorId, string[] sources,
+        Func<int> getSource, Action<int> setSource, Func<Color> getColor, Action<Color> setColor)
+    {
+        ImGui.Text(label);
+        ImGui.SameLine(140);
+        ImGui.SetNextItemWidth(140);
+        int idx = getSource();
+        if (idx < 0 || idx >= sources.Length) idx = 0;
+        if (ImGui.Combo(comboId, ref idx, sources, sources.Length))
+            setSource(idx);
+        if (getSource() == (int)LabelColorSource.Static) {
+            ImGui.SameLine();
+            var col = getColor();
+            Vector4 cv = new(col.R / 255f, col.G / 255f, col.B / 255f, col.A / 255f);
+            if (ImGui.ColorEdit4(colorId, ref cv, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaBar))
+                setColor(Color.FromArgb((int)(cv.W * 255), (int)(cv.X * 255), (int)(cv.Y * 255), (int)(cv.Z * 255)));
+        }
+    }
 }
 
 [Submenu(CollapsedByDefault = true)]
 public class AtlasOverviewSettings
 {
     [Menu("Reachable Step Window", "How many steps from your explored frontier count as 'reachable' for the content tally and atlas-point counter.")]
-    public RangeNode<int> ReachableSteps { get; set; } = new RangeNode<int>(10, 1, 50);
+    public RangeNode<int> ReachableSteps { get; set; } = new RangeNode<int>(5, 1, 50);
 
     [Menu("Show Progress Readout", "Draw an always-on counter (maps run/completed, atlas points reachable) in an atlas corner.")]
-    public ToggleNode ShowProgressReadout { get; set; } = new ToggleNode(true);
+    public ToggleNode ShowProgressReadout { get; set; } = new ToggleNode(false);
 
     // Edited via the combo below; no [Menu] so it isn't auto-rendered as a raw enum.
     public ReadoutCorner ReadoutCorner { get; set; } = ReadoutCorner.TopLeft;
@@ -792,22 +912,19 @@ public class TourSettings
     public List<string> AutoTourContent { get; set; } = new();
 
     [Menu("Auto Tour Max Steps", "When auto-creating a tour, the most steps allowed between consecutive matching stops before the route stops growing.")]
-    public RangeNode<int> AutoTourStepRange { get; set; } = new RangeNode<int>(3, 1, 10);
+    public RangeNode<int> AutoTourStepRange { get; set; } = new RangeNode<int>(5, 1, 10);
 
     [Menu("Auto Tour Off-screen Margin %", "How far beyond the visible screen (as a percent of screen size) a matching node may sit and still be included, so auto-tours don't sprawl across the whole atlas.")]
-    public RangeNode<int> AutoTourScreenMarginPct { get; set; } = new RangeNode<int>(25, 0, 200);
+    public RangeNode<int> AutoTourScreenMarginPct { get; set; } = new RangeNode<int>(36, 0, 200);
 
     [Menu("Auto Tour Only Atlas-point Content", "When auto-creating a tour, only include nodes whose content awards an atlas point (league content points), skipping plain content maps.")]
-    public ToggleNode AutoTourOnlyAtlasPoints { get; set; } = new ToggleNode(false);
+    public ToggleNode AutoTourOnlyAtlasPoints { get; set; } = new ToggleNode(true);
 
     public PanelRect PanelRect { get; set; } = new PanelRect();
 }
 
 [Submenu(CollapsedByDefault = true)]
-/// <summary>
-/// Settings for Map types
-/// </summary>
-/// MARK: MapSettings
+// MARK: MapSettings
 public class MapSettings
 {
 
@@ -926,7 +1043,7 @@ public class MapSettings
             ImGui.Separator();
             ImGui.TextWrapped("CTRL+Click on a slider to manually enter a value.");
 
-            // How weights work — quick reference for the user.
+            // How weights work: quick reference for the user.
             if (ImGui.CollapsingHeader("How do map weights work?"))
             {
                 ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(0.75f, 0.75f, 0.75f, 1.0f));
@@ -1164,7 +1281,7 @@ public class MapSettings
     public CustomNode MapTable { get; set; }
 
     public bool HighlightMapNodes { get; set; } = true;
-    public bool DrawWeightOnMap { get; set; } = false;
+    public bool DrawWeightOnMap { get; set; } = true;
     public bool ShowMapNames { get; set; } = true;
     public bool UseColorsForMapNames { get; set; } = true;
     public bool ShowMapNamesOnUnlockedNodes { get; set; } = true;
@@ -1175,15 +1292,138 @@ public class MapSettings
 
     public ObservableDictionary<string, Map> Maps { get; set; } = [];
 
-    // Nested under Maps — biome and content weights/colors are map-related, so they live as
-    // sub-sections of the Maps category rather than as separate top-level menus.
+    // Nested under Maps because biome and content weights/colors are map-related.
     public BiomeSettings Biomes { get; set; } = new BiomeSettings();
     public ContentSettings Content { get; set; } = new ContentSettings();
+
+    [Menu("Special Maps")]
+    public SpecialMapSettings SpecialMaps { get; set; } = new SpecialMapSettings();
 }
 
-/// <summary>
-/// Settings for Biomes
-/// </summary>
+// A user-defined special map: matched by exact in-game name, with its own marker style. Persisted
+// (Newtonsoft): System.Drawing.Color and the SpriteIcon enum both round-trip like other settings.
+public class SpecialMapEntry
+{
+    public string Name { get; set; } = "";
+    public Color Color { get; set; } = Color.FromArgb(255, 200, 80, 255);
+    public float Scale { get; set; } = 1.0f;
+    public SpriteIcon Icon { get; set; } = SpriteIcon.Exclamation;
+}
+
+/// MARK: SpecialMapSettings
+[Submenu(CollapsedByDefault = true)]
+public class SpecialMapSettings
+{
+    // User-defined special maps (in addition to auto-detected ones). Each carries its own marker style.
+    public List<SpecialMapEntry> Maps { get; set; } = new() {
+        new SpecialMapEntry { Name = "The Jade Isles" },
+    };
+
+    // When set, every special map (auto-detected or user-added) is weighted at MaxWeight so it always
+    // ranks highest. Applied in Node.RecalculateWeight via the mirrored static config.
+    public bool UseMaxWeight { get; set; } = true;
+    public float MaxWeight { get; set; } = 50f;
+
+    [JsonIgnore]
+    public string _input = "";
+
+    [JsonIgnore]
+    public CustomNode CustomSpecialMapSettings { get; set; }
+
+    public SpecialMapSettings()
+    {
+        CustomSpecialMapSettings = new CustomNode { DrawDelegate = DrawEditor };
+    }
+
+    // Case-insensitive lookup of a user entry by map name (null if not user-defined).
+    public SpecialMapEntry Find(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return null;
+        foreach (var m in Maps)
+            if (string.Equals(m.Name, name, StringComparison.OrdinalIgnoreCase))
+                return m;
+        return null;
+    }
+
+    public IEnumerable<string> Names() => Maps.Select(m => m.Name);
+
+    private void DrawEditor()
+    {
+        ImGui.Spacing();
+        ImGui.TextWrapped("Maps listed here are always treated as special (own marker icon, no covering fill), " +
+                          "in addition to the auto-detected ones. Use the exact in-game name, e.g. \"Lost Towers\".");
+        ImGui.Spacing();
+
+        // Structural changes (name list, weight option) need the cache resynced + recalculated.
+        // Per-map color/size/icon are read live by the renderer, so they need no refresh.
+        bool structuralChanged = false;
+
+        bool useMax = UseMaxWeight;
+        if (ImGui.Checkbox("Calculate special maps at max weight", ref useMax)) { UseMaxWeight = useMax; structuralChanged = true; }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("When checked, every special map is weighted at the value to the right so it always ranks highest.");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(90);
+        float maxW = MaxWeight;
+        if (ImGui.DragFloat("##specialmaxweight", ref maxW, 1f, 0f, 500f, "%.0f")) { MaxWeight = maxW; structuralChanged = true; }
+
+        ImGui.Separator();
+
+        ImGui.SetNextItemWidth(220);
+        bool submit = ImGui.InputTextWithHint("##specialadd", "Map name to add...", ref _input, 64, ImGuiInputTextFlags.EnterReturnsTrue);
+        ImGui.SameLine();
+        if ((ImGui.Button("Add##special") || submit) && !string.IsNullOrWhiteSpace(_input))
+        {
+            var name = _input.Trim();
+            if (Find(name) == null) { Maps.Add(new SpecialMapEntry { Name = name }); structuralChanged = true; }
+            _input = "";
+        }
+
+        if (Maps.Count > 0 && ImGui.BeginTable("special_maps_table", 5, ImGuiTableFlags.Borders | ImGuiTableFlags.PadOuterX))
+        {
+            ImGui.TableSetupColumn("Map", ImGuiTableColumnFlags.WidthStretch, 200);
+            ImGui.TableSetupColumn("Color", ImGuiTableColumnFlags.WidthFixed, 45);
+            ImGui.TableSetupColumn("Size", ImGuiTableColumnFlags.WidthFixed, 120);
+            ImGui.TableSetupColumn("Icon", ImGuiTableColumnFlags.WidthFixed, 40);
+            ImGui.TableSetupColumn("", ImGuiTableColumnFlags.WidthFixed, 30);
+            ImGui.TableHeadersRow();
+
+            int removeAt = -1;
+            for (int i = 0; i < Maps.Count; i++)
+            {
+                var e = Maps[i];
+                ImGui.TableNextRow();
+
+                ImGui.TableNextColumn();
+                ImGui.AlignTextToFramePadding();
+                ImGui.Text(e.Name);
+
+                ImGui.TableNextColumn();
+                Vector4 cv = new(e.Color.R / 255f, e.Color.G / 255f, e.Color.B / 255f, e.Color.A / 255f);
+                if (ImGui.ColorEdit4($"##col{i}", ref cv, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview | ImGuiColorEditFlags.NoInputs))
+                    e.Color = Color.FromArgb((int)(cv.W * 255), (int)(cv.X * 255), (int)(cv.Y * 255), (int)(cv.Z * 255));
+
+                ImGui.TableNextColumn();
+                ImGui.SetNextItemWidth(110);
+                float s = e.Scale;
+                if (ImGui.SliderFloat($"##size{i}", ref s, 0f, 3f, "%.2f")) e.Scale = s;
+
+                ImGui.TableNextColumn();
+                SettingsHelpers.IconPicker($"specialicon{i}", e.Icon, ic => e.Icon = ic);
+
+                ImGui.TableNextColumn();
+                if (ImGui.Button($"x##rm{i}")) removeAt = i;
+            }
+            ImGui.EndTable();
+
+            if (removeAt >= 0) { Maps.RemoveAt(removeAt); structuralChanged = true; }
+        }
+
+        if (structuralChanged)
+            Main?.RequestSpecialMapsRefresh();
+    }
+}
+
 /// MARK: BiomeSettings
 [Submenu(CollapsedByDefault = true)]
 public class BiomeSettings
@@ -1245,10 +1485,7 @@ public class BiomeSettings
     private bool biomeResetConfirm = false;
 }
 
-/// <summary>
-/// Settings for Map Content
-/// </summary>
-/// MARK: ContentSettings
+// MARK: ContentSettings
 [Submenu(CollapsedByDefault = true)]
 public class ContentSettings
 {
@@ -1425,10 +1662,7 @@ public class ContentSettings
     private float bulkContentWeight = 0f;
 }
 
-/// <summary>
-/// Settings for Waypoints
-/// </summary>
-/// MARK: WaypointSettings
+// MARK: WaypointSettings
 [Submenu(CollapsedByDefault = true)]
 public class WaypointSettings
 {
@@ -1439,11 +1673,11 @@ public class WaypointSettings
     public bool ShowWaypointArrows { get; set; } = true;
     public bool InverWaypointArrowsColors { get; set; } = true;
     public bool AutoWaypointFavorites { get; set; } = false;
-    public bool AutoRemoveCompletedWaypoints { get; set; } = false;
+    public bool AutoRemoveCompletedWaypoints { get; set; } = true;
 
-    public int WaypointPanelMaxItems { get; set; } = 30;
-    public int WaypointPanelMaxSteps { get; set; } = 50; // 0 = unlimited
-    public string WaypointPanelSortBy { get; set; } = "Weight";
+    public int WaypointPanelMaxItems { get; set; } = 154;
+    public int WaypointPanelMaxSteps { get; set; } = 0; // 0 = unlimited
+    public string WaypointPanelSortBy { get; set; } = "Name";
     public string WaypointPanelSortBy2 { get; set; } = "Steps";
     public bool WaypointsUseRegex { get; set; } = false;
     public bool ShowUnlockedOnly { get; set; } = false;
@@ -1534,10 +1768,7 @@ public class WaypointSettings
 }
 
 public static class SettingsHelpers {
-    /// <summary>
-    /// "Toggle all" checkbox for a table column. Reflects whether every item is currently on, and
-    /// clicking it sets the bound bool on every item to the new value.
-    /// </summary>
+    // "Toggle all" checkbox: reflects whether every item is on; clicking sets all to new value.
     public static void ToggleAll<T>(string id, System.Collections.Generic.IEnumerable<T> items, Func<T,bool> get, Action<T,bool> set) {
         var list = items as System.Collections.Generic.ICollection<T> ?? items.ToList();
         bool all = list.Count > 0 && list.All(get);
@@ -1545,10 +1776,7 @@ public static class SettingsHelpers {
             foreach (var i in list) set(i, all);
     }
 
-    /// <summary>
-    /// "Set all" color picker for a table column. Editing it applies the chosen color to every item.
-    /// The swatch value is caller-owned so it persists between frames.
-    /// </summary>
+    // "Set all" color picker: editing applies the chosen color to every item. Swatch is caller-owned.
     public static void SetAllColor<T>(string id, ref Vector4 value, System.Collections.Generic.IEnumerable<T> items, Action<T,Color> set) {
         if (ImGui.ColorEdit4($"##setall_{id}", ref value, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview | ImGuiColorEditFlags.NoInputs)) {
             Color c = Color.FromArgb((int)(value.W * 255), (int)(value.X * 255), (int)(value.Y * 255), (int)(value.Z * 255));
@@ -1556,10 +1784,7 @@ public static class SettingsHelpers {
         }
     }
 
-    /// <summary>
-    /// "Set all" weight slider for a table column. Dragging it applies the value to every item.
-    /// The slider value is caller-owned so it persists between frames.
-    /// </summary>
+    // "Set all" weight slider: dragging applies the value to every item. Slider is caller-owned.
     public static void SetAllWeight<T>(string id, ref float value, float min, float max, string fmt, System.Collections.Generic.IEnumerable<T> items, Action<T,float> set) {
         ImGui.SetNextItemWidth(100);
         if (ImGui.SliderFloat($"##setallw_{id}", ref value, min, max, fmt))
@@ -1572,18 +1797,13 @@ public static class SettingsHelpers {
         ImGui.SetCursorPosX(cursorPosX);
     }
 
-    /// <summary>
-    /// Sprite icon picker. Shows the current icon as a small image button; clicking opens a popup
-    /// grid of all atlas sprites (laid out to match the atlas columns). Selecting one calls
-    /// <paramref name="set"/>. Falls back to plain numbered buttons if the atlas texture isn't loaded.
-    /// </summary>
     // Stable display order for the atlas-point style editor (Dictionary order isn't guaranteed).
     public static readonly string[] AtlasPointStyleKeys = { "Generic", "Breach", "Abyss", "Incursion", "Delirium", "Ritual" };
 
     // Editable table of per-atlas-point-type marker color + icon. Backs the AtlasPointStylePicker CustomNode.
     public static void AtlasPointStyleTable() {
         var g = Main.Settings.Graphics;
-        ImGui.TextDisabled("Atlas point markers — color and icon per content type ('Generic' = non-content points).");
+        ImGui.TextDisabled("Atlas point markers: color and icon per content type ('Generic' = non-content points).");
         if (!ImGui.BeginTable("atlaspointstyles", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingFixedFit))
             return;
         ImGui.TableSetupColumn("Type");
@@ -1640,10 +1860,7 @@ public static class SettingsHelpers {
         }
     }
 
-    /// <summary>
-    /// "Set all" icon picker for a table column. Picking an icon applies it to every item.
-    /// The selection is caller-owned so it persists between frames.
-    /// </summary>
+    // "Set all" icon picker: picking applies the icon to every item. Selection is caller-owned.
     public static void SetAllIcon<T>(string id, ref SpriteIcon value, System.Collections.Generic.IEnumerable<T> items, Action<T,SpriteIcon> set) {
         var captured = value;        // ref params can't be captured in the lambda
         SpriteIcon chosen = captured;
@@ -1654,11 +1871,7 @@ public static class SettingsHelpers {
         }
     }
 
-    /// <summary>
-    /// Draws a two-step "Reset All Weights" button. First click arms the confirm state; the second
-    /// (red) click runs <paramref name="reset"/>. A Cancel button disarms. State is held in the
-    /// caller-owned <paramref name="confirming"/> flag.
-    /// </summary>
+    // Two-step "Reset All Weights": first click arms, second (red) click runs reset, Cancel disarms.
     public static void DrawResetWeightsButton(string id, ref bool confirming, Action reset) {
         ImGui.Spacing();
         if (!confirming) {
@@ -1678,10 +1891,7 @@ public static class SettingsHelpers {
         }
     }
 
-    /// <summary>
-    /// Draws a "Reset to Plugin Defaults" button (with confirm) that reloads the bundled
-    /// exilemaps_weights.json, restoring the shipped default map and content weights.
-    /// </summary>
+    // "Reset to Plugin Defaults" button with confirm; reloads bundled weights from exilemaps_weights.json.
     public static void DrawResetToDefaultsButton(string id, ref bool confirming) {
         ImGui.Spacing();
         if (!confirming) {
@@ -1706,10 +1916,7 @@ public static class SettingsHelpers {
         }
     }
 
-    /// <summary>
-    /// Draws the "Import Old Settings" button (convert a pre-rework settings file into a new profile) plus
-    /// the one-time auto-detect banner. Full settings export/import was removed - profiles cover sharing.
-    /// </summary>
+    // Draws "Import Old Settings" button and the one-time auto-detect banner.
     public static void DrawImportExportSettingsButtons() {
         DrawOldSettingsImportBanner();
 

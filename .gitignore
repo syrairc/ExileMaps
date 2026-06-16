@@ -443,3 +443,10 @@ GEMINI.md
 .ai/
 ai-docs/
 map_weights.csv
+
+# All markdown except README.md
+*.md
+!README.md
+
+# Atlas export design assets — inlined as C# constants, not needed for the plugin
+atlas-export/

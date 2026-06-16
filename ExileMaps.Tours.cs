@@ -1,3 +1,4 @@
+// Named tours: build, optimize, draw, Tours panel, Build Mode, panel button bar.
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -14,9 +15,8 @@ public partial class ExileMapsCore
 {
     private bool toursPanelOpen = false;
 
-    // Interactive Build Tour mode: while active, clicking on/near an atlas node adds it to the active
-    // tour (right-click removes). Transient — not persisted. Toggled by the panel button / hotkey,
-    // cancelled by Escape or the atlas closing.
+    // Interactive Build Tour mode: clicking adds nodes to the active tour, right-click removes.
+    // Transient, not persisted. Toggled by the panel button or hotkey; Escape or atlas-close cancels.
     private bool buildModeActive = false;
 
     // ---- Persisted panel window rects ----
@@ -49,6 +49,8 @@ public partial class ExileMapsCore
     {
         public string Key;
         public IntPtr Normal, Hover, Pressed, Tooltip;
+        public Vector2 NormalSize;    // native px of normal/hover sprite
+        public Vector2 PressedSize;   // native px of pressed sprite (same 128 size as normal)
         public Vector2 TooltipSize;   // native px, used to keep tooltip aspect ratio
         public Func<bool> GetOpen;
         public Action Toggle;
@@ -72,28 +74,44 @@ public partial class ExileMapsCore
     private void LoadPanelButtonTextures()
     {
         IntPtr L(string f) => LoadPanelTexture(f);
+        // All button states are 128x128 native; pressed is no longer a larger glow sprite.
+        // Drawn at ~70% size.
+        var btnSz = new Vector2(90, 90);
         panelButtons = new List<PanelButtonDef>
         {
             new PanelButtonDef {
                 Key = "wp",
                 Normal = L("waypoints-normal.png"), Hover = L("waypoints-hover.png"),
                 Pressed = L("waypoints-pressed.png"), Tooltip = L("waypoints-tooltip.png"),
-                TooltipSize = new Vector2(169, 82),
+                NormalSize = btnSz, PressedSize = btnSz,
+                TooltipSize = new Vector2(120, 39),
                 GetOpen = () => WaypointPanelIsOpen, Toggle = () => WaypointPanelIsOpen = !WaypointPanelIsOpen,
             },
             new PanelButtonDef {
                 Key = "tours",
                 Normal = L("tours-normal.png"), Hover = L("tours-hover.png"),
                 Pressed = L("tours-pressed.png"), Tooltip = L("tours-tooltip.png"),
-                TooltipSize = new Vector2(133, 82),
+                NormalSize = btnSz, PressedSize = btnSz,
+                TooltipSize = new Vector2(82, 39),
                 GetOpen = () => toursPanelOpen, Toggle = () => toursPanelOpen = !toursPanelOpen,
             },
             new PanelButtonDef {
                 Key = "atlas",
                 Normal = L("atlas-normal.png"), Hover = L("atlas-hover.png"),
                 Pressed = L("atlas-pressed.png"), Tooltip = L("atlas-tooltip.png"),
-                TooltipSize = new Vector2(215, 83),
+                NormalSize = btnSz, PressedSize = btnSz,
+                TooltipSize = new Vector2(165, 39),
                 GetOpen = () => atlasOverviewOpen, Toggle = () => atlasOverviewOpen = !atlasOverviewOpen,
+            },
+            // Action button (not a toggle): GetOpen stays false so it returns to normal after the
+            // click; the held state still shows the pressed texture while the mouse is down.
+            new PanelButtonDef {
+                Key = "export",
+                Normal = L("export-normal.png"), Hover = L("export-hover.png"),
+                Pressed = L("export-pressed.png"), Tooltip = L("export-tooltip.png"),
+                NormalSize = btnSz, PressedSize = btnSz,
+                TooltipSize = new Vector2(145, 39),
+                GetOpen = () => false, Toggle = () => ExportAtlasHtml(),
             },
         };
     }
@@ -118,7 +136,7 @@ public partial class ExileMapsCore
         try
         {
             // Auto-drop stops the player has finished. Only prune when the stop resolves to a live
-            // node — an off-scan (unresolvable) stop is left in place rather than assumed done.
+            // node; an off-scan (unresolvable) stop is left in place rather than assumed done.
             if (Settings.Tours.AutoClearCompleted)
                 t.Stops.RemoveAll(s =>
                 {
@@ -248,13 +266,14 @@ public partial class ExileMapsCore
                     {
                         // Larger base than a node icon so it reads as the "go here next" marker.
                         float baseSize = width * 0.9f * Settings.Graphics.NodeRadius;
-                        // Pulse the size ~±18% on a ~1.1s cycle so it draws the eye.
-                        double secs = DateTime.Now.TimeOfDay.TotalSeconds;
+                        // Pulse the size ~±18% on a ~1.1s cycle so it draws the eye. High-res wall-clock
+                        // (not DateTime.Now, whose ~15ms resolution steps at high FPS).
+                        double secs = AnimSeconds;
                         float pulse = 1f + 0.18f * (float)Math.Sin(secs * (Math.PI * 2.0 / 1.1));
                         float size = baseSize * pulse;
                         // Float the marker above the node, clear of the number/art. When the node has
                         // content, the in-game atlas floats a circular content icon above it (sized to
-                        // the node) — bump the Target up by ~a node height so it clears that icon.
+                        // the node). Bump the Target up by ~a node height so it clears that icon.
                         float topY = center.Y - height / 2f - baseSize / 2f - 4f;
                         if (node.Content.Count > 0)
                             topY -= height;
@@ -742,10 +761,12 @@ public partial class ExileMapsCore
         if (!Settings.Features.ShowPanelButtons) return;
         if (panelButtons == null || panelButtons.Count == 0) return;
 
-        const float btn = 140f, gap = 12f, pad = 10f, bottomMargin = 64f, pressedGrow = 12f, hoverLift = 14f;
+        const float gap = 6f, pad = 10f, bottomMargin = 64f, hoverLift = 5f;
         int count = panelButtons.Count;
-        float barW = count * btn + (count - 1) * gap;
-        float winW = barW + pad * 2f, winH = btn + pad * 2f;
+        // Hit rect = NormalSize. Pressed sprite is the same size, centered over the same hit rect.
+        var btnSz = panelButtons[0].NormalSize;
+        float barW = count * btnSz.X + (count - 1) * gap;
+        float winW = barW + pad * 2f, winH = btnSz.Y + pad * 2f;
 
         try
         {
@@ -762,64 +783,76 @@ public partial class ExileMapsCore
             ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(pad, pad));
             ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(gap, 0));
 
-            if (ImGui.Begin("##panelbuttons", flags))
+            try
             {
-                var dl = ImGui.GetWindowDrawList();
-                PanelButtonDef? hoveredDef = null;
-                Vector2 hMin = default, hMax = default;
-
-                for (int i = 0; i < count; i++)
+                if (ImGui.Begin("##panelbuttons", flags))
                 {
-                    var def = panelButtons[i];
-                    ImGui.InvisibleButton(def.Key, new Vector2(btn, btn));
+                    var dl = ImGui.GetWindowDrawList();
+                    PanelButtonDef? hoveredDef = null;
+                    Vector2 hMin = default, hMax = default;
 
-                    bool hovered = ImGui.IsItemHovered();
-                    if (hovered) ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
-                    bool held = ImGui.IsItemActive();
-                    if (ImGui.IsItemClicked()) def.Toggle();
-                    bool open = def.GetOpen();
-
-                    var min = ImGui.GetItemRectMin();
-                    var max = ImGui.GetItemRectMax();
-
-                    IntPtr tex;
-                    Vector2 drawMin = min, drawMax = max;
-                    if (held || open)
+                    for (int i = 0; i < count; i++)
                     {
-                        // Pressed sits grounded with a slightly larger glow.
-                        tex = def.Pressed;
-                        drawMin -= new Vector2(pressedGrow); drawMax += new Vector2(pressedGrow);
+                        var def = panelButtons[i];
+                        ImGui.InvisibleButton(def.Key, def.NormalSize);
+
+                        bool hovered = ImGui.IsItemHovered();
+                        if (hovered) ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+                        bool held = ImGui.IsItemActive();
+                        if (ImGui.IsItemClicked()) def.Toggle();
+                        bool open = def.GetOpen();
+
+                        var min = ImGui.GetItemRectMin();
+                        var max = ImGui.GetItemRectMax();
+                        Vector2 center = (min + max) * 0.5f;
+
+                        IntPtr tex;
+                        Vector2 drawMin, drawMax;
+                        if (held || open)
+                        {
+                            // Pressed sprite, centered over the hit rect.
+                            tex = def.Pressed;
+                            var half = def.PressedSize * 0.5f;
+                            drawMin = center - half;
+                            drawMax = center + half;
+                        }
+                        else if (hovered)
+                        {
+                            // Lift the button upward on hover (hit rect stays put).
+                            tex = def.Hover;
+                            var half = def.NormalSize * 0.5f;
+                            drawMin = center - half; drawMin.Y -= hoverLift;
+                            drawMax = center + half; drawMax.Y -= hoverLift;
+                        }
+                        else
+                        {
+                            tex = def.Normal;
+                            drawMin = min; drawMax = max;
+                        }
+
+                        if (tex != IntPtr.Zero) dl.AddImage(tex, drawMin, drawMax);
+
+                        if (hovered) { hoveredDef = def; hMin = min; hMax = max; }
+                        if (i < count - 1) ImGui.SameLine();
                     }
-                    else if (hovered)
+
+                    // Tooltip plaque centered above the hovered button, on the foreground layer so it
+                    // isn't clipped by the (small) window.
+                    if (hoveredDef.HasValue && hoveredDef.Value.Tooltip != IntPtr.Zero)
                     {
-                        // Lift the button upward on hover (hit rect stays put).
-                        tex = def.Hover;
-                        drawMin.Y -= hoverLift; drawMax.Y -= hoverLift;
+                        var d = hoveredDef.Value;
+                        const float th = 39f;   // native tooltip height
+                        float tw = th * (d.TooltipSize.X / d.TooltipSize.Y);
+                        float cx = (hMin.X + hMax.X) / 2f;
+                        float bottom = hMin.Y - hoverLift + 4f;   // sit just above the lifted button
+                        Vector2 tMin = new(cx - tw / 2f, bottom - th);
+                        Vector2 tMax = new(cx + tw / 2f, bottom);
+                        ImGui.GetForegroundDrawList().AddImage(d.Tooltip, tMin, tMax);
                     }
-                    else tex = def.Normal;
-
-                    if (tex != IntPtr.Zero) dl.AddImage(tex, drawMin, drawMax);
-
-                    if (hovered) { hoveredDef = def; hMin = min; hMax = max; }
-                    if (i < count - 1) ImGui.SameLine();
                 }
-
-                // Tooltip plaque centered above the hovered button, on the foreground layer so it
-                // isn't clipped by the (small) window.
-                if (hoveredDef.HasValue && hoveredDef.Value.Tooltip != IntPtr.Zero)
-                {
-                    var d = hoveredDef.Value;
-                    const float th = 92f;
-                    float tw = th * (d.TooltipSize.X / d.TooltipSize.Y);
-                    float cx = (hMin.X + hMax.X) / 2f;
-                    float bottom = hMin.Y - hoverLift + 4f;   // sit just above the lifted button
-                    Vector2 tMin = new(cx - tw / 2f, bottom - th);
-                    Vector2 tMax = new(cx + tw / 2f, bottom);
-                    ImGui.GetForegroundDrawList().AddImage(d.Tooltip, tMin, tMax);
-                }
+                ImGui.End();
             }
-            ImGui.End();
-            ImGui.PopStyleVar(2);
+            finally { ImGui.PopStyleVar(2); }
         }
         catch (Exception e) { DebugSwallow("DrawPanelButtonBar", e); }
     }

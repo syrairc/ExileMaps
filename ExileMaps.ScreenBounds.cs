@@ -1,4 +1,5 @@
-﻿using System;
+﻿// Screen bounds: Cohen-Sutherland line clipping, on-screen tests, visibility checks.
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using ExileCore2;
@@ -59,6 +60,20 @@ public partial class ExileMapsCore
         "Art/Textures/Interface/2D/2DArt/UIImages/InGame/MapPinsWindow/MapPinLegendBG.dds",
         "Art/Textures/Interface/2D/2DArt/UIImages/InGame/MapLegend/LegendBg.dds",
         "Art/Textures/Interface/2D/2DArt/UIImages/InGame/AtlasScreen/KeystonesUI/MainBgExpanded.dds",
+        // Quest panel button-bar background (always present on the right edge of the atlas).
+        "Art/Textures/Interface/2D/2DArt/UIImages/InGame/WorldMap/MapButtonsBgMiddle.dds",
+        // Quest panel background — only when EXPANDED. The collapsed state uses a different
+        // texture (QuestMapBaseCollapsed.dds), so this exact-match entry excludes the panel
+        // only while it's open. (Quest panel = WorldMap child 7.)
+        "Art/Textures/Interface/2D/2DArt/UIImages/InGame/QuestMap/QuestMapBase.dds",
+    };
+
+    // Like ExcludeTextureNames, but excludes the element AND its whole visible subtree, not just
+    // the element's own rect. Needed when chrome's children render outside the parent's rect —
+    // the collapsed keystones panel's info icon / keystone buttons sit well left of its 72px base.
+    private static readonly HashSet<string> ExcludeTextureSubtrees = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Art/Textures/Interface/2D/2DArt/UIImages/InGame/AtlasScreen/KeystonesUI/MainBgCollapsed.dds",
     };
 
     // Recursively adds the client rect of any visible descendant whose texture is in
@@ -68,11 +83,35 @@ public partial class ExileMapsCore
         if (element == null || depth > 8 || !element.IsVisible)
             return;
 
-        if (element.TextureName != null && ExcludeTextureNames.Contains(element.TextureName))
-            cachedExcludeRects.Add(element.GetClientRect());
+        if (element.TextureName != null)
+        {
+            if (ExcludeTextureSubtrees.Contains(element.TextureName))
+            {
+                AddSubtreeRects(element, 0);
+                return; // whole subtree already covered
+            }
+
+            if (ExcludeTextureNames.Contains(element.TextureName))
+                cachedExcludeRects.Add(element.GetClientRect());
+        }
 
         foreach (var child in element.Children)
             AddExcludeRectsByTexture(child, depth + 1);
+    }
+
+    // Adds the client rect of an element and every visible descendant. Degenerate (zero-area)
+    // rects are skipped; depth-limited to stay frame-safe on a malformed tree.
+    private void AddSubtreeRects(ExileCore2.PoEMemory.Element element, int depth)
+    {
+        if (element == null || depth > 12 || !element.IsVisible)
+            return;
+
+        RectangleF rect = element.GetClientRect();
+        if (rect.Width > 0 && rect.Height > 0)
+            cachedExcludeRects.Add(rect);
+
+        foreach (var child in element.Children)
+            AddSubtreeRects(child, depth + 1);
     }
 
     // Recomputes the on-screen rect and any visible map-tooltip rects once per render frame.
@@ -96,6 +135,7 @@ public partial class ExileMapsCore
             // Don't render over the map tooltip. Its child index varies, so identify it
             // by its popup texture (selected/unselected) instead of a fixed position.
             cachedExcludeRects.Clear();
+            mapTooltipVisible = false;
             foreach (var tooltip in UI.WorldMap.Children) {
                 if (tooltip == null || !tooltip.IsVisible)
                     continue;
@@ -105,6 +145,7 @@ public partial class ExileMapsCore
                 RectangleF mapTooltip = tooltip.GetClientRect();
                 mapTooltip.Inflate(mapTooltip.Width * 0.1f, mapTooltip.Height * 0.1f);
                 cachedExcludeRects.Add(mapTooltip);
+                mapTooltipVisible = true;
             }
 
             // Don't render over the atlas title bar / search box background.

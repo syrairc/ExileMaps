@@ -48,14 +48,9 @@ namespace ExileMaps.Classes
 
         
         public AtlasNodeDescription MapNode () {
-            try {
-                var descriptions = Main?.AtlasPanel?.Descriptions;
-                if (descriptions == null) return null;
-                return descriptions.FirstOrDefault(x => x != null && x.Coordinate.ToString() == Coordinates.ToString());
-            } catch {
-                // Atlas memory can shift mid-read (refresh / panel teardown); treat as "no node this frame".
-                return null;
-            }
+            // O(1) lookup via the live map cache instead of scanning AtlasPanel.Descriptions
+            // (~1000 entries) with string allocations. Null on cache miss / mid-refresh.
+            return Main?.GetAtlasNodeAt(Coordinates);
         }
 
 

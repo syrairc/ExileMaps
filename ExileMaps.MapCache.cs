@@ -1,4 +1,5 @@
-﻿using System;
+﻿// Cache refresh, node caching, weight recalc, content/passive detection.
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -9,6 +10,19 @@ namespace ExileMaps;
 
 public partial class ExileMapsCore
 {
+    // O(1) atlas-node lookup by coordinate via the live cache. Replaces an O(n) scan over
+    // AtlasPanel.Descriptions (~1000 entries, each with two Coordinate.ToString() allocations).
+    // Returns null if the coordinate isn't cached yet (or mid-refresh).
+    internal AtlasNodeDescription GetAtlasNodeAt(Vector2i coord)
+    {
+        try {
+            lock (mapCacheLock)
+                return mapCache.TryGetValue(coord, out var node) ? node.MapNode : null;
+        } catch {
+            return null;
+        }
+    }
+
     public void RefreshMapCache(bool clearCache = false)
     {
         refreshingCache = true;
@@ -61,11 +75,17 @@ public partial class ExileMapsCore
         timer.Stop();
         long time = timer.ElapsedMilliseconds;
         float average = (float)time / count;
-        RecalculateWeights();
+        PerfMonitor.Record("Cache.NodePass", timer.ElapsedTicks);
 
+        long t0 = Stopwatch.GetTimestamp();
+        RecalculateWeights();
+        PerfMonitor.Record("Cache.WeightRecalc", Stopwatch.GetTimestamp() - t0);
+
+        t0 = Stopwatch.GetTimestamp();
         SyncFavoriteWaypoints();
         RemoveCompletedWaypoints();
         UpdateWaypointPaths();
+        PerfMonitor.Record("Cache.WaypointSync", Stopwatch.GetTimestamp() - t0);
 
         // Invalidate memoized step counts and atlas-panel list.
         mapCacheVersion++;
@@ -119,6 +139,7 @@ public partial class ExileMapsCore
             Name = node.Element.Area.Name,
             Id = mapId,
             MapNode = node,
+            ArtWidth = node.Element.Width,
             MapType = ResolveMapType(shortID, mapId)
         };
 
@@ -126,14 +147,19 @@ public partial class ExileMapsCore
             try {
 
                 AddNodeContentFromIdentity(node, newNode);
+                AddIdBasedContent(newNode);
                 SetAtlasPassive(node, newNode);
 
             } catch (Exception e) {
                 LogError($"Error getting Content for map type {node.Address.ToString("X")}: " + e.Message);
             }
-            
+
         }
-    
+
+        // Static data is now resolved; periodic refreshes skip the re-read (see RefreshCachedMapNode).
+        // Leave false when the area id is blank (node not loaded yet) so a later pass resolves it.
+        newNode.StaticResolved = !string.IsNullOrWhiteSpace(mapId);
+
         newNode.RecalculateWeight();
 
         lock (mapCacheLock)        
@@ -143,24 +169,39 @@ public partial class ExileMapsCore
 
     private int RefreshCachedMapNode(AtlasNodeDescription node, Node cachedNode)
     {
-        string shortID = node.Element.Area.Id.Trim().Replace("_NoBoss", "");
+        // Volatile state, always refreshed (cheap boolean reads + the re-snapshotted node pointer).
         cachedNode.IsUnlocked = node.Element.IsUnlocked;
         cachedNode.IsVisible = node.Element.IsVisible;
         cachedNode.IsVisited = node.Element.IsVisited || (!node.Element.IsUnlocked && node.Element.IsVisited);
         cachedNode.IsActive = node.Element.IsActive;
         cachedNode.IsCompleted = node.Element.IsCompleted;
         cachedNode.Address = node.Element.Address;
-        cachedNode.ParentAddress = node.Address;     
+        cachedNode.ParentAddress = node.Address;
         cachedNode.MapNode = node;
-        cachedNode.MapType = ResolveMapType(shortID, node.Element.Area.Id);
+        // Cheap single read; keeps the zoom-independent art width current for IsSpecial detection.
+        cachedNode.ArtWidth = node.Element.Width;
 
         if (cachedNode.IsVisited)
             return 1;
 
-        cachedNode.Content.Clear();
-
-        AddNodeContentFromIdentity(node, cachedNode);
-        SetAtlasPassive(node, cachedNode);
+        // Static per-coordinate data (map type, content identity, atlas passive) is immutable for a
+        // node, but re-reading Area.Id + the ContentIdentity/AtlasEntry memory lists for every node on
+        // every refresh dominates Cache.NodePass and grows as panning loads more nodes. Resolve once.
+        // A full cache rebuild (atlas reopen / manual refresh / map-list change) recreates nodes, so
+        // StaticResolved resets to false and this re-runs then. Skipped while Area.Id is blank (node
+        // not loaded yet) so it self-heals on a later pass.
+        if (!cachedNode.StaticResolved) {
+            string fullId = node.Element.Area.Id;
+            if (!string.IsNullOrWhiteSpace(fullId)) {
+                cachedNode.Id = fullId.Trim();
+                cachedNode.MapType = ResolveMapType(fullId.Trim().Replace("_NoBoss", ""), fullId);
+                cachedNode.Content.Clear();
+                AddNodeContentFromIdentity(node, cachedNode);
+                AddIdBasedContent(cachedNode);
+                SetAtlasPassive(node, cachedNode);
+                cachedNode.StaticResolved = true;
+            }
+        }
 
         if (Settings.Features.RecalculateNodeWeightsOnRefresh)
             cachedNode.RecalculateWeight();
@@ -238,6 +279,23 @@ public partial class ExileMapsCore
                 toNode.Content.TryAdd(contentType.Name, contentType);
         }
     }
+
+    // Some maps carry content the ContentIdentity list doesn't include but the area id reveals.
+    // Expedition logbook maps (id contains "ExpeditionLogbook") always yield Expedition content.
+    private void AddIdBasedContent(Node toNode)
+    {
+        if (string.IsNullOrEmpty(toNode.Id))
+            return;
+
+        if (toNode.Id.Contains("ExpeditionLogbook", StringComparison.OrdinalIgnoreCase)) {
+            var exp = Settings.Maps.Content.ContentTypes.TryGetValue("Expedition", out var direct)
+                ? direct
+                : Settings.Maps.Content.ContentTypes.Values.FirstOrDefault(c => c.Name == "Expedition");
+            if (exp != null)
+                toNode.Content.TryAdd(exp.Name, exp);
+        }
+    }
+
 
     // Content-point passive ids embed the content type (e.g. "AtlasLeagueBreachOuterNode14").
     private static readonly string[] AtlasPointContentTypes = { "Breach", "Abyss", "Incursion", "Delirium", "Ritual" };

@@ -1,4 +1,5 @@
-﻿using System;
+﻿// Game data scraping: map types, content types, biomes from game files.
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -93,8 +94,8 @@ public partial class ExileMapsCore
       }
     }
 
-    // Untouched content color (matches Content's ctor default) — only entries still at this value get
-    // recolored on update, so user customizations are preserved.
+    // Default content color (matches Content's ctor default). Only entries still at this value get
+    // recolored on update, preserving user customizations.
     private static readonly Color ContentColorDefault = Color.FromArgb(255, 255, 255, 255);
     private static readonly Color ContentColorFallback = Color.FromArgb(255, 220, 220, 220);
 
@@ -161,11 +162,10 @@ public partial class ExileMapsCore
         string.IsNullOrEmpty(s) ? s
             : System.Text.RegularExpressions.Regex.Replace(s, "(?<=[a-z0-9])(?=[A-Z])", " ");
 
-    // Scrapes content types from EndgameMapContentVisualIdentity (the authoritative marker set that
-    // node.ContentIdentity is drawn from — 73 entries incl. biome/rarity markers the old
-    // EndgameMapContent file lacks). That file has Id + AtlasIcon but no Name, so display names come
-    // from a PascalCase split of the Id, enriched by EndgameMapContent.Name where it still exists.
-    // Adds missing entries, migrates legacy name-keyed entries to id keys. False if not loaded yet.
+    // Scrapes content types from EndgameMapContentVisualIdentity (the authoritative marker set;
+    // 73 entries incl. biome/rarity markers the old EndgameMapContent file lacks). Display names come
+    // from PascalCase-split of Id, enriched by EndgameMapContent.Name where it exists.
+    // Adds missing entries, migrates legacy name-keyed entries to id keys. Returns false if not loaded.
     private bool UpdateContentData(bool writeToFile = true) {
       try {
         var visuals = GameController.Files.EndgameMapContentVisualIdentity?.EntriesList;
@@ -199,7 +199,7 @@ public partial class ExileMapsCore
                 existing.Name = name;
                 if (!string.IsNullOrEmpty(icon))
                     existing.AtlasIcon = icon;
-                // Recolor only entries still at the default white — don't clobber user choices.
+                // Recolor only entries still at the default white. Don't clobber user choices.
                 if (existing.Color.ToArgb() == ContentColorDefault.ToArgb())
                     existing.Color = defaultColor;
                 if (existingKey != id) {

@@ -1,4 +1,5 @@
-﻿using System;
+﻿// Settings I/O: profile management, import/export, v1 migration, file dialogs.
+using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;

@@ -1,4 +1,5 @@
-﻿using System;
+﻿// BFS pathfinding: nearest completed anchor, tour segments, step counts, atlas panel list.
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
@@ -19,7 +20,7 @@ public partial class ExileMapsCore
         if (destination == null)
             return (null, 0f);
 
-        // Destination itself already completed — trivial one-node path.
+        // Destination already completed: trivial one-node path.
         if (destination.IsVisited)
             return (new List<Node> { destination }, destination.Weight);
 
@@ -46,7 +47,7 @@ public partial class ExileMapsCore
             if (cd > anchorDist)
                 break;
 
-            // Visited node: candidate anchor. Don't expand — route ends here. Prefer nearest, then heaviest.
+            // Visited node: candidate anchor. Don't expand; route ends here. Prefer nearest, then heaviest.
             if (current.IsVisited && current.Coordinates != destination.Coordinates)
             {
                 float w = best[current.Coordinates];
@@ -75,7 +76,7 @@ public partial class ExileMapsCore
                 }
                 else if (existing == nd && nw > best[neighbor.Coordinates])
                 {
-                    // Equal-distance alternative with a higher summed weight — prefer it.
+                    // Equal-distance alternative with a higher summed weight: prefer it.
                     best[neighbor.Coordinates] = nw;
                     parent[neighbor.Coordinates] = current;
                 }

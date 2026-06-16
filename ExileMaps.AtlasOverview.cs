@@ -1,3 +1,4 @@
+// Atlas Overview: reachable-content tally, progress readout, node search ping.
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -254,8 +255,9 @@ public partial class ExileMapsCore
         if (ShowMinimap) { searchOnScreenThisFrame = 0; return; }
 
         int onscreen = 0;
-        // Pulse 0..1 via TickCount; ring radius and alpha breathe.
-        float pulse = (MathF.Sin(TickCount * 0.15f) + 1f) * 0.5f; // 0..1
+        // Pulse 0..1 via wall-clock seconds (smooth under frame-time jitter); radius and alpha breathe.
+        // 9 rad/s ~= the old 0.15/frame at 60fps.
+        float pulse = (MathF.Sin(AnimSeconds * 9f) + 1f) * 0.5f; // 0..1
         Color baseColor = Settings.AtlasOverview.SearchPingColor;
         int alpha = (int)(120 + 135 * pulse);
         var color = Color.FromArgb(Math.Clamp(alpha, 0, 255), baseColor.R, baseColor.G, baseColor.B);

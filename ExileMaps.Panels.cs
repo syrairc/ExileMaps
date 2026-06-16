@@ -1,9 +1,11 @@
-﻿using System;
+﻿// Debug, Quick Edit, Node Debug panels, and perf monitor overlay.
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Numerics;
 using ExileCore2;
+using ExileCore2.Shared.Interfaces;
 using ImGuiNET;
 using ExileMaps.Classes;
 
@@ -11,6 +13,58 @@ namespace ExileMaps;
 
 public partial class ExileMapsCore
 {
+    // Live filter text for the settings search box (see DrawSettings).
+    private string _settingsFilter = "";
+
+    // Override the engine's flat "draw every top-level Drawer" loop to prepend a search box that
+    // hides non-matching submenus. A submenu is shown if its own name/tooltip matches OR any
+    // descendant matches, so searching a leaf setting still surfaces its whole parent group.
+    public override void DrawSettings()
+    {
+        try {
+            ImGui.SetNextItemWidth(220);
+            ImGui.InputTextWithHint("##settingsfilter", "Filter settings...", ref _settingsFilter, 64);
+            ImGui.SameLine();
+            if (ImGui.Button("Clear##settingsfilter")) _settingsFilter = "";
+            ImGui.Separator();
+        } catch (Exception ex) {
+            LogError($"Settings filter box failed: {ex.Message}");
+        }
+
+        var filter = _settingsFilter?.Trim();
+        if (string.IsNullOrEmpty(filter)) {
+            base.DrawSettings();
+            return;
+        }
+
+        try {
+            foreach (var drawer in Drawers) {
+                if (HolderMatchesFilter(drawer, filter))
+                    drawer.Draw();
+            }
+        } catch (Exception ex) {
+            LogError($"Filtered settings draw failed: {ex.Message}");
+            base.DrawSettings();
+        }
+    }
+
+    // True if this holder's name/tooltip contains the filter, or any descendant does.
+    private static bool HolderMatchesFilter(ISettingsHolder holder, string filter)
+    {
+        if (holder == null) return false;
+        if (!string.IsNullOrEmpty(holder.Name) &&
+            holder.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+            return true;
+        if (!string.IsNullOrEmpty(holder.Tooltip) &&
+            holder.Tooltip.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
+            return true;
+        if (holder.Children != null)
+            foreach (var child in holder.Children)
+                if (HolderMatchesFilter(child, filter))
+                    return true;
+        return false;
+    }
+
     private void DoDebugging() {
         mapCache.TryGetValue(GetClosestNodeToCursor().Coordinates, out Node cachedNode);
         LogMessage(cachedNode.ToString());
@@ -223,7 +277,7 @@ public partial class ExileMapsCore
                     ImGui.TextDisabled("  (none)");
                 else
                     foreach (var (_, c) in node.Content)
-                        ImGui.TextUnformatted($"  {c.Name}");
+                        ImGui.TextUnformatted($"  {c.Name}{(string.IsNullOrEmpty(c.AtlasIcon) ? "" : "  [game icon]")}");
 
                 ImGui.Text("Biomes:");
                 var biomeNames = node.Biomes.Where(x => x.Value != null).Select(x => x.Value.Name).ToList();
@@ -244,5 +298,32 @@ public partial class ExileMapsCore
             debugNodeOpen = false;
             debugNode = null;
         }
+    }
+
+    private void DrawPerfMonitorOverlay()
+    {
+        if (!Settings.Features.ShowPerfMonitor) return;
+
+        var flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove
+                  | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings
+                  | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.AlwaysAutoResize;
+
+        ImGui.SetNextWindowPos(new Vector2(10, 10), ImGuiCond.Always);
+        ImGui.SetNextWindowBgAlpha(0.75f);
+
+        if (!ImGui.Begin("##perfmon", flags)) { ImGui.End(); return; }
+
+        ImGui.TextColored(new Vector4(0.8f, 0.8f, 1f, 1f), "Perf Monitor (60f avg)");
+        ImGui.Separator();
+
+        foreach (var (key, ms) in PerfMonitor.Snapshot())
+        {
+            Vector4 col = ms < 1.0  ? new Vector4(0.4f, 1f, 0.4f, 1f)
+                        : ms < 5.0  ? new Vector4(1f, 0.85f, 0.2f, 1f)
+                                    : new Vector4(1f, 0.3f, 0.3f, 1f);
+            ImGui.TextColored(col, $"{key,-28} {ms,6:F2} ms");
+        }
+
+        ImGui.End();
     }
 }

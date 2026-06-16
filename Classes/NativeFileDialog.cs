@@ -3,12 +3,8 @@ using System.Runtime.InteropServices;
 
 namespace ExileMaps.Classes
 {
-    /// <summary>
-    /// Minimal native file dialog via comdlg32 (GetOpenFileNameW / GetSaveFileNameW). Used instead of
-    /// System.Windows.Forms dialogs because the host is a DirectX overlay (ClickableTransparentOverlay),
-    /// not a WinForms app — WinForms ShowDialog faults the overlay. The native common dialog runs its own
-    /// modal loop and needs no message pump. Call from an STA thread. Returns null on cancel/error.
-    /// </summary>
+    // Native file dialog via comdlg32. Used instead of WinForms dialogs because the host is a DirectX
+    // overlay; WinForms ShowDialog faults the overlay. No message pump needed. Call from STA thread.
     internal static class NativeFileDialog
     {
         // JSON, then all files. Win32 wants the pairs separated and terminated by NUL bytes.
