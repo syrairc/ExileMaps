@@ -27,6 +27,9 @@ public partial class ExileMapsCore
         public Dictionary<string, (int count, Color color)> ContentCounts;
     }
 
+    // Swatch color for special-modifier tally rows (distinct from content colors).
+    private static readonly Color ModifierTallyColor = Color.FromArgb(255, 230, 200, 110);
+
     private AtlasStats? cachedAtlasStats;
     private (int ver, int wver, int n) cachedAtlasStatsSig = (-1, -1, -1);
 
@@ -66,6 +69,16 @@ public partial class ExileMapsCore
                         stats.ContentCounts[key] = (cur.count + 1, cur.color);
                     else
                         stats.ContentCounts[key] = (1, content.Color);
+                }
+
+                // Special content modifiers tally as their own rows (gold swatch) alongside content.
+                foreach (var mod in node.SpecialModifiers)
+                {
+                    if (string.IsNullOrEmpty(mod)) continue;
+                    if (stats.ContentCounts.TryGetValue(mod, out var cur))
+                        stats.ContentCounts[mod] = (cur.count + 1, cur.color);
+                    else
+                        stats.ContentCounts[mod] = (1, ModifierTallyColor);
                 }
             }
         }
@@ -221,6 +234,9 @@ public partial class ExileMapsCore
             return true;
         foreach (var (_, content) in node.Content)
             if (content.Name != null && content.Name.Contains(text, StringComparison.CurrentCultureIgnoreCase))
+                return true;
+        foreach (var m in node.SpecialModifiers)
+            if (m != null && m.Contains(text, StringComparison.CurrentCultureIgnoreCase))
                 return true;
         return false;
     }

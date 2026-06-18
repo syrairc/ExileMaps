@@ -42,6 +42,10 @@ public class Node
     public Dictionary<string, Biome> Biomes { get; set; } = [];
     [JsonIgnore]
     public Dictionary<string, Content> Content { get; set; } = [];
+    // First line of each atlas-node child tooltip = special content modifier text. Searchable; tallied
+    // in the Atlas Overview. Live game data, re-derived on cache refresh.
+    [JsonIgnore]
+    public List<string> SpecialModifiers { get; set; } = [];
     [JsonIgnore]
     public Map MapType { get; set; }
     [JsonIgnore]

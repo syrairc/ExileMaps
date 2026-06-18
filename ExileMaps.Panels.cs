@@ -279,6 +279,13 @@ public partial class ExileMapsCore
                     foreach (var (_, c) in node.Content)
                         ImGui.TextUnformatted($"  {c.Name}{(string.IsNullOrEmpty(c.AtlasIcon) ? "" : "  [game icon]")}");
 
+                ImGui.Text("Special modifiers:");
+                if (node.SpecialModifiers.Count == 0)
+                    ImGui.TextDisabled("  (none)");
+                else
+                    foreach (var m in node.SpecialModifiers)
+                        ImGui.TextUnformatted($"  {m}");
+
                 ImGui.Text("Biomes:");
                 var biomeNames = node.Biomes.Where(x => x.Value != null).Select(x => x.Value.Name).ToList();
                 if (biomeNames.Count == 0)

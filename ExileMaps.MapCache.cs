@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using ExileCore2.PoEMemory.Elements.AtlasElements;
 using GameOffsets2.Native;
 using ExileMaps.Classes;
@@ -149,6 +150,7 @@ public partial class ExileMapsCore
                 AddNodeContentFromIdentity(node, newNode);
                 AddIdBasedContent(newNode);
                 SetAtlasPassive(node, newNode);
+                AddSpecialModifiers(node, newNode);
 
             } catch (Exception e) {
                 LogError($"Error getting Content for map type {node.Address.ToString("X")}: " + e.Message);
@@ -196,9 +198,11 @@ public partial class ExileMapsCore
                 cachedNode.Id = fullId.Trim();
                 cachedNode.MapType = ResolveMapType(fullId.Trim().Replace("_NoBoss", ""), fullId);
                 cachedNode.Content.Clear();
+                cachedNode.SpecialModifiers.Clear();
                 AddNodeContentFromIdentity(node, cachedNode);
                 AddIdBasedContent(cachedNode);
                 SetAtlasPassive(node, cachedNode);
+                AddSpecialModifiers(node, cachedNode);
                 cachedNode.StaticResolved = true;
             }
         }
@@ -299,6 +303,47 @@ public partial class ExileMapsCore
 
     // Content-point passive ids embed the content type (e.g. "AtlasLeagueBreachOuterNode14").
     private static readonly string[] AtlasPointContentTypes = { "Breach", "Abyss", "Incursion", "Delirium", "Ritual" };
+
+    // AtlasChildren is private in ExileCore2.dll; reach it by reflection. Null if the property is gone.
+    private static readonly PropertyInfo AtlasChildrenProp =
+        typeof(AtlasPanelNode).GetProperty("AtlasChildren", BindingFlags.NonPublic | BindingFlags.Instance);
+
+    // Reads the first line of each atlas-node child tooltip into toNode.SpecialModifiers. These are the
+    // special content modifier strings on a node (e.g. on special maps). Tries the private AtlasChildren
+    // list first, falls back to the public UI children cast. Defensive: a miss yields no modifiers.
+    private void AddSpecialModifiers(AtlasNodeDescription node, Node toNode) {
+        try {
+            var element = node?.Element;
+            if (element == null)
+                return;
+
+            IEnumerable<AtlasPanelNodeChild> children = null;
+            if (AtlasChildrenProp != null)
+                children = AtlasChildrenProp.GetValue(element) as IEnumerable<AtlasPanelNodeChild>;
+            if (children == null || !children.Any())
+                children = element.GetChildrenAs<AtlasPanelNodeChild>();
+            if (children == null)
+                return;
+
+            foreach (var child in children) {
+                var tt = child?.Tooltip;
+                if (tt == null)
+                    continue;
+                var text = tt.TextNoTags;
+                if (string.IsNullOrWhiteSpace(text))
+                    text = tt.Text;
+                if (string.IsNullOrWhiteSpace(text))
+                    continue;
+
+                var line = text.Split('\n')[0].Trim();
+                if (line.Length == 0)
+                    continue;
+                if (!toNode.SpecialModifiers.Contains(line, StringComparer.OrdinalIgnoreCase))
+                    toNode.SpecialModifiers.Add(line);
+            }
+        }
+        catch (Exception e) { DebugSwallow("AddSpecialModifiers", e); }
+    }
 
     // Sets GivesAtlasPoint when the passive grants a point and node is not completed.
     // Generic points have passive ids containing "Inside". Content (league) points are identified by

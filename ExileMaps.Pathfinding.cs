@@ -181,9 +181,9 @@ public partial class ExileMapsCore
         IEnumerable<Node> q = nodes;
         if (!string.IsNullOrEmpty(filter)) {
             if (useRegex)
-                q = q.Where(n => Regex.IsMatch(n.Name, filter, RegexOptions.IgnoreCase) || n.Content.Any(c => c.Value.Name == filter));
+                q = q.Where(n => Regex.IsMatch(n.Name, filter, RegexOptions.IgnoreCase) || n.Content.Any(c => c.Value.Name == filter) || n.SpecialModifiers.Any(m => Regex.IsMatch(m, filter, RegexOptions.IgnoreCase)));
             else
-                q = q.Where(n => n.Name.Contains(filter, StringComparison.CurrentCultureIgnoreCase) || n.Content.Any(c => c.Value.Name == filter));
+                q = q.Where(n => n.Name.Contains(filter, StringComparison.CurrentCultureIgnoreCase) || n.Content.Any(c => c.Value.Name == filter) || n.SpecialModifiers.Any(m => m.Contains(filter, StringComparison.CurrentCultureIgnoreCase)));
         }
         if (maxSteps > 0)
             q = q.Where(n => GetSteps(n) <= maxSteps);
