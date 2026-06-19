@@ -244,6 +244,8 @@ public partial class ExileMapsCore
             // stay highlighted at full color/size.
             var entry = Settings.Maps.SpecialMaps.Find(cachedNode.Name);
             bool userAdded = entry != null;
+            if (SpecialHiddenWhenCompleted(cachedNode, userAdded))
+                return;
             bool fade = SpecialFadesWhenCompleted(cachedNode, userAdded);
 
             float scale = entry?.Scale ?? Settings.Graphics.SpecialMapIconScale;
@@ -298,6 +300,11 @@ public partial class ExileMapsCore
     // True when a special should fade: it's completed and either user-added or in the fade-set above.
     private static bool SpecialFadesWhenCompleted(Node node, bool userAdded)
         => node.IsCompleted && (userAdded || FadeWhenCompletedSpecials.Contains(node.Name));
+
+    // True when a completed non-hub special should be hidden outright (marker + name) rather than faded.
+    // Reuses the fade test, so it only ever hits repeatable/user specials, never hub specials.
+    private bool SpecialHiddenWhenCompleted(Node node, bool userAdded)
+        => Settings.Graphics.HideCompletedSpecialMaps && SpecialFadesWhenCompleted(node, userAdded);
 
     // Fallback tint when a style key is missing from settings (silver).
     private static readonly Color AtlasPointColor = Color.FromArgb(255, 200, 200, 205);
@@ -475,6 +482,8 @@ public partial class ExileMapsCore
 
         var entry = Settings.Maps.SpecialMaps.Find(cachedNode.Name);
         bool userAdded = entry != null;
+        if (SpecialHiddenWhenCompleted(cachedNode, userAdded))
+            return;
         bool fade = SpecialFadesWhenCompleted(cachedNode, userAdded);
 
         Color baseCol = entry?.Color ?? Settings.Graphics.SpecialMapNameColor;

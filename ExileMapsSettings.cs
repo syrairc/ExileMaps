@@ -765,6 +765,9 @@ public class GraphicSettings
     [Menu("Special Map Indicator", "Draw an icon above 'special' map nodes (wider node art) instead of a solid circle, so the map art isn't covered")]
     public ToggleNode ShowSpecialMapIndicator { get; set; } = new ToggleNode(true);
 
+    [Menu("Hide Completed Special Maps", "Once a repeatable special map (e.g. Precursor Tower) is completed, drop its marker + name entirely instead of fading them. Hub specials (Gateways, Sealed Vault) always stay shown.")]
+    public ToggleNode HideCompletedSpecialMaps { get; set; } = new ToggleNode(true);
+
     [Menu("Special Map Marker Color", "Color of the icon drawn above special map nodes")]
     public ColorNode SpecialMapColor { get; set; } = new ColorNode(Color.FromArgb(255, 200, 80, 255));
 
