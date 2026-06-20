@@ -1318,6 +1318,7 @@ public class SpecialMapEntry
 public class SpecialMapSettings
 {
     // User-defined special maps (in addition to auto-detected ones). Each carries its own marker style.
+    [Newtonsoft.Json.JsonProperty(ObjectCreationHandling = Newtonsoft.Json.ObjectCreationHandling.Replace)]
     public List<SpecialMapEntry> Maps { get; set; } = new() {
         new SpecialMapEntry { Name = "The Jade Isles" },
     };
