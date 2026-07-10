@@ -125,22 +125,25 @@ public partial class ExileMapsCore
 
     private int CacheNewMapNode(AtlasNodeDescription node)
     {
-        string mapId = node.Element.Area.Id.Trim();
+        // Hoist the element + area wrappers once; each node.Element access is a cross-process read.
+        var el = node.Element;
+        var area = el.Area;
+        string mapId = area.Id.Trim();
         string shortID = mapId.Replace("_NoBoss", "");
         Node newNode = new()
         {
-            IsUnlocked = node.Element.IsUnlocked,
-            IsVisible = node.Element.IsVisible,
-            IsVisited = node.Element.IsVisited,
-            IsActive = node.Element.IsActive,
-            IsCompleted = node.Element.IsCompleted,
+            IsUnlocked = el.IsUnlocked,
+            IsVisible = el.IsVisible,
+            IsVisited = el.IsVisited,
+            IsActive = el.IsActive,
+            IsCompleted = el.IsCompleted,
             ParentAddress = node.Address,
-            Address = node.Element.Address,
+            Address = el.Address,
             Coordinates = node.Coordinate,
-            Name = node.Element.Area.Name,
+            Name = area.Name,
             Id = mapId,
             MapNode = node,
-            ArtWidth = node.Element.Width,
+            ArtWidth = el.Width,
             MapType = ResolveMapType(shortID, mapId)
         };
 
@@ -172,16 +175,18 @@ public partial class ExileMapsCore
     private int RefreshCachedMapNode(AtlasNodeDescription node, Node cachedNode)
     {
         // Volatile state, always refreshed (cheap boolean reads + the re-snapshotted node pointer).
-        cachedNode.IsUnlocked = node.Element.IsUnlocked;
-        cachedNode.IsVisible = node.Element.IsVisible;
-        cachedNode.IsVisited = node.Element.IsVisited || (!node.Element.IsUnlocked && node.Element.IsVisited);
-        cachedNode.IsActive = node.Element.IsActive;
-        cachedNode.IsCompleted = node.Element.IsCompleted;
-        cachedNode.Address = node.Element.Address;
+        // Hoist the element wrapper once; each node.Element access is a cross-process read.
+        var el = node.Element;
+        cachedNode.IsUnlocked = el.IsUnlocked;
+        cachedNode.IsVisible = el.IsVisible;
+        cachedNode.IsVisited = el.IsVisited;   // was IsVisited || (!IsUnlocked && IsVisited), which reduces to IsVisited
+        cachedNode.IsActive = el.IsActive;
+        cachedNode.IsCompleted = el.IsCompleted;
+        cachedNode.Address = el.Address;
         cachedNode.ParentAddress = node.Address;
         cachedNode.MapNode = node;
         // Cheap single read; keeps the zoom-independent art width current for IsSpecial detection.
-        cachedNode.ArtWidth = node.Element.Width;
+        cachedNode.ArtWidth = el.Width;
 
         if (cachedNode.IsVisited)
             return 1;
@@ -193,7 +198,7 @@ public partial class ExileMapsCore
         // StaticResolved resets to false and this re-runs then. Skipped while Area.Id is blank (node
         // not loaded yet) so it self-heals on a later pass.
         if (!cachedNode.StaticResolved) {
-            string fullId = node.Element.Area.Id;
+            string fullId = el.Area.Id;
             if (!string.IsNullOrWhiteSpace(fullId)) {
                 cachedNode.Id = fullId.Trim();
                 cachedNode.MapType = ResolveMapType(fullId.Trim().Replace("_NoBoss", ""), fullId);

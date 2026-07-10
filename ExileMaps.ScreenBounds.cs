@@ -78,7 +78,7 @@ public partial class ExileMapsCore
 
     // Recursively adds the client rect of any visible descendant whose texture is in
     // ExcludeTextureNames. Depth-limited so a malformed/deep tree can't stall the frame.
-    private void AddExcludeRectsByTexture(ExileCore2.PoEMemory.Element element, int depth)
+    private void AddExcludeRectsByTexture(ExileCore2.PoEMemory.Element element, int depth, List<RectangleF> target)
     {
         if (element == null || depth > 8 || !element.IsVisible)
             return;
@@ -87,32 +87,40 @@ public partial class ExileMapsCore
         {
             if (ExcludeTextureSubtrees.Contains(element.TextureName))
             {
-                AddSubtreeRects(element, 0);
+                AddSubtreeRects(element, 0, target);
                 return; // whole subtree already covered
             }
 
             if (ExcludeTextureNames.Contains(element.TextureName))
-                cachedExcludeRects.Add(element.GetClientRect());
+                target.Add(element.GetClientRect());
         }
 
         foreach (var child in element.Children)
-            AddExcludeRectsByTexture(child, depth + 1);
+            AddExcludeRectsByTexture(child, depth + 1, target);
     }
 
     // Adds the client rect of an element and every visible descendant. Degenerate (zero-area)
     // rects are skipped; depth-limited to stay frame-safe on a malformed tree.
-    private void AddSubtreeRects(ExileCore2.PoEMemory.Element element, int depth)
+    private void AddSubtreeRects(ExileCore2.PoEMemory.Element element, int depth, List<RectangleF> target)
     {
         if (element == null || depth > 12 || !element.IsVisible)
             return;
 
         RectangleF rect = element.GetClientRect();
         if (rect.Width > 0 && rect.Height > 0)
-            cachedExcludeRects.Add(rect);
+            target.Add(rect);
 
         foreach (var child in element.Children)
-            AddSubtreeRects(child, depth + 1);
+            AddSubtreeRects(child, depth + 1, target);
     }
+
+    // How often to rescan the static atlas chrome (title bar / legends / keystones / quest panel).
+    // The scan walks the whole WorldMap element subtree; the rects only move when a panel opens,
+    // closes, or resizes, so a per-frame walk is waste. A panel swapping textures (keystones/quest
+    // expand-collapse) self-corrects within this many frames since the scan reads the live texture.
+    private const int ChromeScanInterval = 10;
+    // Chrome exclude rects, refreshed on the throttle above; merged into cachedExcludeRects each frame.
+    private readonly List<RectangleF> cachedChromeRects = [];
 
     // Recomputes the on-screen rect and any visible map-tooltip rects once per render frame.
     // IsOnScreen then reads these cached values instead of re-reading panel/tooltip game memory
@@ -132,9 +140,20 @@ public partial class ExileMapsCore
 
             cachedScreenRect = new RectangleF(left, 0, right - left, size.Y);
 
-            // Don't render over the map tooltip. Its child index varies, so identify it
-            // by its popup texture (selected/unselected) instead of a fixed position.
+            // Rescan the static chrome only every N frames (or on the first frame, when the list is
+            // empty). It walks the whole WorldMap subtree - the expensive part of this method.
+            if (TickCount % ChromeScanInterval == 0 || cachedChromeRects.Count == 0) {
+                cachedChromeRects.Clear();
+                // Don't render over the atlas title bar / search box background / legends / keystones.
+                AddExcludeRectsByTexture(UI.WorldMap, 0, cachedChromeRects);
+            }
+
+            // Rebuild the per-frame exclude set: live tooltip rects + cached chrome + live HUD rects.
             cachedExcludeRects.Clear();
+
+            // Don't render over the map tooltip. Its child index varies, so identify it
+            // by its popup texture (selected/unselected) instead of a fixed position. Kept per-frame
+            // (only the direct children are scanned) so the hovered-node handoff stays exact.
             mapTooltipVisible = false;
             foreach (var tooltip in UI.WorldMap.Children) {
                 if (tooltip == null || !tooltip.IsVisible)
@@ -148,8 +167,7 @@ public partial class ExileMapsCore
                 mapTooltipVisible = true;
             }
 
-            // Don't render over the atlas title bar / search box background.
-            AddExcludeRectsByTexture(UI.WorldMap, 0);
+            cachedExcludeRects.AddRange(cachedChromeRects);
 
             // Don't render over the fixed HUD elements (life/mana orbs, flask panel, skill bar).
             AddExcludeRect(UI.GameUI?.LifeOrb);
@@ -186,6 +204,14 @@ public partial class ExileMapsCore
     {
         if (!IsOnScreen(start) || !IsOnScreen(end))
             return false;
+
+        // The segment test exists to stop connection lines drawing across the map tooltip popup. It's
+        // the dominant per-line cost (4 segment intersections per exclude rect x hundreds of lines each
+        // frame), so skip it entirely when no tooltip is up - i.e. whenever you're panning. Both
+        // endpoints are already known on-screen; a line clipping the static chrome/HUD strips between
+        // them is negligible and not worth the per-frame cost.
+        if (!mapTooltipVisible)
+            return true;
 
         foreach (var tooltip in cachedExcludeRects)
             if (SegmentIntersectsRect(start, end, tooltip))

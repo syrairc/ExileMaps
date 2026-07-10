@@ -175,7 +175,9 @@ public partial class ExileMapsCore
             LogError("Error building tour: " + e.Message);
             t.Segments = new();
             t.ResolvedStops = new();
-            t.BuiltVersion = -1;
+            // Mark built against the current version so a persistent failure retries on the next cache
+            // refresh, not every frame (BuiltVersion = -1 would re-run this multi-BFS + LogError per frame).
+            t.BuiltVersion = mapCacheVersion;
         }
     }
 
@@ -303,13 +305,15 @@ public partial class ExileMapsCore
             bool hasBest = false;
             Vector2i bestCoord = default;
             ExileCore2.Shared.RectangleF bestRect = default;
-            float bestDist = float.MaxValue;
+            float bestDistSq = float.MaxValue;
             foreach (var d in AtlasPanel.Descriptions)
             {
+                // GetClientRectCache (cheap struct read) + squared distance instead of a per-node
+                // GetClientRect parent-chain walk + sqrt over all ~1000 descriptions every frame.
                 ExileCore2.Shared.RectangleF r;
-                try { r = d.Element.GetClientRect(); } catch { continue; }
-                float dist = Vector2.Distance(cursor, r.Center);
-                if (dist < bestDist) { bestDist = dist; bestCoord = d.Coordinate; bestRect = r; hasBest = true; }
+                try { r = d.Element.GetClientRectCache; } catch { continue; }
+                float distSq = Vector2.DistanceSquared(cursor, r.Center);
+                if (distSq < bestDistSq) { bestDistSq = distSq; bestCoord = d.Coordinate; bestRect = r; hasBest = true; }
             }
             if (!hasBest) return;
 

@@ -13,56 +13,231 @@ namespace ExileMaps;
 
 public partial class ExileMapsCore
 {
-    // Live filter text for the settings search box (see DrawSettings).
-    private string _settingsFilter = "";
+    // Tab layout for the settings menu. We regroup the engine's flat Drawers list into tabs by
+    // drawing named holders and CustomNode delegates in the order we want. Nothing in the ISettings
+    // classes moves, so existing saved settings still load unchanged.
+    private Dictionary<string, ISettingsHolder> _holderIndex;
+    // names we already logged as missing, so a typo warns once instead of every frame.
+    private readonly HashSet<string> _missingHolderWarned = new();
 
-    // Override the engine's flat "draw every top-level Drawer" loop to prepend a search box that
-    // hides non-matching submenus. A submenu is shown if its own name/tooltip matches OR any
-    // descendant matches, so searching a leaf setting still surfaces its whole parent group.
     public override void DrawSettings()
     {
         try {
-            ImGui.SetNextItemWidth(220);
-            ImGui.InputTextWithHint("##settingsfilter", "Filter settings...", ref _settingsFilter, 64);
-            ImGui.SameLine();
-            if (ImGui.Button("Clear##settingsfilter")) _settingsFilter = "";
-            ImGui.Separator();
-        } catch (Exception ex) {
-            LogError($"Settings filter box failed: {ex.Message}");
-        }
-
-        var filter = _settingsFilter?.Trim();
-        if (string.IsNullOrEmpty(filter)) {
-            base.DrawSettings();
-            return;
-        }
-
-        try {
-            foreach (var drawer in Drawers) {
-                if (HolderMatchesFilter(drawer, filter))
-                    drawer.Draw();
+            RebuildHolderIndex();
+            if (ImGui.BeginTabBar("##exilemaps_tabs", ImGuiTabBarFlags.None)) {
+                Tab("General", DrawGeneralTab);
+                Tab("Appearance", DrawAppearanceTab);
+                Tab("Maps", DrawMapsTab);
+                Tab("Content", DrawContentTab);
+                Tab("Waypoints", DrawWaypointsTab);
+                Tab("Panels", DrawPanelsTab);
+                Tab("Keybinds", () => DrawHolderChildren("Keybinds"));
+                ImGui.EndTabBar();
             }
         } catch (Exception ex) {
-            LogError($"Filtered settings draw failed: {ex.Message}");
+            // never leave the user with a blank settings page - fall back to the engine's flat list.
+            LogError($"DrawSettings tabs failed, falling back to flat list: {ex.Message}");
             base.DrawSettings();
         }
     }
 
-    // True if this holder's name/tooltip contains the filter, or any descendant does.
-    private static bool HolderMatchesFilter(ISettingsHolder holder, string filter)
+    // (Name -> holder) over the whole Drawers tree, rebuilt each open. Cheap (dozens of entries) and
+    // only runs while the settings window is visible.
+    private void RebuildHolderIndex()
     {
-        if (holder == null) return false;
-        if (!string.IsNullOrEmpty(holder.Name) &&
-            holder.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
-            return true;
-        if (!string.IsNullOrEmpty(holder.Tooltip) &&
-            holder.Tooltip.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
-            return true;
-        if (holder.Children != null)
-            foreach (var child in holder.Children)
-                if (HolderMatchesFilter(child, filter))
-                    return true;
-        return false;
+        _holderIndex = new Dictionary<string, ISettingsHolder>(StringComparer.OrdinalIgnoreCase);
+        void Walk(IList<ISettingsHolder> holders)
+        {
+            if (holders == null) return;
+            foreach (var h in holders) {
+                if (h != null && !string.IsNullOrEmpty(h.Name))
+                    _holderIndex[h.Name] = h;   // last wins; the names we reference are unique
+                Walk(h?.Children);
+            }
+        }
+        Walk(Drawers);
+    }
+
+    // Draw one engine holder (a [Menu] leaf or a whole submenu) by its display name.
+    private void DrawHolder(string name)
+    {
+        if (_holderIndex != null && _holderIndex.TryGetValue(name, out var h)) {
+            try { h.Draw(); }
+            catch (Exception ex) { LogError($"[Tabs] draw '{name}' failed: {ex.Message}"); }
+        } else if (_missingHolderWarned.Add(name)) {
+            LogError($"[Tabs] setting not found in menu: '{name}' (renamed?)");
+        }
+    }
+
+    // Draw a submenu's children WITHOUT its collapsing header, so it shows flat and expanded under a tab
+    // (the whole-holder Draw would render a redundant, collapsed-by-default header).
+    private void DrawHolderChildren(string name)
+    {
+        // look up in the TOP-LEVEL Drawers, not the recursive index: a nested property can share a
+        // parent's name (TourSettings has an inner 'Tours' dict) and clobber the index entry, leaving
+        // an empty holder.
+        var h = Drawers?.FirstOrDefault(d => string.Equals(d?.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (h?.Children != null) {
+            foreach (var c in h.Children) {
+                try { c?.Draw(); }
+                catch (Exception ex) { LogError($"[Tabs] draw child of '{name}' failed: {ex.Message}"); }
+            }
+        } else if (_missingHolderWarned.Add(name + ":children")) {
+            LogError($"[Tabs] submenu not found: '{name}' (renamed?)");
+        }
+    }
+
+    // Draw a CustomNode's delegate directly, for the [JsonIgnore] pickers/tables that have no menu name.
+    private void DrawCustom(Action drawDelegate)
+    {
+        try { drawDelegate?.Invoke(); }
+        catch (Exception ex) { LogError($"[Tabs] custom section failed: {ex.Message}"); }
+    }
+
+    private void Tab(string label, Action body)
+    {
+        if (!ImGui.BeginTabItem(label)) return;
+        try { body(); }
+        catch (Exception ex) { LogError($"[Tabs] '{label}' tab failed: {ex.Message}"); }
+        ImGui.EndTabItem();
+    }
+
+    private void DrawGeneralTab()
+    {
+        ImGui.SeparatorText("Activation");
+        DrawHolder("Enable");
+        DrawHolder("Enable Atlas Drawing");
+
+        ImGui.SeparatorText("Node Processing");
+        DrawHolder("Atlas Range");
+        DrawHolder("Use Atlas Range for Node Connections");
+        DrawHolder("Process Visited Map Nodes");
+        DrawHolder("Process Unlocked Map Nodes");
+        DrawHolder("Process Locked Map Nodes");
+        DrawHolder("Process Hidden Map Nodes");
+        DrawHolder("Draw Connections for Visited Map Nodes");
+        DrawHolder("Draw Connections for Hidden Map Nodes");
+        DrawHolder("Recalculate Node Weights on Refresh");
+
+        ImGui.SeparatorText("Performance");
+        DrawHolder("Map Cache Refresh Rate");
+        DrawHolder("Show Performance Monitor");
+
+        ImGui.SeparatorText("Overlay");
+        DrawHolder("Show Panel Buttons");
+        DrawHolder("Show Atlas Search Box");
+        DrawHolder("Debug Mode");
+
+        ImGui.SeparatorText("Profiles");
+        DrawCustom(Settings.Profiles?.ProfileSelector?.DrawDelegate);
+        DrawCustom(Settings.WeightImportExport?.DrawDelegate);
+    }
+
+    private void DrawAppearanceTab()
+    {
+        ImGui.SeparatorText("Nodes");
+        DrawHolder("Node Radius");
+        DrawHolder("Use Icons for Nodes");
+        DrawHolder("Lay Icons Flat");
+
+        ImGui.SeparatorText("Base Colors");
+        DrawHolder("Font Color");
+        DrawHolder("Background Color");
+
+        ImGui.SeparatorText("Connection Lines");
+        DrawHolder("Line Color");
+        DrawHolder("Line Width");
+        DrawHolder("Draw Lines as Gradients");
+        DrawHolder("Visited Line Color");
+        DrawHolder("Unlocked Line Color");
+        DrawHolder("Locked Line Color");
+        DrawHolder("Distance Marker Scale");
+
+        ImGui.SeparatorText("Map Labels");
+        DrawHolder("Map Name Offset X");
+        DrawHolder("Map Name Offset Y");
+        DrawHolder("Legacy Map Name Styling");
+        DrawCustom(Settings.Graphics?.MapNameStylePicker?.DrawDelegate);
+    }
+
+    private void DrawMapsTab()
+    {
+        ImGui.SeparatorText("Map Display");
+        DrawCustom(Settings.Maps?.CustomMapSettings?.DrawDelegate);
+
+        if (ImGui.CollapsingHeader("Map Weights"))
+            DrawCustom(Settings.Maps?.MapTable?.DrawDelegate);
+
+        if (ImGui.CollapsingHeader("Biomes"))
+            DrawCustom(Settings.Maps?.Biomes?.CustomBiomeSettings?.DrawDelegate);
+
+        ImGui.SeparatorText("Special Map Markers");
+        DrawHolder("Show Special Map Indicator");
+        DrawHolder("Hide Completed Special Maps");
+        DrawHolder("Special Map Marker Color");
+        DrawHolder("Special Map Marker Scale");
+        DrawHolder("Special Map Marker Offset");
+        DrawCustom(Settings.Graphics?.SpecialMapIconPicker?.DrawDelegate);
+        DrawHolder("Special Map Name Color");
+
+        ImGui.SeparatorText("Custom Special Maps");
+        DrawCustom(Settings.Maps?.SpecialMaps?.CustomSpecialMapSettings?.DrawDelegate);
+    }
+
+    private void DrawContentTab()
+    {
+        ImGui.SeparatorText("Content Indicators");
+        DrawCustom(Settings.Graphics?.ContentIndicatorPicker?.DrawDelegate);
+        DrawHolder("Content Ring Width");
+        DrawHolder("Content Radius");
+        DrawHolder("Content Ring Icon Size");
+        DrawHolder("Content Ring Icon Spacing");
+        DrawHolder("Unknown Content Color");
+        DrawHolder("Skip Game-drawn Content");
+        DrawHolder("Stack Above In-game Icons");
+        DrawHolder("Content Icon Size");
+        DrawHolder("Content Icon Flatten");
+        DrawHolder("Content Icon Offset Y");
+        DrawHolder("Content Icon Spacing");
+        DrawHolder("Content Icon Tint");
+
+        ImGui.SeparatorText("Atlas Point Markers");
+        DrawHolder("Show Atlas Point Marker");
+        DrawHolder("Show Atlas Quest Marker");
+        DrawHolder("Atlas Marker Size");
+        DrawCustom(Settings.Graphics?.AtlasPointStylePicker?.DrawDelegate);
+
+        if (ImGui.CollapsingHeader("Content Weights"))
+            DrawCustom(Settings.Maps?.Content?.CustomContentSettings?.DrawDelegate);
+    }
+
+    private void DrawWaypointsTab()
+    {
+        ImGui.SeparatorText("Behavior");
+        DrawCustom(Settings.Waypoints?.CustomWaypointSettings?.DrawDelegate);
+
+        ImGui.SeparatorText("Path Visuals");
+        DrawHolder("Draw paths to waypoints");
+        DrawHolder("Waypoint Line Width");
+        DrawCustom(Settings.Graphics?.WaypointPathTexturePicker?.DrawDelegate);
+        DrawHolder("Animate Waypoint Path");
+        DrawHolder("Waypoint Dash Length");
+        DrawHolder("Waypoint Dash Gap");
+        DrawHolder("Waypoint Dash Speed");
+        DrawHolder("Waypoint Texture Scale");
+        DrawHolder("Waypoint Arrow Min Distance");
+
+        ImGui.SeparatorText("Favorite Marker");
+        DrawHolder("Favorite Marker Color");
+        DrawHolder("Favorite Marker Scale");
+    }
+
+    private void DrawPanelsTab()
+    {
+        ImGui.SeparatorText("Atlas Overview");
+        DrawHolderChildren("Atlas Overview");
+        ImGui.SeparatorText("Tours");
+        DrawHolderChildren("Tours");
     }
 
     private void DoDebugging() {

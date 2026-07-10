@@ -314,11 +314,16 @@ public partial class ExileMapsCore
     // icon cluster. Defaults to the node's top edge when there are no content icons.
     private float IndicatorBaseTop(Node node, RectangleF rect)
     {
+        // Called once by the atlas-point pass and once by the quest pass, both with the same rect for
+        // a given node; memoize so a node with both indicators does the child-rect read at most once.
+        if (indicatorBaseTopByCoord.TryGetValue(node.Coordinates, out var memo))
+            return memo;
+
         float top = rect.Center.Y - rect.Height / 2f;
 
         if (contentRowTopByCoord.TryGetValue(node.Coordinates, out var rowTop)) {
             top = Math.Min(top, rowTop);
-        } else if (node.IsVisible && node.Content.Values.Any(c => !string.IsNullOrEmpty(c.AtlasIcon))) {
+        } else if (node.IsVisible && NodeHasGameContentIcon(node)) {
             // Game-drawn content icons live in the node's in-game icon cluster (Element[0][0]).
             try {
                 var host = node.MapNode?.Element?.GetChildAtIndex(0)?.GetChildAtIndex(0);
@@ -330,7 +335,17 @@ public partial class ExileMapsCore
             } catch (Exception e) { DebugSwallow("IndicatorBaseTop: host rect", e); }
         }
 
+        indicatorBaseTopByCoord[node.Coordinates] = top;
         return top;
+    }
+
+    // True if any content on the node carries a game-drawn atlas icon. Plain loop, no LINQ closure.
+    private static bool NodeHasGameContentIcon(Node node)
+    {
+        foreach (var c in node.Content.Values)
+            if (!string.IsNullOrEmpty(c.AtlasIcon))
+                return true;
+        return false;
     }
 
     // Draws a marker above nodes that grant an atlas passive point. Color and icon are user-configurable
@@ -407,7 +422,7 @@ public partial class ExileMapsCore
             : 0.5f;
         norm = Math.Clamp(norm, 0f, 1f);
 
-        float offsetX = Settings.Maps.ShowMapNames ? (Graphics.MeasureText(cachedNode.Name.ToUpper()).X / 2) + 30 : 50;
+        float offsetX = Settings.Maps.ShowMapNames ? (Graphics.MeasureText(cachedNode.UppercaseName).X / 2) + 30 : 50;
         Vector2 position = new(nodeCurrentPosition.Center.X + offsetX + Settings.Graphics.MapNameOffsetX, nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY);
 
         DrawCenteredTextWithBackground($"{cachedNode.Weight:0}", position, ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, norm), Settings.Graphics.BackgroundColor, true, 10, 3);
@@ -428,7 +443,7 @@ public partial class ExileMapsCore
             return;
 
         Vector2 namePosition = nodeCurrentPosition.Center + new Vector2(Settings.Graphics.MapNameOffsetX, Settings.Graphics.MapNameOffsetY);
-        string text = cachedNode.Name.ToUpper();
+        string text = cachedNode.UppercaseName;
 
         if (Settings.Graphics.LegacyMapNameStyling) {
             // Old plain-background label.
@@ -514,7 +529,7 @@ public partial class ExileMapsCore
 
         // Larger than normal names, on a bordered plate in the name color (smaller when faded).
         using (Graphics.SetTextScale(nameScale))
-            DrawCenteredTextWithBorder(cachedNode.Name.ToUpper(), namePosition, text, bg, border, 14, 6);
+            DrawCenteredTextWithBorder(cachedNode.UppercaseName, namePosition, text, bg, border, 14, 6);
     }
 
     // Maps a content name to its icon-*.png base when the literal lowercase+stripped form doesn't
@@ -531,16 +546,27 @@ public partial class ExileMapsCore
     };
 
     // Resolves a content name to a loaded icon file name, or null if none matches. Tries the alias
-    // table first, then the literal lowercase+space-stripped form.
+    // table first, then the literal lowercase+space-stripped form. Memoized (contentIconFileCache):
+    // loadedContentIcons is init-only, so a name always resolves to the same file. Render-thread only.
     private string ResolveContentIconFile(string contentName)
     {
+        if (contentIconFileCache.TryGetValue(contentName, out var cached))
+            return cached;
+
+        string resolved = null;
         if (ContentIconAliases.TryGetValue(contentName, out var alias)) {
             var aliased = $"icon-{alias}.png";
             if (loadedContentIcons.Contains(aliased))
-                return aliased;
+                resolved = aliased;
         }
-        var literal = $"icon-{contentName.ToLower().Replace(" ", "")}.png";
-        return loadedContentIcons.Contains(literal) ? literal : null;
+        if (resolved == null) {
+            var literal = $"icon-{contentName.ToLower().Replace(" ", "")}.png";
+            if (loadedContentIcons.Contains(literal))
+                resolved = literal;
+        }
+
+        contentIconFileCache[contentName] = resolved;
+        return resolved;
     }
 
     // Icon file used for content with no matching icon-<content>.png (tinted with UnknownContentColor).
@@ -581,21 +607,28 @@ public partial class ExileMapsCore
             var fullUV = new RectangleF(0, 0, 1, 1);
             bool blankLoaded = loadedContentIcons.Contains(BlankContentIcon);
 
-            var icons = new List<(string file, string content, Color tint)>();
+            // Reused scratch list (cleared here) so a fresh List isn't allocated per node per frame.
+            var icons = contentIconScratch;
+            icons.Clear();
 
             // Adds an icon for a content name (dedup-aware): the matching icon-<content>.png, or the
-            // blank icon (user-tinted) when there's no file for it.
+            // blank icon (user-tinted) when there's no file for it. Plain loops instead of icons.Any
+            // so the dedup check doesn't allocate a closure per call.
             void AddIcon(string contentName) {
                 var iconName = ResolveContentIconFile(contentName);
                 if (iconName != null) {
                     // Known content: dedup by icon file (boss variants share one icon).
-                    if (!icons.Any(x => x.file == iconName))
-                        icons.Add((iconName, contentName, tint));
+                    for (int j = 0; j < icons.Count; j++)
+                        if (icons[j].file == iconName)
+                            return;
+                    icons.Add((iconName, contentName, tint));
                 } else if (blankLoaded) {
                     // Unknown content (no matching icon-<content>.png): blank icon in the user color.
                     // Dedup by content name so distinct unknowns each show, but not duplicated.
-                    if (!icons.Any(x => x.file == BlankContentIcon && x.content == contentName))
-                        icons.Add((BlankContentIcon, contentName, Settings.Graphics.UnknownContentColor));
+                    for (int j = 0; j < icons.Count; j++)
+                        if (icons[j].file == BlankContentIcon && icons[j].content == contentName)
+                            return;
+                    icons.Add((BlankContentIcon, contentName, Settings.Graphics.UnknownContentColor));
                 }
             }
 
