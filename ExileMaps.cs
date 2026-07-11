@@ -172,6 +172,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         // Map/Content/Biome dicts are populated by game-file scraping in Tick(), not here.
         Settings.Profiles.EnsureDefaultProfile();
 
+        // Rumours have no live game file to scrape, so seed them once here from the static json.
+        UpdateRumorData();
+
         // Mirror the persisted special-map config (names + max-weight) into the Node statics that
         // detection/weighting read. Re-synced on edit via RequestSpecialMapsRefresh.
         Classes.Node.SetSpecialConfig(Settings.Maps.SpecialMaps.Names(),
