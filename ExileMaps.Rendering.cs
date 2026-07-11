@@ -90,21 +90,33 @@ public partial class ExileMapsCore
     }
 
     private void DrawConnections(Node cachedNode, RectangleF nodeCurrentPosition)
-    {       
-         foreach (Vector2i coordinates in cachedNode.GetNeighborCoordinates())
+    {
+        if (!Settings.Graphics.ShowConnectionLines)
+            return;
+
+        foreach (Vector2i coordinates in cachedNode.GetNeighborCoordinates())
         {
             if (coordinates == default)
                 continue;
-            
+
             if (!mapCache.TryGetValue(coordinates, out Node destinationNode))
                 continue;
-                
-            if (!Settings.Features.DrawVisitedNodeConnections && (destinationNode.IsVisited || cachedNode.IsVisited))
+
+            // OR-any draw rule: an edge draws if any category it belongs to has its toggle on.
+            // locked = not unlocked and not visited. In the atlas unlocked implies visible, so these
+            // three categories cover every edge in practice.
+            bool completedEdge = cachedNode.IsVisited || cachedNode.IsCompleted
+                                 || destinationNode.IsVisited || destinationNode.IsCompleted;
+            bool lockedEdge = (!cachedNode.IsUnlocked && !cachedNode.IsVisited)
+                              || (!destinationNode.IsUnlocked && !destinationNode.IsVisited);
+            bool visibleEdge = cachedNode.IsVisible && destinationNode.IsVisible;
+
+            bool draw = (completedEdge && Settings.Graphics.ShowConnectionsForCompleted)
+                        || (lockedEdge && Settings.Graphics.ShowConnectionsForLocked)
+                        || (visibleEdge && Settings.Graphics.ShowConnectionsForVisible);
+            if (!draw)
                 continue;
 
-            if ((!Settings.Features.DrawHiddenNodeConnections || !Settings.Features.ProcessHiddenNodes) && (!destinationNode.IsVisible || !cachedNode.IsVisible))
-                continue;
-            
             // Reuse the neighbor's rect from the per-frame memo if it was already read this frame
             // (e.g. it's an on-screen selected node); otherwise this reads + caches it once.
             var destinationPos = GetNodeRect(destinationNode);
@@ -115,7 +127,10 @@ public partial class ExileMapsCore
             if (Settings.Graphics.DrawGradientLines) {
                 Color sourceColor = cachedNode.IsVisited ? Settings.Graphics.VisitedLineColor : cachedNode.IsUnlocked ? Settings.Graphics.UnlockedLineColor : Settings.Graphics.LockedLineColor;
                 Color destinationColor = destinationNode.IsVisited ? Settings.Graphics.VisitedLineColor : destinationNode.IsUnlocked ? Settings.Graphics.UnlockedLineColor : Settings.Graphics.LockedLineColor;
-                
+
+                sourceColor = ApplyLineOpacity(sourceColor);
+                destinationColor = ApplyLineOpacity(destinationColor);
+
                 if (sourceColor == destinationColor)
                     Graphics.DrawLine(nodeCurrentPosition.Center, destinationPos.Center, Settings.Graphics.MapLineWidth, sourceColor);
                 else
@@ -126,14 +141,22 @@ public partial class ExileMapsCore
 
                 if (destinationNode.IsUnlocked || cachedNode.IsUnlocked)
                     color = Settings.Graphics.UnlockedLineColor;
-                
+
                 if (destinationNode.IsVisited && cachedNode.IsVisited)
                     color = Settings.Graphics.VisitedLineColor;
 
+                color = ApplyLineOpacity(color);
                 Graphics.DrawLine(nodeCurrentPosition.Center, destinationPos.Center, Settings.Graphics.MapLineWidth, color);
             }
-            
         }
+    }
+
+    // Scales a line color's alpha by the global ConnectionLineOpacity (0-255). Preserves the
+    // per-state alpha differences (visited 196 / unlocked 170 / locked 51) while dimming everything.
+    private Color ApplyLineOpacity(Color c)
+    {
+        int a = (int)Math.Round(c.A * Settings.Graphics.ConnectionLineOpacity.Value / 255f);
+        return Color.FromArgb(Math.Clamp(a, 0, 255), c.R, c.G, c.B);
     }
 
     private void DrawMapNode(Node cachedNode, RectangleF nodeCurrentPosition)
