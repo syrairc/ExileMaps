@@ -9,6 +9,7 @@ using System.Text.Json;
 using GameOffsets2.Native;
 using ImGuiNET;
 using ExileMaps.Classes;
+using RectangleF = ExileCore2.Shared.RectangleF;
 
 namespace ExileMaps;
 
@@ -154,27 +155,8 @@ public partial class ExileMapsCore
         }
     }
 
-    // The expedition's member map node whose grid coord is closest to the button's own coord.
-    // Manhattan distance in grid space - cheap, deterministic, no dependency on what's on screen.
-    private Classes.Node NearestMapNode(Classes.Expedition e)
-    {
-        Vector2i best = default;
-        long bestDist = long.MaxValue;
-        bool found = false;
-
-        foreach (var c in e.MapCoords)
-        {
-            long dist = Math.Abs((long)c.X - e.SpawnCoord.X) + Math.Abs((long)c.Y - e.SpawnCoord.Y);
-            if (dist < bestDist) { bestDist = dist; best = c; found = true; }
-        }
-        if (!found) return null;
-
-        lock (mapCacheLock)
-            return mapCache.TryGetValue(best, out var node) ? node : null;
-    }
-
-    // One label per expedition at its nearest map node, gated behind ShowExpeditionMarkers.
-    // Reuses GetNodeRect - the same screen-position resolution every node draw already relies on.
+    // Draw the expedition icon at each region's current spawn node (the IsVisible button's coord).
+    // Gated behind ShowExpeditionMarkers. Skips off-screen / unresolved nodes.
     private void DrawExpeditionMarkers()
     {
         if (!Settings.Features.ShowExpeditionMarkers) return;
@@ -183,17 +165,21 @@ public partial class ExileMapsCore
         List<Classes.Expedition> snapshot;
         lock (mapCacheLock) snapshot = expeditions.ToList();
 
+        var fullUV = new RectangleF(0, 0, 1, 1);
         foreach (var e in snapshot)
         {
-            var node = NearestMapNode(e);
+            Node node;
+            lock (mapCacheLock)
+                if (!mapCache.TryGetValue(e.SpawnCoord, out node)) node = null;
             if (node == null) continue;
 
             var rect = GetNodeRect(node);
-            if (rect.IsEmpty) continue;
+            if (rect.IsEmpty || rect.Width <= 0) continue;
 
-            var center = rect.Center;
-            string label = ExpeditionLabel(e);
-            Graphics.DrawText(label, new Vector2(center.X, center.Y - rect.Height), Color.White);
+            // icon sits just above the node, sized to the node.
+            float size = MathF.Max(rect.Width, rect.Height);
+            var iconRect = new RectangleF(rect.Center.X - size / 2f, rect.Top - size, size, size);
+            Graphics.DrawImage("icon-expedition.png", iconRect, fullUV, Color.White);
         }
     }
 
