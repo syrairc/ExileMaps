@@ -160,6 +160,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private bool gameFilesScraped = false;
     private bool WaypointPanelIsOpen = false;
     private bool ShowMinimap = false;
+    private bool expeditionsPanelOpen = false;
+    private bool expeditionsPanelWasOpen = false;
 
 
     #endregion
@@ -347,6 +349,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (debugNodeOpen) DrawNodeDebugPanel();
         if (atlasOverviewOpen) DrawAtlasOverviewPanel(); else overviewWasOpen = false;
         if (toursPanelOpen) DrawToursPanel(); else toursPanelWasOpen = false;
+        if (expeditionsPanelOpen) DrawExpeditionsPanel(); else expeditionsPanelWasOpen = false;
         if (perf) PerfMonitor.Record("Panels", Stopwatch.GetTimestamp() - t0);
 
         DrawPerfMonitorOverlay();

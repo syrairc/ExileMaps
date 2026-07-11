@@ -113,6 +113,15 @@ public partial class ExileMapsCore
                 TooltipSize = new Vector2(145, 39),
                 GetOpen = () => false, Toggle = () => ExportAtlasHtml(),
             },
+            // Hidden (see DrawPanelButtonBar) unless expeditions are enabled and loaded.
+            new PanelButtonDef {
+                Key = "expeditions",
+                Normal = L("expeditions-normal.png"), Hover = L("expeditions-hover.png"),
+                Pressed = L("expeditions-pressed.png"), Tooltip = L("expeditions-tooltip.png"),
+                NormalSize = btnSz, PressedSize = btnSz,
+                TooltipSize = new Vector2(140, 39),
+                GetOpen = () => expeditionsPanelOpen, Toggle = () => expeditionsPanelOpen = !expeditionsPanelOpen,
+            },
         };
     }
 
@@ -765,10 +774,18 @@ public partial class ExileMapsCore
         if (!Settings.Features.ShowPanelButtons) return;
         if (panelButtons == null || panelButtons.Count == 0) return;
 
+        // Expeditions button only shows once expeditions are enabled and the atlas scan found some.
+        // Filter here (not a skip-and-continue inside the draw loop) so every downstream index,
+        // width, and SameLine decision is computed against the same visible list -- no gaps, no
+        // misaligned hover rects for wp/tours/atlas/export.
+        bool showExpeditions = Settings.Features.ShowExpeditions && ExpeditionsLoaded();
+        var visibleButtons = panelButtons.Where(d => d.Key != "expeditions" || showExpeditions).ToList();
+        if (visibleButtons.Count == 0) return;
+
         const float gap = 6f, pad = 10f, bottomMargin = 64f, hoverLift = 5f;
-        int count = panelButtons.Count;
+        int count = visibleButtons.Count;
         // Hit rect = NormalSize. Pressed sprite is the same size, centered over the same hit rect.
-        var btnSz = panelButtons[0].NormalSize;
+        var btnSz = visibleButtons[0].NormalSize;
         float barW = count * btnSz.X + (count - 1) * gap;
         float winW = barW + pad * 2f, winH = btnSz.Y + pad * 2f;
 
@@ -797,7 +814,7 @@ public partial class ExileMapsCore
 
                     for (int i = 0; i < count; i++)
                     {
-                        var def = panelButtons[i];
+                        var def = visibleButtons[i];
                         ImGui.InvisibleButton(def.Key, def.NormalSize);
 
                         bool hovered = ImGui.IsItemHovered();
