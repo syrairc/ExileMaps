@@ -44,4 +44,38 @@ public partial class ExileMapsCore
         }
         catch (Exception e) { LogError($"UpdateRumorData failed: {e.Message}"); }
     }
+
+    // Rebuild the expeditions snapshot from AtlasPanel.Buttons. Called inside RefreshMapCache.
+    private void SnapshotExpeditions()
+    {
+        var built = new List<Classes.Expedition>();
+        try
+        {
+            var buttons = AtlasPanel?.Buttons;
+            if (buttons != null)
+            {
+                foreach (var b in buttons)
+                {
+                    var exp = new Classes.Expedition
+                    {
+                        ButtonCoord = b.Coordinate,
+                        RegionCoord = b.RegionCoordinate,
+                    };
+                    var nodes = b.RegionNodes;
+                    if (nodes != null)
+                        foreach (var n in nodes)
+                            exp.MapCoords.Add(n.Coordinate);
+                    var rumors = b.Rumors;
+                    if (rumors != null)
+                        foreach (var (k, v) in rumors)
+                            exp.Rumors[k] = v;
+                    built.Add(exp);
+                }
+            }
+        }
+        catch (Exception e) { LogError($"SnapshotExpeditions failed: {e.Message}"); }
+
+        lock (mapCacheLock)
+            expeditions = built;
+    }
 }

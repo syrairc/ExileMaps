@@ -100,6 +100,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     // node from selectedNodes, so its icon/name are redrawn separately on top (DrawHoveredNodeOverTooltip).
     private bool mapTooltipVisible;
     private Dictionary<Vector2i, Node> mapCache = [];
+    // Snapshot of AtlasPanel.Buttons, rebuilt each cache refresh. Guarded by mapCacheLock.
+    private List<Classes.Expedition> expeditions = new();
     public bool refreshCache = false;
     private bool refreshingCache = false;
     // When set, the next background refresh clears the cache first (atlas reopen / area change).

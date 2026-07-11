@@ -88,6 +88,8 @@ public partial class ExileMapsCore
         UpdateWaypointPaths();
         PerfMonitor.Record("Cache.WaypointSync", Stopwatch.GetTimestamp() - t0);
 
+        SnapshotExpeditions();
+
         // Invalidate memoized step counts and atlas-panel list.
         mapCacheVersion++;
 
