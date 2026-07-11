@@ -284,6 +284,74 @@ public partial class ExileMapsCore
             ReadPopupRumors(ch, into, depth + 1);
     }
 
+    // When the rumours popup is up, draw a decode overlay beside it: the popup's CURRENT rumours
+    // (read from the popup itself, not Button.Rumors which is only the region's possible pool),
+    // decoded via RumorWeights and ordered by weight. Graphics-drawn so it tracks the popup.
+    private void DrawExpeditionOverlay()
+    {
+        if (!Settings.Features.ShowExpeditions) return;
+        if (ShowMinimap) return;
+        try
+        {
+            var popup = FindLogbookPopup();
+            if (popup == null) return;
+            RectangleF prect = popup.GetClientRect();
+            if (prect.Width <= 0 || prect.Height <= 0) return;
+
+            var texts = new List<string>();
+            ReadPopupRumors(popup, texts);
+
+            // decode current rumours, dedupe, order by weight desc. Unknown rumours still show (raw).
+            var rows = new List<(string content, string desc, float w)>();
+            var seen = new HashSet<string>();
+            foreach (var t in texts)
+            {
+                if (!seen.Add(t)) continue;
+                if (Settings.Expeditions.RumorWeights.TryGetValue(t, out var r))
+                    rows.Add((r.Content, r.Description, r.Weight));
+            }
+            if (rows.Count == 0) return;
+            rows.Sort((a, b) => b.w.CompareTo(a.w));
+
+            // Build the display lines (content header + indented description per rumour).
+            var lines = new List<(string text, System.Drawing.Color color)>();
+            lines.Add(("Rumours", Settings.Graphics.FontColor));
+            foreach (var (content, desc, _) in rows)
+            {
+                lines.Add(("- " + content, Settings.Graphics.FontColor));
+                if (!string.IsNullOrEmpty(desc))
+                    lines.Add(("    " + desc, System.Drawing.Color.FromArgb(180, 180, 180)));
+            }
+
+            // Measure box.
+            float pad = 8f, lineH = 0f, maxW = 0f;
+            foreach (var (text, _) in lines)
+            {
+                var m = Graphics.MeasureText(text);
+                if (m.X > maxW) maxW = m.X;
+                if (m.Y > lineH) lineH = m.Y;
+            }
+            float boxW = maxW + pad * 2f;
+            float boxH = lines.Count * lineH + pad * 2f;
+
+            // Place to the right of the popup; flip left if it would run off-screen.
+            float x = prect.Right + 8f;
+            var screen = GameController.Window.GetWindowRectangleTimeCache.Size;
+            if (x + boxW > screen.X) x = prect.Left - 8f - boxW;
+            float y = prect.Top;
+
+            var tl = new Vector2(x, y);
+            Graphics.DrawBox(tl, new Vector2(x + boxW, y + boxH), Settings.Graphics.BackgroundColor, 5f);
+            float cy = y + pad;
+            foreach (var (text, color) in lines)
+            {
+                Graphics.DrawText(text, new Vector2(x + pad, cy), color);
+                cy += lineH;
+            }
+        }
+        catch (Exception e) { LogError($"DrawExpeditionOverlay failed: {e.Message}"); }
+    }
+
     private void DrawExpeditionsPanel()
     {
         try
