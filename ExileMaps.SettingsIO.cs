@@ -191,6 +191,24 @@ public partial class ExileMapsCore
         }
     }
 
+    // Phase 2: map the old DrawWeightOnMap bool onto the new WeightDisplayMode enum, once.
+    private void MigrateContentDisplay()
+    {
+        try {
+            if (Settings.Profiles.ContentDisplayMigrated)
+                return;
+
+            Settings.Graphics.WeightDisplayMode = Settings.Maps.DrawWeightOnMap
+                ? WeightDisplayMode.IconAndValue
+                : WeightDisplayMode.None;
+
+            Settings.Profiles.ContentDisplayMigrated = true;
+            LogMessage("Migrated content-display settings to the new model.");
+        } catch (Exception e) {
+            LogError("Error migrating content-display settings: " + e.Message);
+        }
+    }
+
     // Locates this plugin's settings file: <ConfigDirectory>/<InternalName>_settings.json, falling back to any *_settings.json match.
     private string FindSettingsFilePath() {
         try {

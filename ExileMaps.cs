@@ -186,6 +186,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         // Build the label-style model from old settings on first run after upgrade.
         MigrateLabelStyles();
+        MigrateContentDisplay();
 
         // Rumours have no live game file to scrape, so seed them once here from the static json.
         UpdateRumorData();
