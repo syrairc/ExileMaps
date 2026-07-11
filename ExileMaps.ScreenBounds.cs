@@ -167,6 +167,22 @@ public partial class ExileMapsCore
                 mapTooltipVisible = true;
             }
 
+            // Don't draw connection lines over the expedition rumours popup (a top-level IngameUi
+            // child, not under WorldMap). Reuses the same exclude+segment machinery as the map tooltip.
+            if (Settings.Features.ShowExpeditions)
+            {
+                var logbook = FindLogbookPopup();
+                if (logbook != null)
+                {
+                    RectangleF lb = logbook.GetClientRect();
+                    if (lb.Width > 0 && lb.Height > 0)
+                    {
+                        cachedExcludeRects.Add(lb);
+                        mapTooltipVisible = true;
+                    }
+                }
+            }
+
             cachedExcludeRects.AddRange(cachedChromeRects);
 
             // Don't render over the fixed HUD elements (life/mana orbs, flask panel, skill bar).
