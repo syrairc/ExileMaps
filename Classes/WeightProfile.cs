@@ -46,5 +46,9 @@ namespace ExileMaps.Classes
         public Dictionary<string, MapProfileEntry> Maps { get; set; } = new();
         public Dictionary<string, ContentProfileEntry> Content { get; set; } = new();
         public Dictionary<string, BiomeProfileEntry> Biomes { get; set; } = new();
+
+        // Per-profile label look (base + Favorite/Content/Biome/Special overrides). Null on profiles
+        // saved before this feature; migration/LoadProfile backfill it.
+        public LabelStyleSettings Labels { get; set; }
     }
 }

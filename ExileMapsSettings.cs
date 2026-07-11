@@ -67,6 +67,9 @@ public class ExileMapsSettings : ISettings
         // properties in this class, like ActiveProfile/Profiles, are driven by code, not the settings menu).
         public bool OldSettingsMigrationHandled { get; set; } = false;
 
+        // Set once the label-style model has been migrated from the old scattered color settings.
+        public bool LabelStyleMigrated { get; set; } = false;
+
         [JsonIgnore]
         private string _profileEditName = "";
         [JsonIgnore]
@@ -125,6 +128,8 @@ public class ExileMapsSettings : ISettings
                     {
                         Weight = biome.Weight
                     };
+
+                profile.Labels = Main.Settings.Labels.Clone();
             }
         }
 
@@ -171,6 +176,10 @@ public class ExileMapsSettings : ISettings
                         biome.Weight = entry.Weight;
                 }
 
+                // Labels is pure user config (no game-scraped definitions), so replace wholesale.
+                if (profile.Labels != null)
+                    Main.Settings.Labels = profile.Labels.Clone();
+
                 // Live weights just changed; recompute cached node weights/colors and waypoints so the
                 // atlas reflects the new profile immediately (a refresh re-runs each Node.RecalculateWeight).
                 Main.OnProfileApplied();
@@ -196,6 +205,8 @@ public class ExileMapsSettings : ISettings
             foreach (var k in Main.Settings.Maps.Biomes.Biomes.Keys)
                 profile.Biomes[k] = new BiomeProfileEntry();
 
+            profile.Labels = LabelStyleSettings.Defaults();
+
             Profiles[name] = profile;
             ActiveProfile = name;
             LoadProfile(name);
@@ -220,7 +231,8 @@ public class ExileMapsSettings : ISettings
                 {
                     Maps = new Dictionary<string, MapProfileEntry>(source.Maps),
                     Content = new Dictionary<string, ContentProfileEntry>(source.Content),
-                    Biomes = new Dictionary<string, BiomeProfileEntry>(source.Biomes)
+                    Biomes = new Dictionary<string, BiomeProfileEntry>(source.Biomes),
+                    Labels = source.Labels?.Clone() ?? LabelStyleSettings.Defaults()
                 };
                 ActiveProfile = newName;
             }
@@ -398,6 +410,10 @@ public class ExileMapsSettings : ISettings
     public ExpeditionSettings Expeditions { get; set; } = new ExpeditionSettings();
     public HotkeySettings Keybinds { get; set; } = new HotkeySettings();
     public GraphicSettings Graphics { get; set; } = new GraphicSettings();
+
+    // Live label look rendering reads. Snapshotted into the active WeightProfile (see ProfileSettings).
+    public LabelStyleSettings Labels { get; set; } = LabelStyleSettings.Defaults();
+
     [Menu("Atlas Overview")]
     public AtlasOverviewSettings AtlasOverview { get; set; } = new AtlasOverviewSettings();
 
