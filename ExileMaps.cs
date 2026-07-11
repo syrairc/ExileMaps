@@ -518,6 +518,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         DrawProgressReadout();
         DrawSearchPing();
         DrawExpeditionHighlight();
+        DrawExpeditionMarkers();
 
         t0 = Stopwatch.GetTimestamp();
         DrawTours();

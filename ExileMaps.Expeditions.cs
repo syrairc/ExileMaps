@@ -142,6 +142,49 @@ public partial class ExileMapsCore
         }
     }
 
+    // The expedition's member map node whose grid coord is closest to the button's own coord.
+    // Manhattan distance in grid space - cheap, deterministic, no dependency on what's on screen.
+    private Classes.Node NearestMapNode(Classes.Expedition e)
+    {
+        Vector2i best = default;
+        long bestDist = long.MaxValue;
+        bool found = false;
+
+        foreach (var c in e.MapCoords)
+        {
+            long dist = Math.Abs((long)c.X - e.ButtonCoord.X) + Math.Abs((long)c.Y - e.ButtonCoord.Y);
+            if (dist < bestDist) { bestDist = dist; best = c; found = true; }
+        }
+        if (!found) return null;
+
+        lock (mapCacheLock)
+            return mapCache.TryGetValue(best, out var node) ? node : null;
+    }
+
+    // One label per expedition at its nearest map node, gated behind ShowExpeditionMarkers.
+    // Reuses GetNodeRect - the same screen-position resolution every node draw already relies on.
+    private void DrawExpeditionMarkers()
+    {
+        if (!Settings.Features.ShowExpeditionMarkers) return;
+        if (ShowMinimap) return;
+
+        List<Classes.Expedition> snapshot;
+        lock (mapCacheLock) snapshot = expeditions.ToList();
+
+        foreach (var e in snapshot)
+        {
+            var node = NearestMapNode(e);
+            if (node == null) continue;
+
+            var rect = GetNodeRect(node);
+            if (rect.IsEmpty) continue;
+
+            var center = rect.Center;
+            string label = ExpeditionLabel(e);
+            Graphics.DrawText(label, new Vector2(center.X, center.Y - rect.Height), Color.White);
+        }
+    }
+
     // true only if every map in the expedition is currently highlighted (so the checkbox reflects
     // a partial toggle as unchecked rather than silently lying).
     private bool IsExpeditionHighlighted(Classes.Expedition e)

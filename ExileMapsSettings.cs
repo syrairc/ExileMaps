@@ -458,6 +458,9 @@ public class FeatureSettings
     [Menu("Show Expeditions Button", "Show the expeditions panel button on the atlas when expedition regions are loaded.")]
     public ToggleNode ShowExpeditions { get; set; } = new ToggleNode(true);
 
+    [Menu("Show Expedition Markers", "Draw a marker + label on the atlas at each expedition's nearest map node.")]
+    public ToggleNode ShowExpeditionMarkers { get; set; } = new ToggleNode(false);
+
 }
 [Submenu(CollapsedByDefault = true)]
 public class HotkeySettings
