@@ -162,6 +162,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private bool ShowMinimap = false;
     private bool expeditionsPanelOpen = false;
     private bool expeditionsPanelWasOpen = false;
+    private string expSearchText = "";
 
 
     #endregion

@@ -109,6 +109,19 @@ public partial class ExileMapsCore
         return $"{best}  ({e.MapCoords.Count} maps)";
     }
 
+    // matches if search text is empty, or found in a rumour's raw text or its decoded content
+    private bool ExpeditionMatchesSearch(Classes.Expedition e, string text)
+    {
+        if (string.IsNullOrEmpty(text)) return true;
+        foreach (var (rumorText, _) in e.Rumors)
+        {
+            if (rumorText.Contains(text, StringComparison.OrdinalIgnoreCase)) return true;
+            if (Settings.Expeditions.RumorWeights.TryGetValue(rumorText, out var r)
+                && (r.Content?.Contains(text, StringComparison.OrdinalIgnoreCase) ?? false)) return true;
+        }
+        return false;
+    }
+
     private void DrawExpeditionsPanel()
     {
         try
@@ -122,6 +135,15 @@ public partial class ExileMapsCore
             {
                 SavePersistedWindow(Settings.Expeditions.PanelRect);
 
+                // search filters rumour text/content, case insensitive
+                string filter = expSearchText;
+                ImGui.SetNextItemWidth(260);
+                if (ImGui.InputTextWithHint("##expsearch", "Search rumors/content...", ref filter, 100))
+                    expSearchText = filter;
+                ImGui.SameLine();
+                if (ImGui.Button("Clear##expsearchclear")) expSearchText = "";
+                ImGui.Separator();
+
                 List<Classes.Expedition> snapshot;
                 lock (mapCacheLock) snapshot = expeditions.ToList();
 
@@ -130,8 +152,28 @@ public partial class ExileMapsCore
 
                 foreach (var e in snapshot.OrderByDescending(ExpeditionScore))
                 {
+                    if (!ExpeditionMatchesSearch(e, expSearchText)) continue;
+
                     ImGui.PushID($"exp_{e.ButtonCoord.X}_{e.ButtonCoord.Y}");
-                    ImGui.CollapsingHeader(ExpeditionLabel(e));
+                    if (ImGui.CollapsingHeader(ExpeditionLabel(e)))
+                    {
+                        foreach (var (text, count) in e.Rumors.OrderByDescending(kv =>
+                            Settings.Expeditions.RumorWeights.TryGetValue(kv.Key, out var r) ? r.Weight : 0f))
+                        {
+                            string content, desc;
+                            if (Settings.Expeditions.RumorWeights.TryGetValue(text, out var rw))
+                            { content = rw.Content; desc = rw.Description; }
+                            else { content = "(unknown content)"; desc = ""; }
+
+                            string countStr = count > 1 ? $"  x{count}" : "";
+                            ImGui.BulletText($"\"{text}\"{countStr}  ->  {content}");
+                            if (!string.IsNullOrEmpty(desc))
+                            {
+                                ImGui.SameLine();
+                                ImGui.TextDisabled($": {desc}");
+                            }
+                        }
+                    }
                     ImGui.PopID();
                 }
 
