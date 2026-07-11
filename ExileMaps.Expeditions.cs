@@ -51,9 +51,13 @@ public partial class ExileMapsCore
     }
 
     // Rebuild the expeditions snapshot from AtlasPanel.Buttons. Called inside RefreshMapCache.
+    // The game's own Buttons list can contain several AtlasButtonNode entries describing the same
+    // physical expedition (observed live - multiple distinct button objects sharing one underlying
+    // region-action-button reference), so dedupe on content rather than trusting one-row-per-button.
     private void SnapshotExpeditions()
     {
         var built = new List<Classes.Expedition>();
+        var seen = new HashSet<string>();
         try
         {
             var buttons = AtlasPanel?.Buttons;
@@ -74,6 +78,14 @@ public partial class ExileMapsCore
                     if (rumors != null)
                         foreach (var (k, v) in rumors)
                             exp.Rumors[k] = v;
+
+                    // same region + same maps + same rumours = the same real expedition, just a
+                    // repeated button entry - keep only the first one seen.
+                    string signature = $"{exp.RegionCoord.X}_{exp.RegionCoord.Y}|" +
+                        string.Join(",", exp.MapCoords.OrderBy(c => c.X).ThenBy(c => c.Y)) + "|" +
+                        string.Join(",", exp.Rumors.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"));
+                    if (!seen.Add(signature)) continue;
+
                     built.Add(exp);
                 }
             }
@@ -274,21 +286,33 @@ public partial class ExileMapsCore
 
                     if (ImGui.CollapsingHeader(ExpeditionLabel(e)))
                     {
-                        foreach (var (text, count) in e.Rumors.OrderByDescending(kv =>
-                            Settings.Expeditions.RumorWeights.TryGetValue(kv.Key, out var r) ? r.Weight : 0f))
+                        if (ImGui.BeginTable($"rumor_rows_{e.ButtonCoord.X}_{e.ButtonCoord.Y}", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
                         {
-                            string content, desc;
-                            if (Settings.Expeditions.RumorWeights.TryGetValue(text, out var rw))
-                            { content = rw.Content; desc = rw.Description; }
-                            else { content = "(unknown content)"; desc = ""; }
+                            ImGui.TableSetupColumn("Rumor", ImGuiTableColumnFlags.WidthFixed, 200);
+                            ImGui.TableSetupColumn("x", ImGuiTableColumnFlags.WidthFixed, 30);
+                            ImGui.TableSetupColumn("Content", ImGuiTableColumnFlags.WidthFixed, 160);
+                            ImGui.TableSetupColumn("Description", ImGuiTableColumnFlags.WidthStretch);
+                            ImGui.TableHeadersRow();
 
-                            string countStr = count > 1 ? $"  x{count}" : "";
-                            ImGui.BulletText($"\"{text}\"{countStr}  ->  {content}");
-                            if (!string.IsNullOrEmpty(desc))
+                            foreach (var (text, count) in e.Rumors.OrderByDescending(kv =>
+                                Settings.Expeditions.RumorWeights.TryGetValue(kv.Key, out var r) ? r.Weight : 0f))
                             {
-                                ImGui.SameLine();
-                                ImGui.TextDisabled($": {desc}");
+                                string content, desc;
+                                if (Settings.Expeditions.RumorWeights.TryGetValue(text, out var rw))
+                                { content = rw.Content; desc = rw.Description; }
+                                else { content = "(unknown content)"; desc = ""; }
+
+                                ImGui.TableNextRow();
+                                ImGui.TableNextColumn();
+                                ImGui.TextUnformatted($"\"{text}\"");
+                                ImGui.TableNextColumn();
+                                ImGui.TextUnformatted(count > 1 ? $"x{count}" : "");
+                                ImGui.TableNextColumn();
+                                ImGui.TextUnformatted(content);
+                                ImGui.TableNextColumn();
+                                ImGui.TextDisabled(desc);
                             }
+                            ImGui.EndTable();
                         }
                     }
                     ImGui.PopID();
