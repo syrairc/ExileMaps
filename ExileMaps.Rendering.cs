@@ -435,11 +435,15 @@ public partial class ExileMapsCore
         new(-1,  1), new(0,  1), new(1,  1),
     };
 
+    // Reused by ResolveLabelStyle so the per-node-per-frame label pass allocates nothing. Render-thread only.
+    private readonly LabelStyle _scratchLabelStyle = new();
+
     // Composes the final label look for a node: Base -> Favorite -> Biome -> Content -> Special,
     // higher layer wins each contested property. Multi-content/biome picks the highest-weight entry.
     private LabelStyle ResolveLabelStyle(Node node)
     {
-        var s = Settings.Labels.Base.Clone();
+        var s = _scratchLabelStyle;
+        s.CopyFrom(Settings.Labels.Base);
 
         if (node.IsFavorited)
             Settings.Labels.Favorite.ApplyTo(s);
@@ -812,6 +816,8 @@ public partial class ExileMapsCore
             }
             if (style.BoxVisible) {
                 float t = style.BorderVisible ? style.BorderThickness : 0;
+                t = MathF.Min(t, MathF.Min(boxSize.X, boxSize.Y) / 2f - 1f);
+                if (t < 0f) t = 0f;
                 var inset = new Vector2(t, t);
                 var box = Color.FromArgb(style.BoxOpacity, style.BoxColor.R, style.BoxColor.G, style.BoxColor.B);
                 Graphics.DrawBox(topLeft + inset, topLeft + boxSize - inset, box, 4.0f);

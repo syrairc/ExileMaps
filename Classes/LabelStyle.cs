@@ -34,6 +34,17 @@ namespace ExileMaps.Classes
 
         // Color is a struct and every other field is a value type, so a memberwise copy is a full clone.
         public LabelStyle Clone() => (LabelStyle)MemberwiseClone();
+
+        // Copy all fields from another style into this one (no allocation). All fields are value types.
+        public void CopyFrom(LabelStyle o)
+        {
+            TextScale = o.TextScale;
+            TextColor = o.TextColor; TextColorByWeight = o.TextColorByWeight;
+            StrokeEnabled = o.StrokeEnabled; StrokeColor = o.StrokeColor;
+            BoxVisible = o.BoxVisible; BoxColor = o.BoxColor; BoxOpacity = o.BoxOpacity; BoxColorByWeight = o.BoxColorByWeight;
+            BorderVisible = o.BorderVisible; BorderColor = o.BorderColor; BorderOpacity = o.BorderOpacity;
+            BorderColorByWeight = o.BorderColorByWeight; BorderThickness = o.BorderThickness;
+        }
     }
 
     // One override layer. Only fields whose Override* is true are applied; the rest fall through.
@@ -162,6 +173,7 @@ namespace ExileMaps.Classes
                 OverrideTextColor = true, TextColor = Color.FromArgb(255, 200, 80, 255),
                 OverrideBorderColor = true, BorderColor = Color.FromArgb(255, 200, 80, 255),
                 OverrideBorderColorByWeight = true, BorderColorByWeight = false,
+                OverrideTextColorByWeight = true, TextColorByWeight = false,
             };
             return s;
         }
