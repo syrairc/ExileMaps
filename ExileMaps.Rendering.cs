@@ -410,22 +410,32 @@ public partial class ExileMapsCore
 
     private void DrawWeight(Node cachedNode, RectangleF nodeCurrentPosition)
     {
-        if (!Settings.Maps.DrawWeightOnMap ||
+        if (Settings.Graphics.WeightDisplayMode == WeightDisplayMode.None ||
             (!cachedNode.IsVisible && !Settings.Maps.ShowMapNamesOnHiddenNodes) ||
             (cachedNode.IsUnlocked && !Settings.Maps.ShowMapNamesOnUnlockedNodes) ||
             (!cachedNode.IsUnlocked && !Settings.Maps.ShowMapNamesOnLockedNodes) ||
             cachedNode.IsVisited || !cachedNode.MapType.Highlight)
-            return;  
+            return;
 
         float norm = (maxMapWeight - minMapWeight) > 0
             ? (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight)
             : 0.5f;
         norm = Math.Clamp(norm, 0f, 1f);
+        Color wc = ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, norm);
 
-        float offsetX = Settings.Maps.ShowMapNames ? (Graphics.MeasureText(MapLabelText(cachedNode)).X / 2) + 30 : 50;
-        Vector2 position = new(nodeCurrentPosition.Center.X + offsetX + Settings.Graphics.MapNameOffsetX, nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY);
+        float offsetX = Settings.Maps.ShowMapNames ? (Graphics.MeasureText(MapLabelText(cachedNode)).X / 2) + 20 : 40;
+        Vector2 discCenter = new(nodeCurrentPosition.Center.X + offsetX + Settings.Graphics.MapNameOffsetX,
+                                 nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY);
 
-        DrawCenteredTextWithBackground($"{cachedNode.Weight:0}", position, ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, norm), Settings.Graphics.BackgroundColor, true, 10, 3);
+        float r = Settings.Graphics.WeightIconSize / 2f;
+        Graphics.DrawCircleFilled(discCenter, r, wc, 16);
+
+        if (Settings.Graphics.WeightDisplayMode == WeightDisplayMode.IconAndValue) {
+            var text = $"{cachedNode.Weight:0}";
+            Vector2 textPos = new(discCenter.X + r + 4, discCenter.Y);
+            DrawCenteredTextWithBackground(text, new Vector2(textPos.X + Graphics.MeasureText(text).X / 2f, textPos.Y),
+                wc, Settings.Graphics.BackgroundColor, true, 8, 3);
+        }
     }
     // 8 neighbor offsets for a 1px text stroke (ported from ExileNameplates DataTextRenderer).
     private static readonly Vector2[] LabelStrokeOffsets =
