@@ -126,6 +126,7 @@ public partial class ExileMapsCore
         ImGui.SeparatorText("Overlay");
         DrawHolder("Show Panel Buttons");
         DrawHolder("Show Atlas Search Box");
+        DrawHolder("Show Expeditions Button");
         DrawHolder("Debug Mode");
 
         ImGui.SeparatorText("Profiles");
@@ -210,6 +211,7 @@ public partial class ExileMapsCore
         if (ImGui.CollapsingHeader("Content Weights"))
             DrawCustom(Settings.Maps?.Content?.CustomContentSettings?.DrawDelegate);
 
+        DrawHolder("Show Expedition Markers");
         if (ImGui.CollapsingHeader("Expedition Rumor Weights"))
             DrawCustom(Settings.Expeditions?.RumorWeightsEditor?.DrawDelegate);
     }
