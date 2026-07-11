@@ -209,6 +209,9 @@ public partial class ExileMapsCore
 
         if (ImGui.CollapsingHeader("Content Weights"))
             DrawCustom(Settings.Maps?.Content?.CustomContentSettings?.DrawDelegate);
+
+        if (ImGui.CollapsingHeader("Expedition Rumor Weights"))
+            DrawCustom(Settings.Expeditions?.RumorWeightsEditor?.DrawDelegate);
     }
 
     private void DrawWaypointsTab()

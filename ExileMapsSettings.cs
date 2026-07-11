@@ -395,6 +395,7 @@ public class ExileMapsSettings : ISettings
 
     public ProfileSettings Profiles { get; set; } = new();
     public FeatureSettings Features { get; set; } = new FeatureSettings();
+    public ExpeditionSettings Expeditions { get; set; } = new ExpeditionSettings();
     public HotkeySettings Keybinds { get; set; } = new HotkeySettings();
     public GraphicSettings Graphics { get; set; } = new GraphicSettings();
     [Menu("Atlas Overview")]
@@ -453,6 +454,9 @@ public class FeatureSettings
 
     [Menu("Show Atlas Search Box", "Show a floating search box at the top-center of the atlas that pings matching nodes (same as the Atlas Overview search).")]
     public ToggleNode ShowAtlasSearchBox { get; set; } = new ToggleNode(true);
+
+    [Menu("Show Expeditions Button", "Show the expeditions panel button on the atlas when expedition regions are loaded.")]
+    public ToggleNode ShowExpeditions { get; set; } = new ToggleNode(true);
 
 }
 [Submenu(CollapsedByDefault = true)]
@@ -1951,5 +1955,91 @@ public static class SettingsHelpers {
         if (ImGui.Button("Dismiss##old_settings_banner"))
             Main.DismissDetectedOldSettings();
         ImGui.Separator();
+    }
+}
+
+// MARK: ExpeditionSettings
+public class ExpeditionSettings
+{
+    [JsonIgnore]
+    public CustomNode RumorWeightsEditor { get; set; }
+
+    // Rumour text -> editable weight row. Seeded from json/rumors.json, persisted per profile.
+    public ObservableDictionary<string, Rumor> RumorWeights { get; set; } = [];
+
+    public ColorNode HighlightColor { get; set; } = new ColorNode(Color.FromArgb(220, 90, 200, 255));
+
+    [JsonIgnore]
+    public PanelRect PanelRect { get; set; } = new PanelRect();
+
+    // editor-only ui state
+    private string rumorSearchFilter = "";
+    private float bulkRumorWeight = 25f;
+
+    public ExpeditionSettings()
+    {
+        RumorWeightsEditor = new CustomNode
+        {
+            DrawDelegate = () =>
+            {
+                ImGui.Spacing();
+                ImGui.TextWrapped("CTRL+Click a slider to type a value. Higher weight ranks an expedition higher in the panel.");
+                ImGui.Spacing();
+
+                string filter = rumorSearchFilter;
+                ImGui.SetNextItemWidth(250);
+                if (ImGui.InputTextWithHint("##rumorsearch", "Search rumors/content...", ref filter, 100))
+                    rumorSearchFilter = filter;
+                ImGui.SameLine();
+                if (ImGui.Button("Clear##rumorsearchclear"))
+                    rumorSearchFilter = "";
+
+                var visible = RumorWeights
+                    .Where(x => string.IsNullOrEmpty(rumorSearchFilter)
+                        || (x.Value.Content?.Contains(rumorSearchFilter, StringComparison.OrdinalIgnoreCase) ?? false)
+                        || (x.Value.Text?.Contains(rumorSearchFilter, StringComparison.OrdinalIgnoreCase) ?? false))
+                    .OrderByDescending(x => x.Value.Weight)
+                    .ToList();
+                var rumorValues = visible.Select(x => x.Value).ToList();
+
+                if (ImGui.BeginTable("rumor_table", 3, ImGuiTableFlags.Borders))
+                {
+                    ImGui.TableSetupColumn("Rumor", ImGuiTableColumnFlags.WidthFixed, 200);
+                    ImGui.TableSetupColumn("Content", ImGuiTableColumnFlags.WidthStretch, 250);
+                    ImGui.TableSetupColumn("Weight", ImGuiTableColumnFlags.WidthFixed, 160);
+                    ImGui.TableHeadersRow();
+
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    ImGui.Text("Set all");
+                    ImGui.TableNextColumn();
+                    ImGui.TableNextColumn();
+                    SettingsHelpers.SetAllWeight("rumorweight", ref bulkRumorWeight, 0f, 100f, "%.0f", rumorValues, (r, w) => r.Weight = w);
+
+                    foreach (var (key, rumor) in visible)
+                    {
+                        ImGui.PushID($"Rumor_{key}");
+                        ImGui.TableNextRow();
+
+                        ImGui.TableNextColumn();
+                        ImGui.Text(rumor.Text);
+                        if (ImGui.IsItemHovered() && !string.IsNullOrEmpty(rumor.Description))
+                            ImGui.SetTooltip(rumor.Description);
+
+                        ImGui.TableNextColumn();
+                        ImGui.Text(rumor.Content);
+
+                        ImGui.TableNextColumn();
+                        float w = rumor.Weight;
+                        ImGui.SetNextItemWidth(150);
+                        if (ImGui.SliderFloat("##rw", ref w, 0f, 100f, "%.0f"))
+                            rumor.Weight = w;
+
+                        ImGui.PopID();
+                    }
+                    ImGui.EndTable();
+                }
+            }
+        };
     }
 }
