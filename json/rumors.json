@@ -1,0 +1,22 @@
+{
+  "Fallen stars...":       { "content": "Moor of Fallen Skies", "description": "High-value Perfect Flux drops and Verisium remnants", "defaultWeight": 95 },
+  "Crazed Chieftain...":   { "content": "Jade Isles",           "description": "Three Manoki bosses, Lineage Support Gem drops", "defaultWeight": 90 },
+  "Cold as ice...":        { "content": "Frigid Bluffs",        "description": "Exclusive Old Expedition loot, infinite respawns", "defaultWeight": 85 },
+  "Stardrinker...":        { "content": "Secluded Temple",      "description": "Uhtred boss, rare mana items (700+ Divines)", "defaultWeight": 85 },
+  "Nothin' to drink...":   { "content": "Stagnant Basin",       "description": "Consistent high-quantity oil drops", "defaultWeight": 85 },
+  "Sulphite!":             { "content": "Scorched Cay",         "description": "Enhanced item rarity, mixed loot, open layout", "defaultWeight": 75 },
+  "Endless cliffs...":     { "content": "Craggy Peninsula",     "description": "Item rarity boost, infinite Rogue Exile spawns", "defaultWeight": 75 },
+  "Unknown ruins...":      { "content": "Exhumed Ruins",        "description": "Precursor Leylines unlock free islands", "defaultWeight": 55 },
+  "All that glitters...":  { "content": "Castaway",             "description": "500-1000% increased Gold, all drops convert to currency", "defaultWeight": 55 },
+  "Origin of the fall...": { "content": "Obscure Island",       "description": "Olroth boss, guarantees a Pinnacle Boss key", "defaultWeight": 55 },
+  "Warm but risky...":     { "content": "Grazed Prairie",       "description": "Experience gains, Beyond monsters, some unreachable", "defaultWeight": 45 },
+  "Somethin' fishy...":    { "content": "Barren Atoll",         "description": "Gold drops, pearl amulets, chance for Merville", "defaultWeight": 30 },
+  "Bleak and awful...":    { "content": "Bleached Shoals",      "description": "Strongbox spawns, ship wreckage settlement", "defaultWeight": 30 },
+  "It's dry at least...":  { "content": "Sloughed Gully",       "description": "Increased monster effectiveness only, minimal reward", "defaultWeight": 15 },
+  "Wild roaming free...":  { "content": "Lush Isle",            "description": "200% experience, poor loot, unreachable mobs", "defaultWeight": 15 },
+  "A good fellow...":      { "content": "Moment of Zen",        "description": "Travelling merchant, unpredictable wares", "defaultWeight": 15 },
+  "Almost paradise.":      { "content": "Untainted Paradise",   "description": "200-400% increased Experience, but no item drops", "defaultWeight": 5 },
+  "Reflective waters...":  { "content": "Fractured Lake",       "description": "Mirrored rare monsters, but low-value ring bases", "defaultWeight": 5 },
+  "End of the circle...":  { "content": "Sprawling Jungle",     "description": "Medved boss, no valuable endgame reward", "defaultWeight": 5 },
+  "The last to fall...":   { "content": "Mournful Cliffside",   "description": "Vorana boss, minimal profit potential", "defaultWeight": 5 }
+}
