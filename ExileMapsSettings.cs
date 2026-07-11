@@ -76,6 +76,9 @@ public class ExileMapsSettings : ISettings
         // Set once the Phase 2 content-display settings have been migrated from the old bool flags.
         public bool ContentDisplayMigrated { get; set; } = false;
 
+        // Set once the Phase 3 connection-line settings have been seeded from the old Features toggles.
+        public bool ConnectionSettingsMigrated { get; set; } = false;
+
         [JsonIgnore]
         private string _profileEditName = "";
         [JsonIgnore]
@@ -754,6 +757,24 @@ public class GraphicSettings
 
     [Menu("Locked Line Color", "Color of the map connection lines when no adjacent nodes are unlocked.")]
     public ColorNode LockedLineColor { get; set; } = new ColorNode(Color.FromArgb(51, 149, 20, 20));
+
+    [Menu("Show Connection Lines", "Master toggle for the lines drawn between adjacent atlas nodes.")]
+    public ToggleNode ShowConnectionLines { get; set; } = new ToggleNode(true);
+
+    [JsonIgnore]
+    public CustomNode SepConnectionConditions { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Show lines for") };
+
+    [Menu("Connections for Completed Maps", "Draw lines touching a completed or visited node.")]
+    public ToggleNode ShowConnectionsForCompleted { get; set; } = new ToggleNode(true);
+
+    [Menu("Connections for Locked Maps", "Draw lines touching a locked node (not unlocked, not visited).")]
+    public ToggleNode ShowConnectionsForLocked { get; set; } = new ToggleNode(true);
+
+    [Menu("Connections for Visible Maps", "Draw lines between two visible (revealed) nodes.")]
+    public ToggleNode ShowConnectionsForVisible { get; set; } = new ToggleNode(true);
+
+    [Menu("Connection Line Opacity", "Global dimmer for all connection lines. Scales each line color's alpha; keeps the per-state color differences.")]
+    public RangeNode<int> ConnectionLineOpacity { get; set; } = new RangeNode<int>(255, 0, 255);
 
     [Menu("Distance Marker Scale", "Interpolation factor for distance markers on lines")]
     public RangeNode<float> LabelInterpolationScale { get; set; } = new RangeNode<float>(0.83f, 0, 1);

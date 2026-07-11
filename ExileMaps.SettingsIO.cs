@@ -209,6 +209,24 @@ public partial class ExileMapsCore
         }
     }
 
+    // One-time: seed the Phase 3 connection toggles from the old Features toggles so existing users
+    // see no change. Master + locked + opacity keep their defaults (no old equivalent).
+    private void MigrateConnectionSettings()
+    {
+        try {
+            if (Settings.Profiles.ConnectionSettingsMigrated)
+                return;
+
+            Settings.Graphics.ShowConnectionsForCompleted.Value = Settings.Features.DrawVisitedNodeConnections;
+            Settings.Graphics.ShowConnectionsForVisible.Value = Settings.Features.DrawHiddenNodeConnections;
+
+            Settings.Profiles.ConnectionSettingsMigrated = true;
+            LogMessage("Migrated connection-line settings to the new model.");
+        } catch (Exception e) {
+            LogError("Error migrating connection-line settings: " + e.Message);
+        }
+    }
+
     // Locates this plugin's settings file: <ConfigDirectory>/<InternalName>_settings.json, falling back to any *_settings.json match.
     private string FindSettingsFilePath() {
         try {
