@@ -99,7 +99,7 @@ public partial class ExileMapsCore
 
             var rect = node.MapNode.Element.GetClientRect();
             DrawMapNode(node, rect);            // fill icon (skips special maps)
-            DrawContentIcons(node, rect);       // per-content-type icon PNGs
+            DrawContentRow(node, rect);          // content-type icon row
             DrawSpecialIndicator(node, rect);   // special-map icon
             using (Graphics.SetTextScale(1.0f)) // 1.0 for the normal name; special name self-scales
                 DrawMapName(node, rect);        // normal map name (skips special maps)
@@ -652,125 +652,103 @@ public partial class ExileMapsCore
         "Expedition", "Abyss", "Delirium", "Incursion", "Ritual",
     };
 
-    // Draws per-content-type icon PNGs (icon-breach.png etc.) in a horizontal row near the node.
-    private void DrawContentIcons(Node cachedNode, RectangleF nodeCurrentPosition)
+    // Draws the node's content-type icons in a horizontal row centered below the map name, expanding
+    // symmetrically. Draws ALL highlighted content types (no game-drawn dedup, no blank fallback);
+    // unknown content with no icon is skipped. Badges content that awards an atlas point.
+    private void DrawContentRow(Node cachedNode, RectangleF nodeCurrentPosition)
     {
         try {
-            if (!ContentIconsEnabled || loadedContentIcons.Count == 0)
+            if (!Settings.Graphics.ShowContentRow || loadedContentIcons.Count == 0)
                 return;
             if (cachedNode.IsVisited && !cachedNode.IsAttempted)
                 return;
             if (!cachedNode.MapType.Highlight)
                 return;
 
-            // Zoom factor: screen-px-per-art-unit normalized so it's 1.0 at full zoom (the size/offset
-            // the settings are tuned at), shrinking as the atlas zooms out. ArtWidth is zoom-independent,
-            // so normal (40) and large (65) maps yield the same factor at a given zoom.
+            bool visGateFails =
+                (!Settings.Maps.Content.ShowRingsOnLockedNodes && !cachedNode.IsUnlocked) ||
+                (!Settings.Maps.Content.ShowRingsOnUnlockedNodes && cachedNode.IsUnlocked) ||
+                (!Settings.Maps.Content.ShowRingsOnHiddenNodes && !cachedNode.IsVisible);
+            if (visGateFails)
+                return;
+
+            // Zoom factor: screen-px-per-art-unit normalized to 1.0 at full zoom (see the old row).
             float artW = cachedNode.ArtWidth > 1f ? cachedNode.ArtWidth : 40f;
             float mag = nodeCurrentPosition.Width / artW;
             if (mag > maxNodeZoomMagnification) maxNodeZoomMagnification = mag;
             float zoom = maxNodeZoomMagnification > 0.0001f ? mag / maxNodeZoomMagnification : 1f;
 
             float size = Settings.Graphics.ContentIconSize * zoom;
-            float h = size * (1f - Settings.Graphics.ContentIconFlatten);
             float spacing = Settings.Graphics.ContentIconSpacing * zoom;
             Color tint = Settings.Graphics.ContentIconTint;
             var fullUV = new RectangleF(0, 0, 1, 1);
-            bool blankLoaded = loadedContentIcons.Contains(BlankContentIcon);
 
-            // Reused scratch list (cleared here) so a fresh List isn't allocated per node per frame.
+            // Collect distinct icon files (dedup by file so boss variants share one). content name kept
+            // for tooltip + atlas-point badge match.
             var icons = contentIconScratch;
             icons.Clear();
 
-            // Adds an icon for a content name (dedup-aware): the matching icon-<content>.png, or the
-            // blank icon (user-tinted) when there's no file for it. Plain loops instead of icons.Any
-            // so the dedup check doesn't allocate a closure per call.
             void AddIcon(string contentName) {
                 var iconName = ResolveContentIconFile(contentName);
-                if (iconName != null) {
-                    // Known content: dedup by icon file (boss variants share one icon).
-                    for (int j = 0; j < icons.Count; j++)
-                        if (icons[j].file == iconName)
-                            return;
-                    icons.Add((iconName, contentName, tint));
-                } else if (blankLoaded) {
-                    // Unknown content (no matching icon-<content>.png): blank icon in the user color.
-                    // Dedup by content name so distinct unknowns each show, but not duplicated.
-                    for (int j = 0; j < icons.Count; j++)
-                        if (icons[j].file == BlankContentIcon && icons[j].content == contentName)
-                            return;
-                    icons.Add((BlankContentIcon, contentName, Settings.Graphics.UnknownContentColor));
-                }
+                if (iconName == null)
+                    return;
+                for (int j = 0; j < icons.Count; j++)
+                    if (icons[j].file == iconName)
+                        return;
+                icons.Add((iconName, contentName, tint));
             }
 
-            bool visGateFails =
-                (!Settings.Maps.Content.ShowRingsOnLockedNodes && !cachedNode.IsUnlocked) ||
-                (!Settings.Maps.Content.ShowRingsOnUnlockedNodes && cachedNode.IsUnlocked) ||
-                (!Settings.Maps.Content.ShowRingsOnHiddenNodes && !cachedNode.IsVisible);
-
             foreach (var (contentName, content) in cachedNode.Content) {
-                if (visGateFails || !content.Highlight)
+                if (!content.Highlight)
                     continue;
-
-                // The game draws its own icon for most content with an AtlasIcon, but only on visible
-                // nodes - fogged nodes show no in-game content. So skip ours only when the node is visible
-                // and the game already shows that content (avoid a duplicate); always draw on fogged nodes.
-                // League mechanics (AlwaysDrawContent) are exempt: the game never draws an icon for them.
-                if (Settings.Graphics.ContentIconsSkipGameDrawn && cachedNode.IsVisible
-                    && !string.IsNullOrEmpty(content.AtlasIcon)
-                    && !AlwaysDrawContent.Contains(contentName))
-                    continue;
-
                 AddIcon(contentName);
             }
 
-            // League atlas-tree content (Breach/Abyss/Incursion/Delirium/Ritual) is detected via the
-            // atlas passive, not ContentIdentity, so it isn't in node.Content. Draw its icon from
-            // AtlasPointType - the game never draws an in-game icon for these.
-            if (!visGateFails && !string.IsNullOrEmpty(cachedNode.AtlasPointType))
+            // League atlas-tree content (Breach/Abyss/Incursion/Delirium/Ritual) isn't in node.Content;
+            // it comes off AtlasPointType. The game never draws an icon for it, so always add it.
+            if (!string.IsNullOrEmpty(cachedNode.AtlasPointType))
                 AddIcon(cachedNode.AtlasPointType);
 
             if (icons.Count == 0)
                 return;
 
-            // Anchor the row above the node's in-game icon cluster (Element[0][0]) so our icons sit above
-            // the game's own content icons; fall back to the node center when the child rect isn't readable.
-            // Non-visible (fogged) nodes don't show in-game content icons, so don't anchor above them -
-            // that would offset our row too high. Anchor to the in-game icons only on visible nodes.
-            float anchorTop = nodeCurrentPosition.Center.Y;
-            if (Settings.Graphics.ContentIconsAboveGameIcons && cachedNode.IsVisible) {
-                try {
-                    var host = cachedNode.MapNode?.Element?.GetChildAtIndex(0)?.GetChildAtIndex(0);
-                    if (host != null) {
-                        var hostRect = host.GetClientRect();
-                        if (hostRect.Width > 0 && hostRect.Height > 0)
-                            anchorTop = hostRect.Top;
-                    }
-                } catch (Exception e) {
-                    DebugSwallow("DrawContentIcons: anchor rect", e);
-                }
-            }
-
+            // Row centered on the node, anchored below the name (tracks MapNameOffsetY so it follows the
+            // name). ContentRowOffsetY is zoom-scaled; MapNameOffsetY is not, matching the name itself.
             float totalWidth = icons.Count * size + (icons.Count - 1) * spacing;
             float startX = nodeCurrentPosition.Center.X - totalWidth / 2f;
-            float centerY = anchorTop + Settings.Graphics.ContentIconOffsetY * zoom;
+            float centerY = nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY
+                          + Settings.Graphics.ContentRowOffsetY * zoom;
 
-            // Record the row's top Y so the atlas-point/quest indicators can sit above it.
-            contentRowTopByCoord[cachedNode.Coordinates] = centerY - h / 2f;
+            // Record the row's top Y so the atlas-point/quest indicators clear it vertically.
+            contentRowTopByCoord[cachedNode.Coordinates] = centerY - size / 2f;
+
+            bool badge = Settings.Graphics.ShowAtlasPointBadge && cachedNode.GivesAtlasPoint
+                         && !string.IsNullOrEmpty(cachedNode.AtlasPointType);
+            float badgeSize = Settings.Graphics.AtlasPointBadgeSize * zoom;
 
             for (int i = 0; i < icons.Count; i++) {
                 float x = startX + i * (size + spacing);
-                var iconRect = new RectangleF(x, centerY - h / 2f, size, h);
+                var iconRect = new RectangleF(x, centerY - size / 2f, size, size);
                 Graphics.DrawImage(icons[i].file, iconRect, fullUV, icons[i].tint);
-                contentIconRects.Add((iconRect, icons[i].content));
+
+                if (Settings.Graphics.ContentTooltips)
+                    contentIconRects.Add((iconRect, icons[i].content));
+
+                // Star badge centered on the icon's bottom edge for the content that grants the point.
+                if (badge && customIconsLoaded
+                    && string.Equals(icons[i].content, cachedNode.AtlasPointType, StringComparison.OrdinalIgnoreCase)) {
+                    var badgeCenter = new Vector2(iconRect.Center.X, iconRect.Bottom);
+                    DrawNodeSprite(badgeCenter, badgeSize, badgeSize, SpriteIcon.Star8,
+                        Settings.Graphics.AtlasPointBadgeColor, allowFlatten: false);
+                }
             }
         } catch (Exception e) {
-            LogError("Error drawing content icons: " + e.Message);
+            LogError("Error drawing content row: " + e.Message);
         }
     }
 
     // Shows the content name as a tooltip when the cursor is over a content icon drawn this frame.
-    // contentIconRects is populated by DrawContentIcons; checked topmost-last so stacked icons resolve
+    // contentIconRects is populated by DrawContentRow; checked topmost-last so stacked icons resolve
     // to the one drawn last. Drawn near the cursor, after all other passes.
     private void DrawContentIconTooltip()
     {

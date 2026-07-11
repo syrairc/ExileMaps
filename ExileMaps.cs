@@ -90,7 +90,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private readonly Dictionary<string, string> contentIconFileCache = new(StringComparer.OrdinalIgnoreCase);
     // Biome-name -> resolved biome-<x>.png file (null = no file). Sibling of contentIconFileCache.
     private readonly Dictionary<string, string> biomeIconFileCache = new(StringComparer.OrdinalIgnoreCase);
-    // Reused across DrawContentIcons calls so the per-node icon list isn't reallocated every frame.
+    // Reused across DrawContentRow calls so the per-node icon list isn't reallocated every frame.
     private readonly List<(string file, string content, Color tint)> contentIconScratch = [];
     // Per-frame memo of node screen rects. Element.GetClientRect() walks the parent chain (a
     // process-memory read per ancestor) on every call, and the same node is needed by the line and
@@ -476,20 +476,14 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 }
                 if (perf) PerfMonitor.Record("Render.Fills", Stopwatch.GetTimestamp() - t0);
 
-                // 3. Rings
-                t0 = Stopwatch.GetTimestamp();
-                foreach (var (node, rect) in nodePositions)
-                    DrawNodeRings(node, rect);
-                if (perf) PerfMonitor.Record("Render.Rings", Stopwatch.GetTimestamp() - t0);
-
-                // 3b. Content icons (game-style per-type PNGs above each node)
+                // 3. Content row (per-type icon PNGs below the map name)
                 t0 = Stopwatch.GetTimestamp();
                 contentIconRects.Clear();
                 contentRowTopByCoord.Clear();
                 indicatorBaseTopByCoord.Clear();
                 foreach (var (node, rect) in nodePositions)
-                    DrawContentIcons(node, rect);
-                if (perf) PerfMonitor.Record("Render.ContentIcons", Stopwatch.GetTimestamp() - t0);
+                    DrawContentRow(node, rect);
+                if (perf) PerfMonitor.Record("Render.ContentRow", Stopwatch.GetTimestamp() - t0);
 
                 // 3c-3f. Indicators (favorites, special, atlas-point, atlas-quest)
                 t0 = Stopwatch.GetTimestamp();
