@@ -157,8 +157,7 @@ public partial class ExileMapsCore
         ImGui.SeparatorText("Map Labels");
         DrawHolder("Map Name Offset X");
         DrawHolder("Map Name Offset Y");
-        DrawHolder("Legacy Map Name Styling");
-        DrawCustom(Settings.Graphics?.MapNameStylePicker?.DrawDelegate);
+        DrawLabelStyleSection();
     }
 
     private void DrawMapsTab()
