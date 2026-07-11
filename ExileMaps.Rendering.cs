@@ -643,6 +643,12 @@ public partial class ExileMapsCore
             foreach (var (contentName, content) in cachedNode.Content) {
                 if (!content.Highlight)
                     continue;
+                // game draws its own icon on visible nodes for content with an atlas icon (map boss,
+                // expedition, unique map...). skip ours to avoid a dup. fogged nodes show no in-game
+                // content, so we still draw there.
+                if (Settings.Graphics.ContentIconsSkipGameDrawn && cachedNode.IsVisible
+                    && !string.IsNullOrEmpty(content.AtlasIcon))
+                    continue;
                 AddIcon(contentName);
             }
 

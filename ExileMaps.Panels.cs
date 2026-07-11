@@ -213,6 +213,7 @@ public partial class ExileMapsCore
         DrawHolder("Content Icon Spacing");
         DrawHolder("Content Row Offset Y");
         DrawHolder("Content Icon Tint");
+        DrawHolder("Skip Game-drawn Content");
         DrawHolder("Content Tooltips");
         DrawHolder("Show Biome Icon");
         DrawHolder("Biome Icon Size");
