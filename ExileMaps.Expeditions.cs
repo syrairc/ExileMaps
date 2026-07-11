@@ -374,6 +374,7 @@ public partial class ExileMapsCore
                 ImGui.SameLine();
                 if (ImGui.Button("Clear##expsearchclear")) expSearchText = "";
                 ImGui.Separator();
+                ImGui.TextDisabled("Possible rumours for the region. Actual roll shows on hover on the atlas.");
 
                 List<Classes.Expedition> snapshot;
                 lock (mapCacheLock) snapshot = expeditions.ToList();
@@ -400,7 +401,7 @@ public partial class ExileMapsCore
                     {
                         if (ImGui.BeginTable($"rumor_rows_{e.RegionCoord.X}_{e.RegionCoord.Y}", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
                         {
-                            ImGui.TableSetupColumn("Rumor", ImGuiTableColumnFlags.WidthFixed, 200);
+                            ImGui.TableSetupColumn("Possible Rumor", ImGuiTableColumnFlags.WidthFixed, 200);
                             ImGui.TableSetupColumn("x", ImGuiTableColumnFlags.WidthFixed, 30);
                             ImGui.TableSetupColumn("Content", ImGuiTableColumnFlags.WidthFixed, 160);
                             ImGui.TableSetupColumn("Description", ImGuiTableColumnFlags.WidthStretch);
