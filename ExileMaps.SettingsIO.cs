@@ -1,5 +1,6 @@
 ﻿// Settings I/O: profile management, import/export, v1 migration, file dialogs.
 using System;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -135,6 +136,58 @@ public partial class ExileMapsCore
             LogMessage($"Detected pre-rework settings; backed up to {backup}. Import available in plugin settings.");
         } catch (Exception e) {
             LogError("Error detecting old settings: " + e.Message);
+        }
+    }
+
+    // One-time: build the new label-style model from the old scattered color settings, then backfill
+    // every existing profile so switching profiles right after upgrade doesn't snap to raw defaults.
+    private void MigrateLabelStyles()
+    {
+        try {
+            if (Settings.Profiles.LabelStyleMigrated)
+                return;
+
+            var g = Settings.Graphics;
+            var migrated = LabelStyleSettings.Defaults();
+
+            Color font = g.FontColor;
+            migrated.Base.TextColor = Color.FromArgb(255, font.R, font.G, font.B);
+
+            Color bg = g.BackgroundColor;
+            migrated.Base.BoxColor = Color.FromArgb(255, bg.R, bg.G, bg.B);
+            migrated.Base.BoxOpacity = bg.A;
+
+            migrated.Base.TextColorByWeight = g.MapNameTextColorSource == LabelColorSource.Weight;
+            migrated.Base.BorderColorByWeight = g.MapNameBorderColorSource == LabelColorSource.Weight;
+
+            if (g.MapNameTextColorSource == LabelColorSource.Static) {
+                var c = g.MapNameTextStaticColor;
+                migrated.Base.TextColor = Color.FromArgb(255, c.R, c.G, c.B);
+            }
+            if (g.MapNameBorderColorSource == LabelColorSource.Static) {
+                var c = g.MapNameBorderStaticColor;
+                migrated.Base.BorderColor = Color.FromArgb(255, c.R, c.G, c.B);
+            }
+
+            // Old plain-background label had no border.
+            if (g.LegacyMapNameStyling)
+                migrated.Base.BorderVisible = false;
+
+            Color special = g.SpecialMapNameColor;
+            migrated.Special.OverrideTextColor = true;
+            migrated.Special.TextColor = Color.FromArgb(255, special.R, special.G, special.B);
+            migrated.Special.OverrideBorderColor = true;
+            migrated.Special.BorderColor = Color.FromArgb(255, special.R, special.G, special.B);
+
+            Settings.Labels = migrated.Clone();
+            foreach (var kv in Settings.Profiles.Profiles)
+                if (kv.Value.Labels == null)
+                    kv.Value.Labels = migrated.Clone();
+
+            Settings.Profiles.LabelStyleMigrated = true;
+            LogMessage("Migrated label styles into the new model.");
+        } catch (Exception e) {
+            LogError("Label style migration failed: " + e.Message);
         }
     }
 

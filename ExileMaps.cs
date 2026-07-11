@@ -181,6 +181,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         // Map/Content/Biome dicts are populated by game-file scraping in Tick(), not here.
         Settings.Profiles.EnsureDefaultProfile();
 
+        // Build the label-style model from old settings on first run after upgrade.
+        MigrateLabelStyles();
+
         // Rumours have no live game file to scrape, so seed them once here from the static json.
         UpdateRumorData();
 
