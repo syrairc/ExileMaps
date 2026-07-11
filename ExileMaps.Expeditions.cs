@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Numerics;
 using System.Text.Json;
+using GameOffsets2.Native;
 using ImGuiNET;
 using ExileMaps.Classes;
 
@@ -157,6 +158,34 @@ public partial class ExileMapsCore
             else highlightedExpeditionCoords.Remove(c);
     }
 
+    // Drop a waypoint on the expedition map fewest steps from the explored frontier.
+    private void WaypointNearestInExpedition(Classes.Expedition e)
+    {
+        try
+        {
+            if (e.MapCoords.Count == 0) return;
+            var steps = ComputeStepCounts(); // memoized on mapCacheVersion
+
+            Vector2i best = e.MapCoords[0];
+            int bestSteps = int.MaxValue;
+            foreach (var c in e.MapCoords)
+            {
+                int s = steps.TryGetValue(c, out var v) ? v : int.MaxValue;
+                if (s < bestSteps) { bestSteps = s; best = c; }
+            }
+            if (bestSteps == int.MaxValue)
+                LogError($"WaypointNearestInExpedition: no map in this expedition is reachable from the explored frontier, falling back to first map at {best}");
+
+            Node node;
+            lock (mapCacheLock)
+                if (!mapCache.TryGetValue(best, out node)) node = null;
+
+            if (node != null) AddWaypoint(node);
+            else LogError($"WaypointNearestInExpedition: no cached node at {best}");
+        }
+        catch (Exception ex) { LogError($"WaypointNearestInExpedition failed: {ex.Message}"); }
+    }
+
     private void DrawExpeditionsPanel()
     {
         try
@@ -194,6 +223,10 @@ public partial class ExileMapsCore
                     bool hl = IsExpeditionHighlighted(e);
                     if (ImGui.Checkbox("##hl", ref hl)) SetExpeditionHighlight(e, hl);
                     if (ImGui.IsItemHovered()) ImGui.SetTooltip("Highlight this expedition's maps on the atlas.");
+                    ImGui.SameLine();
+
+                    if (ImGui.SmallButton("WP##expwp")) WaypointNearestInExpedition(e);
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("Waypoint the nearest map in this expedition (fewest steps from your explored frontier).");
                     ImGui.SameLine();
 
                     if (ImGui.CollapsingHeader(ExpeditionLabel(e)))
