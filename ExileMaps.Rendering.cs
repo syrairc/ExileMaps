@@ -593,17 +593,6 @@ public partial class ExileMapsCore
         return resolved;
     }
 
-    // Icon file used for content with no matching icon-<content>.png (tinted with UnknownContentColor).
-    private const string BlankContentIcon = "icon-blank.png";
-
-    // League mechanics the game does NOT draw its own in-game content icon for, even on visible maps.
-    // Our icon always draws for these (exempt from the visible-node game-drawn dedup); the row layout
-    // offsets them alongside any other content icons on the node.
-    private static readonly System.Collections.Generic.HashSet<string> AlwaysDrawContent =
-        new(System.StringComparer.OrdinalIgnoreCase)
-    {
-        "Expedition", "Abyss", "Delirium", "Incursion", "Ritual",
-    };
 
     // Draws the node's content-type icons in a horizontal row centered below the map name, expanding
     // symmetrically. Draws ALL highlighted content types (no game-drawn dedup, no blank fallback);

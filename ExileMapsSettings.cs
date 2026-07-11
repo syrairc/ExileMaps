@@ -1050,14 +1050,6 @@ public class MapSettings
                     ImGui.TableNextRow();
 
                     ImGui.TableNextColumn();
-                    bool drawWeight = DrawWeightOnMap;
-                    if(ImGui.Checkbox($"##draw_weight", ref drawWeight))                        
-                        DrawWeightOnMap = drawWeight;
-
-                    ImGui.TableNextColumn();
-                    ImGui.TextUnformatted("Draw Weight on Map");
-
-                    ImGui.TableNextColumn();
                     Color goodColor = GoodNodeColor;
                     Vector4 colorVector = new(goodColor.R / 255.0f, goodColor.G / 255.0f, goodColor.B / 255.0f, goodColor.A / 255.0f);
                     if(ImGui.ColorEdit4($"##goodgoodcolor", ref colorVector, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview | ImGuiColorEditFlags.NoInputs))                        
