@@ -168,19 +168,17 @@ public partial class ExileMapsCore
                 mapTooltipVisible = true;
             }
 
-            // Don't draw connection lines over the expedition rumours popup (a top-level IngameUi
-            // child, not under WorldMap). Reuses the same exclude+segment machinery as the map tooltip.
-            if (Settings.Features.ShowExpeditions)
+            // Scan the live expedition buttons: which regions' buttons are on-screen, and the current
+            // rumours popup (the hovered button's own tooltip). Don't draw connection lines over that
+            // popup - reuses the same exclude+segment machinery as the map tooltip.
+            ScanExpeditionButtons();
+            if (frameLogbookPopup != null)
             {
-                frameLogbookPopup = FindLogbookPopup();
-                if (frameLogbookPopup != null)
+                RectangleF lb = frameLogbookPopup.GetClientRect();
+                if (lb.Width > 0 && lb.Height > 0)
                 {
-                    RectangleF lb = frameLogbookPopup.GetClientRect();
-                    if (lb.Width > 0 && lb.Height > 0)
-                    {
-                        cachedExcludeRects.Add(lb);
-                        mapTooltipVisible = true;
-                    }
+                    cachedExcludeRects.Add(lb);
+                    mapTooltipVisible = true;
                 }
             }
 
@@ -191,6 +189,10 @@ public partial class ExileMapsCore
             AddExcludeRect(UI.GameUI?.ManaOrb);
             AddExcludeRect(UI.GameUI?.FlaskPanel?.Parent);
             AddExcludeRect(UI.SkillBar?.Parent);
+
+            // Lay out expedition markers + rumour panels now (excludes above are in) and reserve their
+            // rects so the node/line passes don't draw through them. Drawn later in DrawExpeditions.
+            LayoutExpeditions();
         } catch (Exception e) {
             // Keep last good bounds on a failed memory read rather than blanking the overlay.
             LogError("Error updating screen bounds: " + e.Message);

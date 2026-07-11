@@ -85,6 +85,9 @@ public partial class ExileMapsCore
                         built.Add(exp);
                     }
 
+                    // Every Ocean button is a candidate spawn location; record each so we can mark them all.
+                    exp.ButtonCoords.Add(b.Coordinate);
+
                     // The visible button is the real current spawn; prefer its coord over the first seen.
                     if (b.IsVisible)
                         exp.SpawnCoord = b.Coordinate;
@@ -92,6 +95,10 @@ public partial class ExileMapsCore
             }
         }
         catch (Exception e) { LogError($"SnapshotExpeditions failed: {e.Message}"); }
+
+        // Stable ids: order by region coord so the same expedition keeps its id (and tint) across refreshes.
+        built = built.OrderBy(x => x.RegionCoord.X).ThenBy(x => x.RegionCoord.Y).ToList();
+        for (int i = 0; i < built.Count; i++) built[i].Id = i + 1;
 
         lock (mapCacheLock)
             expeditions = built;
@@ -137,6 +144,18 @@ public partial class ExileMapsCore
         return false;
     }
 
+    // Rings on the hovered marker's region maps, in that expedition's tint. Mirrors DrawExpeditionHighlight.
+    private void DrawExpeditionHoverRings()
+    {
+        if (frameHoverExpeditionMaps.Count == 0 || ShowMinimap) return;
+        foreach (var (node, rect) in nodePositions)
+        {
+            if (!frameHoverExpeditionMaps.Contains(node.Coordinates)) continue;
+            float radius = MathF.Max(rect.Width, rect.Height) * 0.62f;
+            Graphics.DrawCircle(rect.Center, radius, frameHoverExpeditionTint, 3f, 24);
+        }
+    }
+
     // Ring on each on-screen node belonging to a highlighted expedition. Mirrors DrawSearchPing's
     // draw call (AtlasOverview.cs) so the two ring styles stay consistent.
     private void DrawExpeditionHighlight()
@@ -155,94 +174,209 @@ public partial class ExileMapsCore
         }
     }
 
-    // Draw the expedition icon at each region's current spawn node (the IsVisible button's coord),
-    // plus an always-on box over it listing the region's possible rumours. Gated behind
-    // ShowExpeditionMarkers. Skips off-screen / unresolved nodes, and skips the region whose game
-    // button is currently visible - we detect that via the live rumours popup and let the game's own
-    // UI take over (the button's own Element rect never resolves, so the popup is the only signal).
-    private void DrawExpeditionMarkers()
+    // One laid-out rumour box (marker's possible-rumours, or the popup decode). Positions + text are
+    // resolved during LayoutExpeditions so the rects can be excluded before the node/line passes draw.
+    private sealed class ExpeditionPanel
     {
-        if (!Settings.Features.ShowExpeditionMarkers) return;
+        public Vector2 TopLeft;
+        public float Width, Height, Pad, LineH;
+        public List<(string text, System.Drawing.Color color)> Lines;
+    }
+    // Placeholder textures (the atlas expedition button, drawn a bit bigger than the node). Loaded as
+    // panel-button textures in LoadPanelButtonTextures, so drawable by these names.
+    private const string ExpeditionMarkerNormal = "expeditions-normal.png";
+    private const string ExpeditionMarkerHover = "expeditions-hover.png";
+    private const float ExpeditionMarkerScale = 1.3f; // slightly larger than the node-sized icon
+
+    // Laid out in UpdateScreenBounds, drawn later in DrawExpeditions. Their rects go into
+    // cachedExcludeRects so nodes/lines/connections don't bleed through the marker or its panels.
+    private readonly List<(RectangleF rect, string tex, System.Drawing.Color tint)> frameExpeditionIcons = new();
+    private readonly List<ExpeditionPanel> frameExpeditionPanels = new();
+    // Maps of the marker currently under the cursor, ringed in the expedition tint. Set during layout.
+    private readonly HashSet<Vector2i> frameHoverExpeditionMaps = new();
+    private System.Drawing.Color frameHoverExpeditionTint;
+
+    // Distinct, stable tint per expedition so a region's scattered markers/overlays read as one group.
+    // Golden-ratio hue spacing keeps neighbouring ids far apart in colour.
+    private static System.Drawing.Color ExpeditionTint(int id)
+    {
+        float h = (id * 0.61803398875f) % 1f;
+        float s = 0.55f, v = 1f, r = v, g = v, b = v;
+        h *= 6f;
+        int i = (int)h;
+        float f = h - i, p = v * (1 - s), q = v * (1 - s * f), t = v * (1 - s * (1 - f));
+        switch (i % 6)
+        {
+            case 0: r = v; g = t; b = p; break;
+            case 1: r = q; g = v; b = p; break;
+            case 2: r = p; g = v; b = t; break;
+            case 3: r = p; g = q; b = v; break;
+            case 4: r = t; g = p; b = v; break;
+            default: r = v; g = p; b = q; break;
+        }
+        return System.Drawing.Color.FromArgb(255, (int)(r * 255), (int)(g * 255), (int)(b * 255));
+    }
+
+    // Resolve this frame's expedition marker icons + rumour panels and register their rects in the
+    // exclude set. Runs at the end of UpdateScreenBounds (chrome/tooltip/popup excludes already in),
+    // so the icon on-screen test avoids drawing over game chrome and the panels reserve their space.
+    // A marker is placed at every candidate button location whose game button is NOT on-screen.
+    private void LayoutExpeditions()
+    {
+        frameExpeditionIcons.Clear();
+        frameExpeditionPanels.Clear();
+        frameHoverExpeditionMaps.Clear();
         if (ShowMinimap) return;
+
+        // Popup decode panel (beside the game's rumours tooltip), independent of the markers toggle.
+        if (Settings.Features.ShowExpeditions && frameLogbookPopup != null)
+            LayoutPopupOverlay();
+
+        if (!Settings.Features.ShowExpeditionMarkers) return;
 
         List<Classes.Expedition> snapshot;
         lock (mapCacheLock) snapshot = expeditions.ToList();
+        var screen = GameController.Window.GetWindowRectangleTimeCache.Size;
+        var mouse = ImGuiNET.ImGui.GetMousePos();
 
-        // Which region's button is up right now? Hide its marker+overlay so we don't fight the popup.
-        Classes.Expedition popupExp = null;
-        if (frameLogbookPopup != null)
-        {
-            var popupTexts = new List<string>();
-            ReadPopupRumors(frameLogbookPopup, popupTexts);
-            popupExp = FindExpeditionForPopup(new HashSet<string>(popupTexts));
-        }
+        // "nearest only" mode needs step counts from the explored frontier (memoized on cache version).
+        bool drawAll = Settings.Features.DrawAllExpeditionMarkers;
+        var steps = drawAll ? null : ComputeStepCounts();
 
-        var fullUV = new RectangleF(0, 0, 1, 1);
         foreach (var e in snapshot)
         {
-            if (ReferenceEquals(e, popupExp)) continue; // game button visible for this region
+            var tint = ExpeditionTint(e.Id);
 
-            Node node;
-            lock (mapCacheLock)
-                if (!mapCache.TryGetValue(e.SpawnCoord, out node)) node = null;
-            if (node == null) continue;
+            // In nearest-only mode, reduce this expedition's locations to the single closest hidden one.
+            IEnumerable<Vector2i> coords = e.ButtonCoords;
+            if (!drawAll)
+            {
+                bool found = false; Vector2i best = default; int bestSteps = int.MaxValue;
+                foreach (var c in e.ButtonCoords)
+                {
+                    if (frameVisibleExpeditionButtonCoords.Contains(c)) continue;
+                    int s = steps.TryGetValue(c, out var v) ? v : int.MaxValue;
+                    // take the fewest-steps hidden location; fall back to the first if none are reachable.
+                    if (!found || s < bestSteps) { found = true; bestSteps = s; best = c; }
+                }
+                coords = found ? new[] { best } : System.Array.Empty<Vector2i>();
+            }
 
-            var rect = GetNodeRect(node);
-            if (rect.IsEmpty || rect.Width <= 0) continue;
+            foreach (var coord in coords)
+            {
+                if (frameVisibleExpeditionButtonCoords.Contains(coord)) continue; // game button on-screen
 
-            // icon sits just above the node, sized to the node.
-            float size = MathF.Max(rect.Width, rect.Height);
-            var iconRect = new RectangleF(rect.Center.X - size / 2f, rect.Top - size, size, size);
-            Graphics.DrawImage("icon-expedition.png", iconRect, fullUV, Color.White);
+                Node node;
+                lock (mapCacheLock)
+                    if (!mapCache.TryGetValue(coord, out node)) node = null;
+                if (node == null) continue;
 
-            DrawExpeditionPossibleRumors(e, iconRect);
+                var rect = GetNodeRect(node);
+                if (rect.IsEmpty || rect.Width <= 0) continue;
+
+                // icon sits just above the node, a bit larger than node-size.
+                float size = MathF.Max(rect.Width, rect.Height) * ExpeditionMarkerScale;
+                var iconRect = new RectangleF(rect.Center.X - size / 2f, rect.Top - size, size, size);
+                if (!IsOnScreen(iconRect.Center)) continue; // don't draw over chrome/tooltips/HUD
+
+                bool hover = iconRect.Contains(mouse);
+                frameExpeditionIcons.Add((iconRect, hover ? ExpeditionMarkerHover : ExpeditionMarkerNormal, tint));
+                cachedExcludeRects.Add(iconRect);
+
+                if (hover)
+                {
+                    frameHoverExpeditionMaps.Clear();
+                    frameHoverExpeditionMaps.UnionWith(e.MapCoords);
+                    frameHoverExpeditionTint = tint;
+                }
+
+                LayoutPossibleRumors(e, iconRect, screen, hover, tint);
+            }
         }
     }
 
-    // Compact box above the expedition indicator listing the region's POSSIBLE rumours (the whole
-    // pool from Button.Rumors, decoded + weight-sorted). Always on while the marker draws; the caller
-    // already skips the region whose game button is up.
-    private void DrawExpeditionPossibleRumors(Classes.Expedition e, RectangleF iconRect)
+    // The region's POSSIBLE rumour pool (Button.Rumors, decoded + weight-sorted), boxed above the icon.
+    // Names only by default; hovering the marker adds each rumour's explanation line. Header carries the
+    // expedition id, tinted to match the marker so same-region markers are easy to group.
+    private void LayoutPossibleRumors(Classes.Expedition e, RectangleF iconRect, Vector2 screen, bool hover, System.Drawing.Color tint)
     {
         try
         {
-            var rows = new List<(string content, float w)>();
+            var rows = new List<(string content, string desc, float w)>();
             foreach (var (text, _) in e.Rumors)
                 if (Settings.Expeditions.RumorWeights.TryGetValue(text, out var r))
-                    rows.Add((r.Content, r.Weight));
+                    rows.Add((r.Content, r.Description, r.Weight));
             if (rows.Count == 0) return;
             rows.Sort((a, b) => b.w.CompareTo(a.w));
 
             System.Drawing.Color color = Settings.Graphics.FontColor;
-            var lines = new List<string> { "Possible rumours" };
-            foreach (var (content, _) in rows) lines.Add("- " + content);
-
-            float pad = 6f, lineH = 0f, maxW = 0f;
-            foreach (var t in lines)
+            System.Drawing.Color sub = System.Drawing.Color.FromArgb(180, 180, 180, 180);
+            var lines = new List<(string, System.Drawing.Color)> { ($"#{e.Id} Possible rumours", tint) };
+            foreach (var (content, desc, _) in rows)
             {
-                var m = Graphics.MeasureText(t);
-                if (m.X > maxW) maxW = m.X;
-                if (m.Y > lineH) lineH = m.Y;
+                lines.Add(("- " + content, color));
+                if (hover && !string.IsNullOrEmpty(desc))
+                    lines.Add(("    " + desc, sub));
             }
-            float boxW = maxW + pad * 2f;
-            float boxH = lines.Count * lineH + pad * 2f;
+
+            const float pad = 6f;
+            var (boxW, boxH, lineH) = MeasurePanel(lines, pad);
 
             // center above the icon; drop below it if it'd run off the top, and clamp horizontally.
             float x = iconRect.Center.X - boxW / 2f;
             float y = iconRect.Top - boxH - 2f;
-            var screen = GameController.Window.GetWindowRectangleTimeCache.Size;
             x = Math.Clamp(x, 0f, MathF.Max(0f, screen.X - boxW));
             if (y < 0f) y = iconRect.Bottom + 2f;
 
-            Graphics.DrawBox(new Vector2(x, y), new Vector2(x + boxW, y + boxH), Settings.Graphics.BackgroundColor, 5f);
-            float cy = y + pad;
-            foreach (var t in lines)
+            RegisterPanel(new Vector2(x, y), boxW, boxH, pad, lineH, lines);
+        }
+        catch (Exception ex) { LogError($"LayoutPossibleRumors failed: {ex.Message}"); }
+    }
+
+    // Measure a box: max line width + count*lineHeight, both plus padding.
+    private (float boxW, float boxH, float lineH) MeasurePanel(List<(string text, System.Drawing.Color color)> lines, float pad)
+    {
+        float lineH = 0f, maxW = 0f;
+        foreach (var (text, _) in lines)
+        {
+            var m = Graphics.MeasureText(text);
+            if (m.X > maxW) maxW = m.X;
+            if (m.Y > lineH) lineH = m.Y;
+        }
+        return (maxW + pad * 2f, lines.Count * lineH + pad * 2f, lineH);
+    }
+
+    // Record a panel for drawing and reserve its rect in the exclude set.
+    private void RegisterPanel(Vector2 tl, float w, float h, float pad, float lineH, List<(string text, System.Drawing.Color color)> lines)
+    {
+        frameExpeditionPanels.Add(new ExpeditionPanel { TopLeft = tl, Width = w, Height = h, Pad = pad, LineH = lineH, Lines = lines });
+        cachedExcludeRects.Add(new RectangleF(tl.X, tl.Y, w, h));
+    }
+
+    // Draw the laid-out expedition icons + rumour panels. Runs late (after nodes/labels) so it sits on
+    // top; the rects were already excluded during layout so nothing underdraws them.
+    private void DrawExpeditions()
+    {
+        if (frameExpeditionIcons.Count == 0 && frameExpeditionPanels.Count == 0) return;
+        try
+        {
+            var fullUV = new RectangleF(0, 0, 1, 1);
+            foreach (var (rect, tex, tint) in frameExpeditionIcons)
+                Graphics.DrawImage(tex, rect, fullUV, tint);
+
+            System.Drawing.Color bg = Settings.Graphics.BackgroundColor;
+            foreach (var p in frameExpeditionPanels)
             {
-                Graphics.DrawText(t, new Vector2(x + pad, cy), color);
-                cy += lineH;
+                Graphics.DrawBox(p.TopLeft, new Vector2(p.TopLeft.X + p.Width, p.TopLeft.Y + p.Height), bg, 5f);
+                float cy = p.TopLeft.Y + p.Pad;
+                foreach (var (text, color) in p.Lines)
+                {
+                    Graphics.DrawText(text, new Vector2(p.TopLeft.X + p.Pad, cy), color);
+                    cy += p.LineH;
+                }
             }
         }
-        catch (Exception ex) { LogError($"DrawExpeditionPossibleRumors failed: {ex.Message}"); }
+        catch (Exception e) { LogError($"DrawExpeditions failed: {e.Message}"); }
     }
 
     // true only if every map in the expedition is currently highlighted (so the checkbox reflects
@@ -289,51 +423,40 @@ public partial class ExileMapsCore
         catch (Exception ex) { LogError($"WaypointNearestInExpedition failed: {ex.Message}"); }
     }
 
-    // The rumours popup bg carries this texture (.../MapQuickUseButton/LogbookRevealPopupBg.dds). No
-    // named accessor exists and its top-level IngameUi index is not stable, so find it by texture.
-    private const string LogbookPopupTexture = "LogbookRevealPopupBg";
-    // Cache the top-level IngameUi child index the popup was last found under, so the per-frame lookup
-    // rechecks one subtree instead of scanning all ~120 children. Only helps while the popup is up -
-    // once it closes the index misses and this falls back to a full top-level scan.
-    private int cachedLogbookChildIndex = -1;
-
-    // The visible Logbook rumours popup element, or null when it's not up. Fast-path rechecks the
-    // cached top-level child before a full scan. Only ever finds anything while the popup is shown.
-    private ExileCore2.PoEMemory.Element FindLogbookPopup()
+    // Per-frame scan of the live expedition buttons (AtlasPanel.Buttons). Records which regions have an
+    // on-screen button so our marker/overlay stand down there, and resolves the current rumours popup
+    // straight off the hovered button's tooltip. Each AtlasButtonNode is a wrapper; its Children[0] is
+    // the visual button that owns .Tooltip (the LogbookRevealPopupBg subtree), so no UI-wide texture
+    // hunt is needed. Called from UpdateScreenBounds.
+    private void ScanExpeditionButtons()
     {
+        frameLogbookPopup = null;
+        frameVisibleExpeditionButtonCoords.Clear();
+        if (!Settings.Features.ShowExpeditions) return;
         try
         {
-            var children = UI?.Children;
-            if (children == null) return null;
-
-            if (cachedLogbookChildIndex >= 0 && cachedLogbookChildIndex < children.Count)
+            var buttons = AtlasPanel?.Buttons;
+            if (buttons == null) return;
+            foreach (var b in buttons)
             {
-                var hit = FindPopupInSubtree(children[cachedLogbookChildIndex], 0);
-                if (hit != null) return hit;
-            }
+                if (b == null || !b.IsVisible) continue;
+                if (b.ButtonType?.Id != "Ocean") continue; // skip Towers
+                frameVisibleExpeditionButtonCoords.Add(b.Coordinate);
 
-            for (int i = 0; i < children.Count; i++)
-            {
-                var hit = FindPopupInSubtree(children[i], 0);
-                if (hit != null) { cachedLogbookChildIndex = i; return hit; }
+                // The rumours popup lives on the button visual's tooltip, but that tooltip reports
+                // IsVisible even when nothing is shown. The real hover signal is HasShinyHighlight on
+                // the button visual (b.Children[0]).
+                if (frameLogbookPopup != null) continue;
+                var children = b.Children;
+                var visual = children != null && children.Count > 0 ? children[0] : null;
+                if (visual == null || !visual.HasShinyHighlight) continue;
+                var tip = visual.Tooltip;
+                if (tip == null || !tip.IsVisible) continue;
+                var r = tip.GetClientRect();
+                if (r.Width > 0 && r.Height > 0) frameLogbookPopup = tip;
             }
-            cachedLogbookChildIndex = -1;
         }
-        catch (Exception e) { LogError($"FindLogbookPopup failed: {e.Message}"); }
-        return null;
-    }
-
-    // Depth-limited hunt for the popup-bg texture in a visible subtree.
-    private ExileCore2.PoEMemory.Element FindPopupInSubtree(ExileCore2.PoEMemory.Element el, int depth)
-    {
-        if (el == null || depth > 6 || !el.IsVisible) return null;
-        if (el.TextureName != null && el.TextureName.Contains(LogbookPopupTexture)) return el;
-        foreach (var ch in el.Children)
-        {
-            var hit = FindPopupInSubtree(ch, depth + 1);
-            if (hit != null) return hit;
-        }
-        return null;
+        catch (Exception e) { LogError($"ScanExpeditionButtons failed: {e.Message}"); }
     }
 
     // Collect non-empty Text values from the popup subtree. These are the current rumour rows plus
@@ -366,13 +489,11 @@ public partial class ExileMapsCore
         return best;
     }
 
-    // When the rumours popup is up, draw a decode overlay beside it: the popup's CURRENT rumours
-    // (read from the popup itself, not Button.Rumors which is only the region's possible pool),
-    // decoded via RumorWeights and ordered by weight. Graphics-drawn so it tracks the popup.
-    private void DrawExpeditionOverlay()
+    // Lay out the decode overlay beside the game's rumours popup: the popup's CURRENT rumours (read from
+    // the popup itself, not Button.Rumors which is only the region's possible pool), decoded via
+    // RumorWeights and ordered by weight. Position tracks the popup; drawn later by DrawExpeditions.
+    private void LayoutPopupOverlay()
     {
-        if (!Settings.Features.ShowExpeditions) return;
-        if (ShowMinimap) return;
         try
         {
             var popup = frameLogbookPopup;
@@ -436,16 +557,8 @@ public partial class ExileMapsCore
             if (showPossible)
                 lines.Add(("(Alt: showing possible rumours)", Dim(fontColor)));
 
-            // Measure box.
-            float pad = 8f, lineH = 0f, maxW = 0f;
-            foreach (var (text, _) in lines)
-            {
-                var m = Graphics.MeasureText(text);
-                if (m.X > maxW) maxW = m.X;
-                if (m.Y > lineH) lineH = m.Y;
-            }
-            float boxW = maxW + pad * 2f;
-            float boxH = lines.Count * lineH + pad * 2f;
+            const float pad = 8f;
+            var (boxW, boxH, lineH) = MeasurePanel(lines, pad);
 
             // Place to the right of the popup; flip left if it would run off-screen.
             float x = prect.Right + 8f;
@@ -455,16 +568,9 @@ public partial class ExileMapsCore
             // don't let a tall rumour list run off the bottom of the screen
             y = MathF.Min(y, screen.Y - boxH);
 
-            var tl = new Vector2(x, y);
-            Graphics.DrawBox(tl, new Vector2(x + boxW, y + boxH), Settings.Graphics.BackgroundColor, 5f);
-            float cy = y + pad;
-            foreach (var (text, color) in lines)
-            {
-                Graphics.DrawText(text, new Vector2(x + pad, cy), color);
-                cy += lineH;
-            }
+            RegisterPanel(new Vector2(x, y), boxW, boxH, pad, lineH, lines);
         }
-        catch (Exception e) { LogError($"DrawExpeditionOverlay failed: {e.Message}"); }
+        catch (Exception e) { LogError($"LayoutPopupOverlay failed: {e.Message}"); }
     }
 
     private void DrawExpeditionsPanel()

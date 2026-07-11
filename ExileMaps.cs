@@ -104,6 +104,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private List<Classes.Expedition> expeditions = new();
     // the rumours popup resolved once per frame in UpdateScreenBounds; reused by the overlay
     private ExileCore2.PoEMemory.Element frameLogbookPopup;
+    // Button-location coords whose game expedition button is on-screen this frame (AtlasButtonNode
+    // .IsVisible). Our marker+overlay stand down at these so we don't draw over the game's own button.
+    private readonly HashSet<Vector2i> frameVisibleExpeditionButtonCoords = new();
     // Coords of maps in expeditions the user toggled "Highlight". Transient, not persisted.
     private readonly HashSet<Vector2i> highlightedExpeditionCoords = new();
     public bool refreshCache = false;
@@ -523,8 +526,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         DrawProgressReadout();
         DrawSearchPing();
         DrawExpeditionHighlight();
-        DrawExpeditionMarkers();
-        DrawExpeditionOverlay();
+        DrawExpeditionHoverRings();
+        DrawExpeditions();
 
         t0 = Stopwatch.GetTimestamp();
         DrawTours();

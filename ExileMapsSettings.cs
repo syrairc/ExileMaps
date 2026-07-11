@@ -477,6 +477,9 @@ public class FeatureSettings
     [Menu("Show Expedition Markers", "Draw a marker + label on the atlas at each expedition's nearest map node.")]
     public ToggleNode ShowExpeditionMarkers { get; set; } = new ToggleNode(false);
 
+    [Menu("Draw All Hidden Expedition Indicators", "On: draw a marker at every hidden button location per expedition. Off: draw only the nearest one (fewest steps from your explored frontier).")]
+    public ToggleNode DrawAllExpeditionMarkers { get; set; } = new ToggleNode(true);
+
 }
 [Submenu(CollapsedByDefault = true)]
 public class HotkeySettings
