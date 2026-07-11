@@ -427,11 +427,89 @@ public partial class ExileMapsCore
 
         DrawCenteredTextWithBackground($"{cachedNode.Weight:0}", position, ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, norm), Settings.Graphics.BackgroundColor, true, 10, 3);
     }
+    // 8 neighbor offsets for a 1px text stroke (ported from ExileNameplates DataTextRenderer).
+    private static readonly Vector2[] LabelStrokeOffsets =
+    {
+        new(-1, -1), new(0, -1), new(1, -1),
+        new(-1,  0),             new(1,  0),
+        new(-1,  1), new(0,  1), new(1,  1),
+    };
+
+    // Composes the final label look for a node: Base -> Favorite -> Biome -> Content -> Special,
+    // higher layer wins each contested property. Multi-content/biome picks the highest-weight entry.
+    private LabelStyle ResolveLabelStyle(Node node)
+    {
+        var s = Settings.Labels.Base.Clone();
+
+        if (node.IsFavorited)
+            Settings.Labels.Favorite.ApplyTo(s);
+
+        var biomeOv = HighestWeightBiomeOverride(node);
+        biomeOv?.ApplyTo(s);
+
+        var contentOv = HighestWeightContentOverride(node);
+        contentOv?.ApplyTo(s);
+
+        if (node.IsSpecial)
+            Settings.Labels.Special.ApplyTo(s);
+
+        ApplyWeightTints(s, node);
+        return s;
+    }
+
+    // Highest-weight content type on the node that has an override entry, or null.
+    private LabelStyleOverride HighestWeightContentOverride(Node node)
+    {
+        var overrides = Settings.Labels.Content;
+        if (overrides.Count == 0 || node.Content.Count == 0)
+            return null;
+        LabelStyleOverride best = null;
+        float bestW = float.NegativeInfinity;
+        foreach (var c in node.Content.Values) {
+            if (c?.Name != null && overrides.TryGetValue(c.Name, out var ov) && c.Weight > bestW) {
+                bestW = c.Weight;
+                best = ov;
+            }
+        }
+        return best;
+    }
+
+    // Highest-weight biome on the node that has an override entry, or null.
+    private LabelStyleOverride HighestWeightBiomeOverride(Node node)
+    {
+        var overrides = Settings.Labels.Biome;
+        if (overrides.Count == 0 || node.Biomes.Count == 0)
+            return null;
+        LabelStyleOverride best = null;
+        float bestW = float.NegativeInfinity;
+        foreach (var b in node.Biomes.Values) {
+            if (b?.Name != null && overrides.TryGetValue(b.Name, out var ov) && b.Weight > bestW) {
+                bestW = b.Weight;
+                best = ov;
+            }
+        }
+        return best;
+    }
+
+    // Resolves any by-weight colors on the style against the node's weight (Bad->Good gradient),
+    // leaving opacity untouched so a weight-tinted plate can still be semi-transparent.
+    private void ApplyWeightTints(LabelStyle s, Node node)
+    {
+        if (!s.TextColorByWeight && !s.BoxColorByWeight && !s.BorderColorByWeight)
+            return;
+        float denom = maxMapWeight - minMapWeight;
+        float w = denom > 0.0001f ? Math.Clamp((node.Weight - minMapWeight) / denom, 0f, 1f) : 0.5f;
+        var wc = ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, w);
+        wc = Color.FromArgb(255, wc.R, wc.G, wc.B);
+        if (s.TextColorByWeight) s.TextColor = wc;
+        if (s.BoxColorByWeight) s.BoxColor = wc;
+        if (s.BorderColorByWeight) s.BorderColor = wc;
+    }
+
     // Draws the map name above the node on the atlas.
     private void DrawMapName(Node cachedNode, RectangleF nodeCurrentPosition)
     {
-        // Special maps are named by DrawSpecialMapName (dedicated pass, distinct style, drawn in any
-        // state). Skip them here so they don't fall foul of the visited/highlight gates below.
+        // Special maps are named by DrawSpecialMapName (own pass, drawn in any state). Skip here.
         if (cachedNode.IsSpecial)
             return;
 
@@ -443,47 +521,8 @@ public partial class ExileMapsCore
             return;
 
         Vector2 namePosition = nodeCurrentPosition.Center + new Vector2(Settings.Graphics.MapNameOffsetX, Settings.Graphics.MapNameOffsetY);
-        string text = cachedNode.UppercaseName;
-
-        if (Settings.Graphics.LegacyMapNameStyling) {
-            // Old plain-background label.
-            Color fontColor = Settings.Maps.UseColorsForMapNames ? cachedNode.MapType.NameColor : Settings.Graphics.FontColor;
-            Color backgroundColor = Settings.Maps.UseColorsForMapNames ? cachedNode.MapType.BackgroundColor : Settings.Graphics.BackgroundColor;
-            if (cachedNode.MapType.UseWeightColorForName) {
-                float weight = (cachedNode.Weight - minMapWeight) / (maxMapWeight - minMapWeight);
-                fontColor = ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, weight);
-            }
-            fontColor = Color.FromArgb(255, fontColor.R, fontColor.G, fontColor.B);
-            DrawCenteredTextWithBackground(text, namePosition, fontColor, backgroundColor, true, 10, 3);
-            return;
-        }
-
-        // New bordered-box style (same look as special names, normal font size). Text and border colors
-        // each follow their own source: static, by weight, or by map color.
-        Color textColor = ResolveLabelColor(Settings.Graphics.MapNameTextColorSource, Settings.Graphics.MapNameTextStaticColor, cachedNode);
-        Color borderColor = ResolveLabelColor(Settings.Graphics.MapNameBorderColorSource, Settings.Graphics.MapNameBorderStaticColor, cachedNode);
-        DrawCenteredTextWithBorder(text, namePosition, textColor, Settings.Graphics.BackgroundColor, borderColor, 10, 4);
-    }
-
-    // Resolves a map-label color from its configured source. Weight maps Bad->Good across the visible
-    // weight range; MapColor uses the map type's name color; Static uses the picked color. Alpha forced.
-    private Color ResolveLabelColor(LabelColorSource src, Color staticColor, Node node)
-    {
-        switch (src) {
-            case LabelColorSource.Weight: {
-                float denom = maxMapWeight - minMapWeight;
-                float w = denom > 0.0001f ? (node.Weight - minMapWeight) / denom : 0.5f;
-                w = Math.Clamp(w, 0f, 1f);
-                var c = ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, w);
-                return Color.FromArgb(255, c.R, c.G, c.B);
-            }
-            case LabelColorSource.MapColor: {
-                var c = node.MapType.NameColor;
-                return Color.FromArgb(255, c.R, c.G, c.B);
-            }
-            default:
-                return Color.FromArgb(255, staticColor.R, staticColor.G, staticColor.B);
-        }
+        var style = ResolveLabelStyle(cachedNode);
+        DrawStyledLabel(cachedNode.UppercaseName, namePosition, style);
     }
 
     // Names special maps in a deliberately distinct style: larger, special-colored text on a plate with
@@ -501,35 +540,28 @@ public partial class ExileMapsCore
             return;
         bool fade = SpecialFadesWhenCompleted(cachedNode, userAdded);
 
-        Color baseCol = entry?.Color ?? Settings.Graphics.SpecialMapNameColor;
-        Color text, border;
-        Color bg = Settings.Graphics.BackgroundColor;
-        float nameScale = 1.4f;
+        // Special layer already applied by ResolveLabelStyle (node.IsSpecial).
+        var style = ResolveLabelStyle(cachedNode);
 
+        // User-added specials key off their configured color; fade/user tweak the resolved look.
+        Color baseCol = entry?.Color ?? style.BorderColor;
         if (fade) {
-            // Completed repeatable/user specials recede: washed text + dim border on a solid black
-            // plate (readable), and smaller.
             Color washed = Desaturate(baseCol, 0.85f);
-            text = Color.FromArgb(255, washed.R, washed.G, washed.B);
-            border = ScaleAlpha(washed, 0.45f);
-            bg = Color.FromArgb(255, 0, 0, 0);
-            nameScale = 1.15f;
+            style.TextColor = Color.FromArgb(255, washed.R, washed.G, washed.B);
+            style.BorderColor = washed;
+            style.BorderOpacity = 115;
+            style.BoxColor = Color.FromArgb(0, 0, 0);
+            style.BoxOpacity = 255;
+            style.BoxVisible = true;
+            style.TextScale = 1.15f;
         } else if (userAdded) {
-            // User-added (not yet completed): washed to set apart from auto-detected specials.
             Color washed = Desaturate(baseCol, 0.55f);
-            text = Color.FromArgb(255, washed.R, washed.G, washed.B);
-            border = washed;
-        } else {
-            // Auto-detected landmark: full color.
-            text = Color.FromArgb(255, baseCol.R, baseCol.G, baseCol.B);
-            border = text;
+            style.TextColor = Color.FromArgb(255, washed.R, washed.G, washed.B);
+            style.BorderColor = washed;
         }
 
         Vector2 namePosition = nodeCurrentPosition.Center + new Vector2(Settings.Graphics.MapNameOffsetX, Settings.Graphics.MapNameOffsetY);
-
-        // Larger than normal names, on a bordered plate in the name color (smaller when faded).
-        using (Graphics.SetTextScale(nameScale))
-            DrawCenteredTextWithBorder(cachedNode.UppercaseName, namePosition, text, bg, border, 14, 6);
+        DrawStyledLabel(cachedNode.UppercaseName, namePosition, style);
     }
 
     // Maps a content name to its icon-*.png base when the literal lowercase+stripped form doesn't
@@ -761,6 +793,39 @@ public partial class ExileMapsCore
         Graphics.DrawBox(topLeft, topLeft + boxSize, borderColor, 5.0f);
         Graphics.DrawBox(topLeft + new Vector2(2, 2), topLeft + boxSize - new Vector2(2, 2), backgroundColor, 4.0f);
         Graphics.DrawText(text, topLeft + new Vector2(xPadding / 2f, yPadding / 2f), color);
+    }
+
+    // Draws a centered map label from a resolved style: optional border box, optional background box
+    // (inset by border thickness), optional 1px stroke, then the text. Padding matches the old label.
+    private void DrawStyledLabel(string text, Vector2 position, LabelStyle style)
+    {
+        if (string.IsNullOrEmpty(text) || !IsOnScreen(position))
+            return;
+
+        using (Graphics.SetTextScale(style.TextScale)) {
+            var boxSize = Graphics.MeasureText(text) + new Vector2(10, 4);
+            var topLeft = position - new Vector2(boxSize.X / 2, boxSize.Y / 2);
+
+            if (style.BorderVisible) {
+                var border = Color.FromArgb(style.BorderOpacity, style.BorderColor.R, style.BorderColor.G, style.BorderColor.B);
+                Graphics.DrawBox(topLeft, topLeft + boxSize, border, 5.0f);
+            }
+            if (style.BoxVisible) {
+                float t = style.BorderVisible ? style.BorderThickness : 0;
+                var inset = new Vector2(t, t);
+                var box = Color.FromArgb(style.BoxOpacity, style.BoxColor.R, style.BoxColor.G, style.BoxColor.B);
+                Graphics.DrawBox(topLeft + inset, topLeft + boxSize - inset, box, 4.0f);
+            }
+
+            var textPos = topLeft + new Vector2(5f, 2f);
+            if (style.StrokeEnabled) {
+                var sc = Color.FromArgb(255, style.StrokeColor.R, style.StrokeColor.G, style.StrokeColor.B);
+                foreach (var o in LabelStrokeOffsets)
+                    Graphics.DrawText(text, textPos + o, sc);
+            }
+            var textCol = Color.FromArgb(255, style.TextColor.R, style.TextColor.G, style.TextColor.B);
+            Graphics.DrawText(text, textPos, textCol);
+        }
     }
 
     private void DrawRotatedImage(IntPtr textureId, Vector2 position, Vector2 size, float angle, Color color)
