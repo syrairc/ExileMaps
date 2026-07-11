@@ -13,6 +13,10 @@ public partial class ExileMapsCore
 {
     // Per-manager combo selection (idPrefix -> selected index into its available-types list).
     private readonly Dictionary<string, int> _labelMgrSel = new();
+    // Last-serialized label config, to detect edits. Labels are plain POCO fields (not observable),
+    // so they don't raise PropertyChanged like weights do - without this the profile never gets
+    // marked dirty and LoadProfile clobbers the edits on the next launch.
+    private string _labelsSnapshot;
 
     public void DrawLabelStyleSection()
     {
@@ -33,6 +37,17 @@ public partial class ExileMapsCore
         if (ImGui.CollapsingHeader("Biome Overrides"))
             DrawOverrideManager("biome", Settings.Labels.Biome,
                 Settings.Maps.Biomes.Biomes.Keys);
+
+        // Any change to the label config marks the profile dirty so the periodic snapshot captures it
+        // (same persistence path weights use via profileDirty). Catches field edits and override add/remove.
+        try {
+            var now = System.Text.Json.JsonSerializer.Serialize(Settings.Labels);
+            if (_labelsSnapshot != null && now != _labelsSnapshot)
+                profileDirty = true;
+            _labelsSnapshot = now;
+        } catch (Exception e) {
+            LogError("Label snapshot compare failed: " + e.Message);
+        }
     }
 
     // ---- shared small widgets ----
