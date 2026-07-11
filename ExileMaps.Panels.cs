@@ -182,8 +182,11 @@ public partial class ExileMapsCore
         if (Section("Map Display"))
             DrawCustom(Settings.Maps?.CustomMapSettings?.DrawDelegate);
 
-        if (ImGui.CollapsingHeader("Map Weights"))
+        if (ImGui.CollapsingHeader("Map Weights")) {
+            DrawCustom(Settings.Graphics?.WeightDisplayPicker?.DrawDelegate);
+            DrawHolder("Weight Icon Size");
             DrawCustom(Settings.Maps?.MapTable?.DrawDelegate);
+        }
 
         if (ImGui.CollapsingHeader("Biomes"))
             DrawCustom(Settings.Maps?.Biomes?.CustomBiomeSettings?.DrawDelegate);
@@ -215,8 +218,6 @@ public partial class ExileMapsCore
         DrawHolder("Biome Icon Size");
         DrawHolder("Biome Icon Offset Y");
         DrawHolder("Biome Tooltips");
-        DrawCustom(Settings.Graphics?.WeightDisplayPicker?.DrawDelegate);
-        DrawHolder("Weight Icon Size");
         DrawHolder("Show Atlas Point Badge");
         DrawHolder("Atlas Point Badge Size");
         DrawHolder("Atlas Point Badge Color");
