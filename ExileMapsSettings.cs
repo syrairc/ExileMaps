@@ -829,6 +829,9 @@ public class GraphicSettings
     [Menu("Map Name Offset Y", "Vertical pixel offset of the map name/weight text relative to the node center.")]
     public RangeNode<int> MapNameOffsetY { get; set; } = new RangeNode<int>(30, -200, 200);
 
+    [Menu("Uppercase Map Names", "Draw map names in ALL CAPS. Off = use the map's normal casing.")]
+    public ToggleNode UppercaseMapNames { get; set; } = new ToggleNode(true);
+
     [Menu("Legacy Map Name Styling", "Use the old plain-background label for normal map names instead of the new bordered box.")]
     public ToggleNode LegacyMapNameStyling { get; set; } = new ToggleNode(false);
 

@@ -16,22 +16,23 @@ public partial class ExileMapsCore
 
     public void DrawLabelStyleSection()
     {
-        ImGui.SeparatorText("Base Style");
-        DrawBaseStyleControls(Settings.Labels.Base);
+        if (Section("Base Style"))
+            DrawBaseStyleControls(Settings.Labels.Base);
 
-        ImGui.SeparatorText("Favorite Maps Override");
-        DrawOverrideControls("fav", Settings.Labels.Favorite);
+        // Override sections collapsed by default - most users only touch a couple.
+        if (ImGui.CollapsingHeader("Favorite Maps Override"))
+            DrawOverrideControls("fav", Settings.Labels.Favorite);
 
-        ImGui.SeparatorText("Special Maps Override");
-        DrawOverrideControls("special", Settings.Labels.Special);
+        if (ImGui.CollapsingHeader("Special Maps Override"))
+            DrawOverrideControls("special", Settings.Labels.Special);
 
-        ImGui.SeparatorText("Content Overrides");
-        DrawOverrideManager("content", Settings.Labels.Content,
-            Settings.Maps.Content.ContentTypes.Keys);
+        if (ImGui.CollapsingHeader("Content Overrides"))
+            DrawOverrideManager("content", Settings.Labels.Content,
+                Settings.Maps.Content.ContentTypes.Keys);
 
-        ImGui.SeparatorText("Biome Overrides");
-        DrawOverrideManager("biome", Settings.Labels.Biome,
-            Settings.Maps.Biomes.Biomes.Keys);
+        if (ImGui.CollapsingHeader("Biome Overrides"))
+            DrawOverrideManager("biome", Settings.Labels.Biome,
+                Settings.Maps.Biomes.Biomes.Keys);
     }
 
     // ---- shared small widgets ----
@@ -66,23 +67,28 @@ public partial class ExileMapsCore
 
         bool bv = s.BoxVisible;
         if (ImGui.Checkbox("Show box##base", ref bv)) s.BoxVisible = bv;
-        Color bc = s.BoxColor;
-        if (ColorRGB("Box Color##base", ref bc)) s.BoxColor = bc;
-        int bo = s.BoxOpacity;
-        if (ImGui.SliderInt("Box Opacity##base", ref bo, 0, 255)) s.BoxOpacity = bo;
-        bool bw = s.BoxColorByWeight;
-        if (ImGui.Checkbox("Box color by weight##base", ref bw)) s.BoxColorByWeight = bw;
+        // Border lives on the box: no box, no border.
+        if (s.BoxVisible) {
+            Color bc = s.BoxColor;
+            if (ColorRGB("Box Color##base", ref bc)) s.BoxColor = bc;
+            int bo = s.BoxOpacity;
+            if (ImGui.SliderInt("Box Opacity##base", ref bo, 0, 255)) s.BoxOpacity = bo;
+            bool bw = s.BoxColorByWeight;
+            if (ImGui.Checkbox("Box color by weight##base", ref bw)) s.BoxColorByWeight = bw;
 
-        bool rv = s.BorderVisible;
-        if (ImGui.Checkbox("Show border##base", ref rv)) s.BorderVisible = rv;
-        Color rc = s.BorderColor;
-        if (ColorRGB("Border Color##base", ref rc)) s.BorderColor = rc;
-        int ro = s.BorderOpacity;
-        if (ImGui.SliderInt("Border Opacity##base", ref ro, 0, 255)) s.BorderOpacity = ro;
-        bool rw = s.BorderColorByWeight;
-        if (ImGui.Checkbox("Border color by weight##base", ref rw)) s.BorderColorByWeight = rw;
-        int rt = s.BorderThickness;
-        if (ImGui.SliderInt("Border Thickness##base", ref rt, 1, 8)) s.BorderThickness = rt;
+            bool rv = s.BorderVisible;
+            if (ImGui.Checkbox("Show border##base", ref rv)) s.BorderVisible = rv;
+            if (s.BorderVisible) {
+                Color rc = s.BorderColor;
+                if (ColorRGB("Border Color##base", ref rc)) s.BorderColor = rc;
+                int ro = s.BorderOpacity;
+                if (ImGui.SliderInt("Border Opacity##base", ref ro, 0, 255)) s.BorderOpacity = ro;
+                bool rw = s.BorderColorByWeight;
+                if (ImGui.Checkbox("Border color by weight##base", ref rw)) s.BorderColorByWeight = rw;
+                int rt = s.BorderThickness;
+                if (ImGui.SliderInt("Border Thickness##base", ref rt, 1, 8)) s.BorderThickness = rt;
+            }
+        }
     }
 
     // ---- override block: each row = an Override checkbox + its control ----
@@ -121,37 +127,43 @@ public partial class ExileMapsCore
             bool v = o.BoxVisible; if (ImGui.Checkbox($"Show box##{id}", ref v)) o.BoxVisible = v; });
             o.OverrideBoxVisible = ovr; }
 
-        { bool ovr = o.OverrideBoxColor; Row("bcol", ref ovr, () => {
-            Color v = o.BoxColor; if (ColorRGB($"Box Color##{id}", ref v)) o.BoxColor = v; });
-            o.OverrideBoxColor = ovr; }
+        // Box color/opacity rows only when the box is shown for this override.
+        if (o.BoxVisible) {
+            { bool ovr = o.OverrideBoxColor; Row("bcol", ref ovr, () => {
+                Color v = o.BoxColor; if (ColorRGB($"Box Color##{id}", ref v)) o.BoxColor = v; });
+                o.OverrideBoxColor = ovr; }
 
-        { bool ovr = o.OverrideBoxOpacity; Row("bop", ref ovr, () => {
-            int v = o.BoxOpacity; if (ImGui.SliderInt($"Box Opacity##{id}", ref v, 0, 255)) o.BoxOpacity = v; });
-            o.OverrideBoxOpacity = ovr; }
+            { bool ovr = o.OverrideBoxOpacity; Row("bop", ref ovr, () => {
+                int v = o.BoxOpacity; if (ImGui.SliderInt($"Box Opacity##{id}", ref v, 0, 255)) o.BoxOpacity = v; });
+                o.OverrideBoxOpacity = ovr; }
 
-        { bool ovr = o.OverrideBoxColorByWeight; Row("bw", ref ovr, () => {
-            bool v = o.BoxColorByWeight; if (ImGui.Checkbox($"Box color by weight##{id}", ref v)) o.BoxColorByWeight = v; });
-            o.OverrideBoxColorByWeight = ovr; }
+            { bool ovr = o.OverrideBoxColorByWeight; Row("bw", ref ovr, () => {
+                bool v = o.BoxColorByWeight; if (ImGui.Checkbox($"Box color by weight##{id}", ref v)) o.BoxColorByWeight = v; });
+                o.OverrideBoxColorByWeight = ovr; }
 
-        { bool ovr = o.OverrideBorderVisible; Row("rvis", ref ovr, () => {
-            bool v = o.BorderVisible; if (ImGui.Checkbox($"Show border##{id}", ref v)) o.BorderVisible = v; });
-            o.OverrideBorderVisible = ovr; }
+            // Border lives on the box: no box, no border.
+            { bool ovr = o.OverrideBorderVisible; Row("rvis", ref ovr, () => {
+                bool v = o.BorderVisible; if (ImGui.Checkbox($"Show border##{id}", ref v)) o.BorderVisible = v; });
+                o.OverrideBorderVisible = ovr; }
 
-        { bool ovr = o.OverrideBorderColor; Row("rcol", ref ovr, () => {
-            Color v = o.BorderColor; if (ColorRGB($"Border Color##{id}", ref v)) o.BorderColor = v; });
-            o.OverrideBorderColor = ovr; }
+            if (o.BorderVisible) {
+                { bool ovr = o.OverrideBorderColor; Row("rcol", ref ovr, () => {
+                    Color v = o.BorderColor; if (ColorRGB($"Border Color##{id}", ref v)) o.BorderColor = v; });
+                    o.OverrideBorderColor = ovr; }
 
-        { bool ovr = o.OverrideBorderOpacity; Row("rop", ref ovr, () => {
-            int v = o.BorderOpacity; if (ImGui.SliderInt($"Border Opacity##{id}", ref v, 0, 255)) o.BorderOpacity = v; });
-            o.OverrideBorderOpacity = ovr; }
+                { bool ovr = o.OverrideBorderOpacity; Row("rop", ref ovr, () => {
+                    int v = o.BorderOpacity; if (ImGui.SliderInt($"Border Opacity##{id}", ref v, 0, 255)) o.BorderOpacity = v; });
+                    o.OverrideBorderOpacity = ovr; }
 
-        { bool ovr = o.OverrideBorderColorByWeight; Row("rw", ref ovr, () => {
-            bool v = o.BorderColorByWeight; if (ImGui.Checkbox($"Border color by weight##{id}", ref v)) o.BorderColorByWeight = v; });
-            o.OverrideBorderColorByWeight = ovr; }
+                { bool ovr = o.OverrideBorderColorByWeight; Row("rw", ref ovr, () => {
+                    bool v = o.BorderColorByWeight; if (ImGui.Checkbox($"Border color by weight##{id}", ref v)) o.BorderColorByWeight = v; });
+                    o.OverrideBorderColorByWeight = ovr; }
 
-        { bool ovr = o.OverrideBorderThickness; Row("rt", ref ovr, () => {
-            int v = o.BorderThickness; if (ImGui.SliderInt($"Border Thickness##{id}", ref v, 1, 8)) o.BorderThickness = v; });
-            o.OverrideBorderThickness = ovr; }
+                { bool ovr = o.OverrideBorderThickness; Row("rt", ref ovr, () => {
+                    int v = o.BorderThickness; if (ImGui.SliderInt($"Border Thickness##{id}", ref v, 1, 8)) o.BorderThickness = v; });
+                    o.OverrideBorderThickness = ovr; }
+            }
+        }
     }
 
     // ---- dynamic per-type manager (Option A: add-combo + collapsible cards) ----

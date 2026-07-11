@@ -422,7 +422,7 @@ public partial class ExileMapsCore
             : 0.5f;
         norm = Math.Clamp(norm, 0f, 1f);
 
-        float offsetX = Settings.Maps.ShowMapNames ? (Graphics.MeasureText(cachedNode.UppercaseName).X / 2) + 30 : 50;
+        float offsetX = Settings.Maps.ShowMapNames ? (Graphics.MeasureText(MapLabelText(cachedNode)).X / 2) + 30 : 50;
         Vector2 position = new(nodeCurrentPosition.Center.X + offsetX + Settings.Graphics.MapNameOffsetX, nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY);
 
         DrawCenteredTextWithBackground($"{cachedNode.Weight:0}", position, ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, norm), Settings.Graphics.BackgroundColor, true, 10, 3);
@@ -434,6 +434,10 @@ public partial class ExileMapsCore
         new(-1,  0),             new(1,  0),
         new(-1,  1), new(0,  1), new(1,  1),
     };
+
+    // Map name as drawn: uppercased or the map's own casing, per the Uppercase Map Names setting.
+    private string MapLabelText(Node node)
+        => Settings.Graphics.UppercaseMapNames ? node.UppercaseName : node.Name;
 
     // Reused by ResolveLabelStyle so the per-node-per-frame label pass allocates nothing. Render-thread only.
     private readonly LabelStyle _scratchLabelStyle = new();
@@ -526,7 +530,7 @@ public partial class ExileMapsCore
 
         Vector2 namePosition = nodeCurrentPosition.Center + new Vector2(Settings.Graphics.MapNameOffsetX, Settings.Graphics.MapNameOffsetY);
         var style = ResolveLabelStyle(cachedNode);
-        DrawStyledLabel(cachedNode.UppercaseName, namePosition, style);
+        DrawStyledLabel(MapLabelText(cachedNode), namePosition, style);
     }
 
     // Names special maps in a deliberately distinct style: larger, special-colored text on a plate with
@@ -565,7 +569,7 @@ public partial class ExileMapsCore
         }
 
         Vector2 namePosition = nodeCurrentPosition.Center + new Vector2(Settings.Graphics.MapNameOffsetX, Settings.Graphics.MapNameOffsetY);
-        DrawStyledLabel(cachedNode.UppercaseName, namePosition, style);
+        DrawStyledLabel(MapLabelText(cachedNode), namePosition, style);
     }
 
     // Maps a content name to its icon-*.png base when the literal lowercase+stripped form doesn't
@@ -810,12 +814,14 @@ public partial class ExileMapsCore
             var boxSize = Graphics.MeasureText(text) + new Vector2(10, 4);
             var topLeft = position - new Vector2(boxSize.X / 2, boxSize.Y / 2);
 
-            if (style.BorderVisible) {
+            // Border sits on the box: no box, no border.
+            bool drawBorder = style.BorderVisible && style.BoxVisible;
+            if (drawBorder) {
                 var border = Color.FromArgb(style.BorderOpacity, style.BorderColor.R, style.BorderColor.G, style.BorderColor.B);
                 Graphics.DrawBox(topLeft, topLeft + boxSize, border, 5.0f);
             }
             if (style.BoxVisible) {
-                float t = style.BorderVisible ? style.BorderThickness : 0;
+                float t = drawBorder ? style.BorderThickness : 0;
                 t = MathF.Min(t, MathF.Min(boxSize.X, boxSize.Y) / 2f - 1f);
                 if (t < 0f) t = 0f;
                 var inset = new Vector2(t, t);

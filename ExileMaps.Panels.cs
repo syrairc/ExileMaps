@@ -102,68 +102,85 @@ public partial class ExileMapsCore
         ImGui.EndTabItem();
     }
 
+    // Collapsible section header for the settings tabs. Default open so nothing hides on first view;
+    // ImGui remembers the collapsed state per header after that.
+    private static bool Section(string name) => ImGui.CollapsingHeader(name, ImGuiTreeNodeFlags.DefaultOpen);
+
     private void DrawGeneralTab()
     {
-        ImGui.SeparatorText("Activation");
-        DrawHolder("Enable");
-        DrawHolder("Enable Atlas Drawing");
+        if (Section("Activation")) {
+            // Root Enable has no [Menu], so it isn't in the holder index (the engine draws it specially).
+            // Bind it directly instead of via DrawHolder.
+            bool enabled = Settings.Enable;
+            if (ImGui.Checkbox("Enable", ref enabled)) Settings.Enable.Value = enabled;
+            DrawHolder("Enable Atlas Drawing");
+        }
 
-        ImGui.SeparatorText("Node Processing");
-        DrawHolder("Atlas Range");
-        DrawHolder("Use Atlas Range for Node Connections");
-        DrawHolder("Process Visited Map Nodes");
-        DrawHolder("Process Unlocked Map Nodes");
-        DrawHolder("Process Locked Map Nodes");
-        DrawHolder("Process Hidden Map Nodes");
-        DrawHolder("Draw Connections for Visited Map Nodes");
-        DrawHolder("Draw Connections for Hidden Map Nodes");
-        DrawHolder("Recalculate Node Weights on Refresh");
+        if (Section("Node Processing")) {
+            DrawHolder("Atlas Range");
+            DrawHolder("Use Atlas Range for Node Connections");
+            DrawHolder("Process Visited Map Nodes");
+            DrawHolder("Process Unlocked Map Nodes");
+            DrawHolder("Process Locked Map Nodes");
+            DrawHolder("Process Hidden Map Nodes");
+            DrawHolder("Draw Connections for Visited Map Nodes");
+            DrawHolder("Draw Connections for Hidden Map Nodes");
+            DrawHolder("Recalculate Node Weights on Refresh");
+        }
 
-        ImGui.SeparatorText("Performance");
-        DrawHolder("Map Cache Refresh Rate");
-        DrawHolder("Show Performance Monitor");
+        if (Section("Performance")) {
+            DrawHolder("Map Cache Refresh Rate");
+            DrawHolder("Show Performance Monitor");
+        }
 
-        ImGui.SeparatorText("Overlay");
-        DrawHolder("Show Panel Buttons");
-        DrawHolder("Show Atlas Search Box");
-        DrawHolder("Show Expeditions Button");
-        DrawHolder("Debug Mode");
+        if (Section("Overlay")) {
+            DrawHolder("Show Panel Buttons");
+            DrawHolder("Show Atlas Search Box");
+            DrawHolder("Show Expeditions Button");
+            DrawHolder("Debug Mode");
+        }
 
-        ImGui.SeparatorText("Profiles");
-        DrawCustom(Settings.Profiles?.ProfileSelector?.DrawDelegate);
-        DrawCustom(Settings.WeightImportExport?.DrawDelegate);
+        if (Section("Profiles")) {
+            DrawCustom(Settings.Profiles?.ProfileSelector?.DrawDelegate);
+            DrawCustom(Settings.WeightImportExport?.DrawDelegate);
+        }
     }
 
     private void DrawAppearanceTab()
     {
-        ImGui.SeparatorText("Nodes");
-        DrawHolder("Node Radius");
-        DrawHolder("Use Icons for Nodes");
-        DrawHolder("Lay Icons Flat");
+        if (Section("Nodes")) {
+            DrawHolder("Node Radius");
+            DrawHolder("Use Icons for Nodes");
+            DrawHolder("Lay Icons Flat");
+        }
 
-        ImGui.SeparatorText("Base Colors");
-        DrawHolder("Font Color");
-        DrawHolder("Background Color");
+        if (Section("Base Colors")) {
+            DrawHolder("Font Color");
+            DrawHolder("Background Color");
+        }
 
-        ImGui.SeparatorText("Connection Lines");
-        DrawHolder("Line Color");
-        DrawHolder("Line Width");
-        DrawHolder("Draw Lines as Gradients");
-        DrawHolder("Visited Line Color");
-        DrawHolder("Unlocked Line Color");
-        DrawHolder("Locked Line Color");
-        DrawHolder("Distance Marker Scale");
+        if (Section("Connection Lines")) {
+            DrawHolder("Line Color");
+            DrawHolder("Line Width");
+            DrawHolder("Draw Lines as Gradients");
+            DrawHolder("Visited Line Color");
+            DrawHolder("Unlocked Line Color");
+            DrawHolder("Locked Line Color");
+            DrawHolder("Distance Marker Scale");
+        }
 
-        ImGui.SeparatorText("Map Labels");
-        DrawHolder("Map Name Offset X");
-        DrawHolder("Map Name Offset Y");
+        if (Section("Map Labels")) {
+            DrawHolder("Map Name Offset X");
+            DrawHolder("Map Name Offset Y");
+            DrawHolder("Uppercase Map Names");
+        }
         DrawLabelStyleSection();
     }
 
     private void DrawMapsTab()
     {
-        ImGui.SeparatorText("Map Display");
-        DrawCustom(Settings.Maps?.CustomMapSettings?.DrawDelegate);
+        if (Section("Map Display"))
+            DrawCustom(Settings.Maps?.CustomMapSettings?.DrawDelegate);
 
         if (ImGui.CollapsingHeader("Map Weights"))
             DrawCustom(Settings.Maps?.MapTable?.DrawDelegate);
@@ -171,77 +188,83 @@ public partial class ExileMapsCore
         if (ImGui.CollapsingHeader("Biomes"))
             DrawCustom(Settings.Maps?.Biomes?.CustomBiomeSettings?.DrawDelegate);
 
-        ImGui.SeparatorText("Special Map Markers");
-        DrawHolder("Show Special Map Indicator");
-        DrawHolder("Hide Completed Special Maps");
-        DrawHolder("Special Map Marker Color");
-        DrawHolder("Special Map Marker Scale");
-        DrawHolder("Special Map Marker Offset");
-        DrawCustom(Settings.Graphics?.SpecialMapIconPicker?.DrawDelegate);
-        DrawHolder("Special Map Name Color");
+        if (Section("Special Map Markers")) {
+            DrawHolder("Show Special Map Indicator");
+            DrawHolder("Hide Completed Special Maps");
+            DrawHolder("Special Map Marker Color");
+            DrawHolder("Special Map Marker Scale");
+            DrawHolder("Special Map Marker Offset");
+            DrawCustom(Settings.Graphics?.SpecialMapIconPicker?.DrawDelegate);
+            DrawHolder("Special Map Name Color");
+        }
 
-        ImGui.SeparatorText("Custom Special Maps");
-        DrawCustom(Settings.Maps?.SpecialMaps?.CustomSpecialMapSettings?.DrawDelegate);
+        if (Section("Custom Special Maps"))
+            DrawCustom(Settings.Maps?.SpecialMaps?.CustomSpecialMapSettings?.DrawDelegate);
     }
 
     private void DrawContentTab()
     {
-        ImGui.SeparatorText("Content Indicators");
-        DrawCustom(Settings.Graphics?.ContentIndicatorPicker?.DrawDelegate);
-        DrawHolder("Content Ring Width");
-        DrawHolder("Content Radius");
-        DrawHolder("Content Ring Icon Size");
-        DrawHolder("Content Ring Icon Spacing");
-        DrawHolder("Unknown Content Color");
-        DrawHolder("Skip Game-drawn Content");
-        DrawHolder("Stack Above In-game Icons");
-        DrawHolder("Content Icon Size");
-        DrawHolder("Content Icon Flatten");
-        DrawHolder("Content Icon Offset Y");
-        DrawHolder("Content Icon Spacing");
-        DrawHolder("Content Icon Tint");
+        if (Section("Content Indicators")) {
+            DrawCustom(Settings.Graphics?.ContentIndicatorPicker?.DrawDelegate);
+            DrawHolder("Content Ring Width");
+            DrawHolder("Content Radius");
+            DrawHolder("Content Ring Icon Size");
+            DrawHolder("Content Ring Icon Spacing");
+            DrawHolder("Unknown Content Color");
+            DrawHolder("Skip Game-drawn Content");
+            DrawHolder("Stack Above In-game Icons");
+            DrawHolder("Content Icon Size");
+            DrawHolder("Content Icon Flatten");
+            DrawHolder("Content Icon Offset Y");
+            DrawHolder("Content Icon Spacing");
+            DrawHolder("Content Icon Tint");
+        }
 
-        ImGui.SeparatorText("Atlas Point Markers");
-        DrawHolder("Show Atlas Point Marker");
-        DrawHolder("Show Atlas Quest Marker");
-        DrawHolder("Atlas Marker Size");
-        DrawCustom(Settings.Graphics?.AtlasPointStylePicker?.DrawDelegate);
+        if (Section("Atlas Point Markers")) {
+            DrawHolder("Show Atlas Point Marker");
+            DrawHolder("Show Atlas Quest Marker");
+            DrawHolder("Atlas Marker Size");
+            DrawCustom(Settings.Graphics?.AtlasPointStylePicker?.DrawDelegate);
+        }
 
         if (ImGui.CollapsingHeader("Content Weights"))
             DrawCustom(Settings.Maps?.Content?.CustomContentSettings?.DrawDelegate);
 
         DrawHolder("Show Expedition Markers");
+        DrawHolder("Draw All Hidden Expedition Indicators");
         if (ImGui.CollapsingHeader("Expedition Rumor Weights"))
             DrawCustom(Settings.Expeditions?.RumorWeightsEditor?.DrawDelegate);
     }
 
     private void DrawWaypointsTab()
     {
-        ImGui.SeparatorText("Behavior");
-        DrawCustom(Settings.Waypoints?.CustomWaypointSettings?.DrawDelegate);
+        if (Section("Behavior"))
+            DrawCustom(Settings.Waypoints?.CustomWaypointSettings?.DrawDelegate);
 
-        ImGui.SeparatorText("Path Visuals");
-        DrawHolder("Draw paths to waypoints");
-        DrawHolder("Waypoint Line Width");
-        DrawCustom(Settings.Graphics?.WaypointPathTexturePicker?.DrawDelegate);
-        DrawHolder("Animate Waypoint Path");
-        DrawHolder("Waypoint Dash Length");
-        DrawHolder("Waypoint Dash Gap");
-        DrawHolder("Waypoint Dash Speed");
-        DrawHolder("Waypoint Texture Scale");
-        DrawHolder("Waypoint Arrow Min Distance");
+        if (Section("Path Visuals")) {
+            DrawHolder("Draw paths to waypoints");
+            DrawHolder("Waypoint Line Width");
+            DrawCustom(Settings.Graphics?.WaypointPathTexturePicker?.DrawDelegate);
+            DrawHolder("Animate Waypoint Path");
+            DrawHolder("Waypoint Dash Length");
+            DrawHolder("Waypoint Dash Gap");
+            DrawHolder("Waypoint Dash Speed");
+            DrawHolder("Waypoint Texture Scale");
+            DrawHolder("Waypoint Arrow Min Distance");
+        }
 
-        ImGui.SeparatorText("Favorite Marker");
-        DrawHolder("Favorite Marker Color");
-        DrawHolder("Favorite Marker Scale");
+        if (Section("Favorite Marker")) {
+            DrawHolder("Favorite Marker Color");
+            DrawHolder("Favorite Marker Scale");
+        }
     }
 
     private void DrawPanelsTab()
     {
-        ImGui.SeparatorText("Atlas Overview");
-        DrawHolderChildren("Atlas Overview");
-        ImGui.SeparatorText("Tours");
-        DrawHolderChildren("Tours");
+        if (Section("Atlas Overview"))
+            DrawHolderChildren("Atlas Overview");
+        if (Section("Tours"))
+            DrawHolderChildren("Tours");
     }
 
     private void DoDebugging() {
