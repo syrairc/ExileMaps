@@ -37,8 +37,7 @@ public partial class ExileMapsCore
     // Drawing runs in fixed z-layer passes over the whole set:
     //   1. DrawNodeLines  - connections
     //   2. DrawMapNode    - node fill
-    //   3. DrawNodeRings  - content rings
-    //   4. DrawNodeLabels - name, weight
+    //   3. DrawNodeLabels - name, weight
     // Waypoints draw on top. Global z-order prevents lines drawing over fills/labels.
     private void DrawNodeLines(Node cachedNode, RectangleF nodeCurrentPosition)
     {
@@ -46,25 +45,6 @@ public partial class ExileMapsCore
             DrawConnections(cachedNode, nodeCurrentPosition);
         } catch (Exception e) {
             LogError("Error drawing node lines: " + e.Message + " - " + e.StackTrace);
-        }
-    }
-
-    private void DrawNodeRings(Node cachedNode, RectangleF nodeCurrentPosition)
-    {
-        try {
-            if (!ContentRingsEnabled)
-                return;
-
-            // Special maps get an icon above the node, not a covering fill.
-            // Don't ring them either; rings would overlap the map art.
-            if (Settings.Graphics.ShowSpecialMapIndicator && cachedNode.IsSpecial)
-                return;
-
-            var ringCount = 0;
-            foreach (var contentName in cachedNode.Content.Keys)
-                ringCount += DrawContentRings(cachedNode, nodeCurrentPosition, ringCount, contentName);
-        } catch (Exception e) {
-            LogError("Error drawing node rings: " + e.Message + " - " + e.StackTrace);
         }
     }
 
@@ -156,35 +136,6 @@ public partial class ExileMapsCore
         }
     }
 
-    // Draws a content ring at the given ring-count offset. Returns 1 if drawn, 0 if skipped.
-    private int DrawContentRings(Node cachedNode, RectangleF nodeCurrentPosition, int Count, string Content)
-    {
-        if ((cachedNode.IsVisited && !cachedNode.IsAttempted) || 
-            (!Settings.Maps.Content.ShowRingsOnLockedNodes && !cachedNode.IsUnlocked) || 
-            (!Settings.Maps.Content.ShowRingsOnUnlockedNodes && cachedNode.IsUnlocked) || 
-            (!Settings.Maps.Content.ShowRingsOnHiddenNodes && !cachedNode.IsVisible) ||         
-            !cachedNode.Content.TryGetValue(Content, out Content cachedContent) || 
-            !cachedNode.MapType.Highlight || !cachedContent.Highlight)            
-            return 0;
-
-        float baseRadius = 1 + ((nodeCurrentPosition.Right - nodeCurrentPosition.Left) / 2 * Settings.Graphics.RingRadius);
-        if (customIconsLoaded && Settings.Graphics.UseNodeIcons) {
-            // Icons are scaled up by ContentRingIconScale, so the per-ring step must widen too or
-            // stacked icons overlap. ContentRingIconSpacing adds the extra gap.
-            float step = Settings.Graphics.RingWidth * Settings.Graphics.ContentRingIconSpacing;
-            float radius = (Count * step) + baseRadius;
-            float d = radius * 2f * Settings.Graphics.ContentRingIconScale;
-            DrawNodeSprite(nodeCurrentPosition.Center, d, d, SpriteIcon.CircleOutline, cachedContent.Color);
-        }
-        else {
-            float radius = (Count * Settings.Graphics.RingWidth) + baseRadius;
-            Graphics.DrawCircle(nodeCurrentPosition.Center, radius, cachedContent.Color, Settings.Graphics.RingWidth, 32);
-        }
-
-        return 1;
-    }
-    
-
     private void DrawMapNode(Node cachedNode, RectangleF nodeCurrentPosition)
     {
         if (!Settings.Maps.HighlightMapNodes || cachedNode.IsVisited || !cachedNode.MapType.Highlight)
@@ -214,14 +165,6 @@ public partial class ExileMapsCore
     }
 
     private bool CustomIconsAvailable => customIconsLoaded;
-
-    // Content indicator mode helpers: rings, icon PNGs, or both.
-    private bool ContentRingsEnabled =>
-        Settings.Graphics.ContentIndicators == ContentIndicatorMode.Rings ||
-        Settings.Graphics.ContentIndicators == ContentIndicatorMode.Both;
-    private bool ContentIconsEnabled =>
-        Settings.Graphics.ContentIndicators == ContentIndicatorMode.Icons ||
-        Settings.Graphics.ContentIndicators == ContentIndicatorMode.Both;
 
     // Draws a custom-atlas sprite centered on nodes. IconFlatten squashes height so round sprites
     // read as flat discs on the tilted atlas plane.

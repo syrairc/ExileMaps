@@ -899,56 +899,12 @@ public class GraphicSettings
     [Menu("Legacy Map Name Styling", "Use the old plain-background label for normal map names instead of the new bordered box.")]
     public ToggleNode LegacyMapNameStyling { get; set; } = new ToggleNode(false);
 
-    // New-style label colors. Source: Static / Weight / MapColor. Edited via MapNameStylePicker; no
-    // [Menu] so the raw enums/colors aren't auto-rendered.
+    // Old-style label colors, superseded by the LabelStyle system (see Classes/LabelStyle.cs and
+    // LabelStyleUI). Kept only so MigrateLabelStyles can read them once on old configs; no UI left.
     public LabelColorSource MapNameTextColorSource { get; set; } = LabelColorSource.Static;
     public LabelColorSource MapNameBorderColorSource { get; set; } = LabelColorSource.Weight;
     public Color MapNameTextStaticColor { get; set; } = Color.White;
     public Color MapNameBorderStaticColor { get; set; } = Color.FromArgb(255, 120, 120, 130);
-
-    [JsonIgnore]
-    public CustomNode MapNameStylePicker { get; set; } = new CustomNode
-    {
-        DrawDelegate = () =>
-        {
-            if (Main == null) return;
-            var g = Main.Settings.Graphics;
-            if (g.LegacyMapNameStyling) {
-                ImGui.TextDisabled("New-style label colors (turn off Legacy Map Name Styling to use)");
-                return;
-            }
-
-            string[] sources = { "Static Color", "By Weight", "By Map Color" };
-
-            DrawLabelColorRow("Name Color", "##namecolorsrc", "##namestatic", sources,
-                () => (int)g.MapNameTextColorSource, v => g.MapNameTextColorSource = (LabelColorSource)v,
-                () => g.MapNameTextStaticColor, c => g.MapNameTextStaticColor = c);
-
-            DrawLabelColorRow("Border Color", "##bordercolorsrc", "##borderstatic", sources,
-                () => (int)g.MapNameBorderColorSource, v => g.MapNameBorderColorSource = (LabelColorSource)v,
-                () => g.MapNameBorderStaticColor, c => g.MapNameBorderStaticColor = c);
-        }
-    };
-
-    // One label-color row: a label, a source combo, and a static color picker shown only for Static.
-    private static void DrawLabelColorRow(string label, string comboId, string colorId, string[] sources,
-        Func<int> getSource, Action<int> setSource, Func<Color> getColor, Action<Color> setColor)
-    {
-        ImGui.Text(label);
-        ImGui.SameLine(140);
-        ImGui.SetNextItemWidth(140);
-        int idx = getSource();
-        if (idx < 0 || idx >= sources.Length) idx = 0;
-        if (ImGui.Combo(comboId, ref idx, sources, sources.Length))
-            setSource(idx);
-        if (getSource() == (int)LabelColorSource.Static) {
-            ImGui.SameLine();
-            var col = getColor();
-            Vector4 cv = new(col.R / 255f, col.G / 255f, col.B / 255f, col.A / 255f);
-            if (ImGui.ColorEdit4(colorId, ref cv, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaBar))
-                setColor(Color.FromArgb((int)(cv.W * 255), (int)(cv.X * 255), (int)(cv.Y * 255), (int)(cv.Z * 255)));
-        }
-    }
 }
 
 [Submenu(CollapsedByDefault = true)]

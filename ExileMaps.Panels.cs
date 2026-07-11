@@ -204,21 +204,22 @@ public partial class ExileMapsCore
 
     private void DrawContentTab()
     {
-        if (Section("Content Indicators")) {
-            DrawCustom(Settings.Graphics?.ContentIndicatorPicker?.DrawDelegate);
-            DrawHolder("Content Ring Width");
-            DrawHolder("Content Radius");
-            DrawHolder("Content Ring Icon Size");
-            DrawHolder("Content Ring Icon Spacing");
-            DrawHolder("Unknown Content Color");
-            DrawHolder("Skip Game-drawn Content");
-            DrawHolder("Stack Above In-game Icons");
-            DrawHolder("Content Icon Size");
-            DrawHolder("Content Icon Flatten");
-            DrawHolder("Content Icon Offset Y");
-            DrawHolder("Content Icon Spacing");
-            DrawHolder("Content Icon Tint");
-        }
+        DrawCustom(Settings.Graphics?.SepPhase2?.DrawDelegate);
+        DrawHolder("Show Content Row");
+        DrawHolder("Content Icon Size");
+        DrawHolder("Content Icon Spacing");
+        DrawHolder("Content Row Offset Y");
+        DrawHolder("Content Icon Tint");
+        DrawHolder("Content Tooltips");
+        DrawHolder("Show Biome Icon");
+        DrawHolder("Biome Icon Size");
+        DrawHolder("Biome Icon Offset Y");
+        DrawHolder("Biome Tooltips");
+        DrawCustom(Settings.Graphics?.WeightDisplayPicker?.DrawDelegate);
+        DrawHolder("Weight Icon Size");
+        DrawHolder("Show Atlas Point Badge");
+        DrawHolder("Atlas Point Badge Size");
+        DrawHolder("Atlas Point Badge Color");
 
         if (Section("Atlas Point Markers")) {
             DrawHolder("Show Atlas Point Marker");
