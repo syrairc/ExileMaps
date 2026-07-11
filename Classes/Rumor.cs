@@ -1,7 +1,8 @@
 namespace ExileMaps.Classes;
 
 // One row in the Expedition Rumor Weights editor. Text is the exact AtlasButtonNode.Rumors key.
-// Content/Description come from json/rumors.json; Weight is user-editable and persisted per profile.
+// Content/Description come from json/rumors.json; Weight is user-editable, saved in plugin
+// settings (global, not per weight profile - switching profiles won't reset tuned weights).
 public class Rumor
 {
     public string Text { get; set; } = "";
