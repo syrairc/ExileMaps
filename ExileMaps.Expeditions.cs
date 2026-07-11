@@ -227,6 +227,63 @@ public partial class ExileMapsCore
         catch (Exception ex) { LogError($"WaypointNearestInExpedition failed: {ex.Message}"); }
     }
 
+    // The rumours popup bg carries this texture (…/MapQuickUseButton/LogbookRevealPopupBg.dds). No
+    // named accessor exists and its top-level IngameUi index is not stable, so find it by texture.
+    private const string LogbookPopupTexture = "LogbookRevealPopupBg";
+    // Cache the top-level IngameUi child index the popup was last found under, so the per-frame lookup
+    // rechecks one subtree instead of scanning all ~120 children.
+    private int cachedLogbookChildIndex = -1;
+
+    // The visible Logbook rumours popup element, or null when it's not up. Fast-path rechecks the
+    // cached top-level child before a full scan. Only ever finds anything while the popup is shown.
+    private ExileCore2.PoEMemory.Element FindLogbookPopup()
+    {
+        try
+        {
+            var children = UI?.Children;
+            if (children == null) return null;
+
+            if (cachedLogbookChildIndex >= 0 && cachedLogbookChildIndex < children.Count)
+            {
+                var hit = FindPopupInSubtree(children[cachedLogbookChildIndex], 0);
+                if (hit != null) return hit;
+            }
+
+            for (int i = 0; i < children.Count; i++)
+            {
+                var hit = FindPopupInSubtree(children[i], 0);
+                if (hit != null) { cachedLogbookChildIndex = i; return hit; }
+            }
+            cachedLogbookChildIndex = -1;
+        }
+        catch (Exception e) { LogError($"FindLogbookPopup failed: {e.Message}"); }
+        return null;
+    }
+
+    // Depth-limited hunt for the popup-bg texture in a visible subtree.
+    private ExileCore2.PoEMemory.Element FindPopupInSubtree(ExileCore2.PoEMemory.Element el, int depth)
+    {
+        if (el == null || depth > 6 || !el.IsVisible) return null;
+        if (el.TextureName != null && el.TextureName.Contains(LogbookPopupTexture)) return el;
+        foreach (var ch in el.Children)
+        {
+            var hit = FindPopupInSubtree(ch, depth + 1);
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+
+    // Collect non-empty Text values from the popup subtree. These are the current rumour rows plus
+    // header strings; the headers simply won't be found in RumorWeights and get dropped by the caller.
+    private void ReadPopupRumors(ExileCore2.PoEMemory.Element popup, List<string> into, int depth = 0)
+    {
+        if (popup == null || depth > 6 || into.Count > 40) return;
+        var t = popup.Text;
+        if (!string.IsNullOrWhiteSpace(t)) into.Add(t);
+        foreach (var ch in popup.Children)
+            ReadPopupRumors(ch, into, depth + 1);
+    }
+
     private void DrawExpeditionsPanel()
     {
         try
