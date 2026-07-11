@@ -52,6 +52,9 @@ public enum ContentIndicatorMode
     Both,
 }
 
+// How the node weight readout is shown. Migrated from the old DrawWeightOnMap bool.
+public enum WeightDisplayMode { None, Icon, IconAndValue }
+
 public class ExileMapsSettings : ISettings
 {
     public ToggleNode Enable { get; set; } = new ToggleNode(false);
@@ -69,6 +72,9 @@ public class ExileMapsSettings : ISettings
 
         // Set once the label-style model has been migrated from the old scattered color settings.
         public bool LabelStyleMigrated { get; set; } = false;
+
+        // Set once the Phase 2 content-display settings have been migrated from the old bool flags.
+        public bool ContentDisplayMigrated { get; set; } = false;
 
         [JsonIgnore]
         private string _profileEditName = "";
@@ -646,8 +652,8 @@ public class GraphicSettings
     [Menu("Stack Above In-game Icons", "Anchor the content icon row above the node's in-game icon cluster instead of the node center. Off = offset from node center.")]
     public ToggleNode ContentIconsAboveGameIcons { get; set; } = new ToggleNode(true);
 
-    [Menu("Content Icon Size", "Width (and height before flatten) of each content icon in pixels, at full zoom. Scales down as you zoom out.")]
-    public RangeNode<float> ContentIconSize { get; set; } = new RangeNode<float>(49f, 4f, 120f);
+    [Menu("Content Icon Size", "Width (and height) of each content icon in the row, in pixels at full zoom. Scales down as you zoom out.")]
+    public RangeNode<float> ContentIconSize { get; set; } = new RangeNode<float>(24f, 8f, 48f);
 
     [Menu("Content Icon Flatten", "Vertically squash content icons for atlas perspective. 0 = upright, 0.5 = half height.")]
     public RangeNode<float> ContentIconFlatten { get; set; } = new RangeNode<float>(0f, 0f, 0.9f);
@@ -656,10 +662,68 @@ public class GraphicSettings
     public RangeNode<float> ContentIconOffsetY { get; set; } = new RangeNode<float>(-52f, -200f, 200f);
 
     [Menu("Content Icon Spacing", "Horizontal gap in pixels between icons when a node has multiple content types.")]
-    public RangeNode<float> ContentIconSpacing { get; set; } = new RangeNode<float>(2f, 0f, 32f);
+    public RangeNode<float> ContentIconSpacing { get; set; } = new RangeNode<float>(4f, 0f, 32f);
 
     [Menu("Content Icon Tint", "Tint color applied to all content icons. White = full color.")]
     public ColorNode ContentIconTint { get; set; } = new ColorNode(Color.White);
+
+    // ---- Phase 2 display (global, not per-profile) ----
+
+    [JsonIgnore]
+    public CustomNode SepPhase2 { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Content Row / Biome / Weight") };
+
+    [Menu("Show Content Row", "Draw a row of content-type icons centered below the map name.")]
+    public ToggleNode ShowContentRow { get; set; } = new ToggleNode(true);
+
+    [Menu("Content Row Offset Y", "Vertical pixel offset (at full zoom) of the content row below the map name. Scales with zoom.")]
+    public RangeNode<float> ContentRowOffsetY { get; set; } = new RangeNode<float>(18f, -200f, 200f);
+
+    [Menu("Content Tooltips", "Show a tooltip with the content name when hovering a content icon.")]
+    public ToggleNode ContentTooltips { get; set; } = new ToggleNode(true);
+
+    [Menu("Show Biome Icon", "Draw one biome icon (highest-weight biome) centered above the map name.")]
+    public ToggleNode ShowBiomeIcon { get; set; } = new ToggleNode(false);
+
+    [Menu("Biome Icon Size", "Width/height of the biome icon in pixels at full zoom.")]
+    public RangeNode<float> BiomeIconSize { get; set; } = new RangeNode<float>(24f, 8f, 48f);
+
+    [Menu("Biome Icon Offset Y", "Vertical pixel offset (at full zoom) of the biome icon above the map name. Negative = upward. Scales with zoom.")]
+    public RangeNode<float> BiomeIconOffsetY { get; set; } = new RangeNode<float>(-30f, -200f, 200f);
+
+    [Menu("Biome Tooltips", "Show a tooltip with the biome name when hovering the biome icon.")]
+    public ToggleNode BiomeTooltips { get; set; } = new ToggleNode(true);
+
+    // Weight display mode. Persisted; edited via WeightDisplayPicker (no [Menu] so the raw enum isn't auto-rendered).
+    public WeightDisplayMode WeightDisplayMode { get; set; } = WeightDisplayMode.IconAndValue;
+
+    [JsonIgnore]
+    public CustomNode WeightDisplayPicker { get; set; } = new CustomNode
+    {
+        DrawDelegate = () =>
+        {
+            if (Main == null) return;
+            string[] labels = { "None", "Icon", "Icon + Value" };
+            int idx = (int)Main.Settings.Graphics.WeightDisplayMode;
+            if (idx < 0 || idx >= labels.Length) idx = 0;
+            ImGui.Text("Weight Display");
+            ImGui.SameLine();
+            ImGui.SetNextItemWidth(160);
+            if (ImGui.Combo("##weightdisplay", ref idx, labels, labels.Length))
+                Main.Settings.Graphics.WeightDisplayMode = (WeightDisplayMode)idx;
+        }
+    };
+
+    [Menu("Weight Icon Size", "Diameter of the weight disc in pixels at full zoom.")]
+    public RangeNode<float> WeightIconSize { get; set; } = new RangeNode<float>(20f, 8f, 48f);
+
+    [Menu("Show Atlas Point Badge", "Badge content that awards an atlas point with a small star at the bottom of its icon.")]
+    public ToggleNode ShowAtlasPointBadge { get; set; } = new ToggleNode(true);
+
+    [Menu("Atlas Point Badge Size", "Size of the atlas-point star badge on a content icon, in pixels at full zoom.")]
+    public RangeNode<float> AtlasPointBadgeSize { get; set; } = new RangeNode<float>(10f, 4f, 32f);
+
+    [Menu("Atlas Point Badge Color", "Tint of the atlas-point star badge.")]
+    public ColorNode AtlasPointBadgeColor { get; set; } = new ColorNode(Color.FromArgb(255, 255, 200, 40));
 
     [JsonIgnore]
     public CustomNode SepColors { get; set; } = new CustomNode { DrawDelegate = () => ImGui.SeparatorText("Colors") };
