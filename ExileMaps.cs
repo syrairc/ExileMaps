@@ -76,8 +76,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     // Reused each frame to avoid per-render allocation.
     private readonly List<(Node node, RectangleF rect)> nodePositions = [];
     // Content-icon rects drawn this frame + their content name, for hover tooltips. Cleared each frame
-    // before the content-icon pass; consulted by DrawContentIconTooltip after all nodes are drawn.
-    private readonly List<(RectangleF rect, string content)> contentIconRects = [];
+    // before the content-icon pass; consulted by DrawIconTooltips after all nodes are drawn.
+    // rect + title (content/biome name) + optional second line (e.g. "Awards an atlas point").
+    private readonly List<(RectangleF rect, string title, string note)> contentIconRects = [];
     // Top Y of the content-icon row we drew this frame, per node. Lets the atlas-point/quest indicators
     // sit above our content icons. Cleared with contentIconRects.
     private readonly Dictionary<Vector2i, float> contentRowTopByCoord = [];
@@ -522,7 +523,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 DrawHoveredNodeOverTooltip();
 
                 // Content-icon hover tooltip (drawn last so it sits on top of everything).
-                DrawContentIconTooltip();
+                DrawIconTooltips();
             }
         }
 

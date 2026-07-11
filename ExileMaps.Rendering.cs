@@ -741,8 +741,12 @@ public partial class ExileMapsCore
                 var iconRect = new RectangleF(x, centerY - size / 2f, size, size);
                 Graphics.DrawImage(icons[i].file, iconRect, fullUV, icons[i].tint);
 
-                if (Settings.Graphics.ContentTooltips)
-                    contentIconRects.Add((iconRect, icons[i].content));
+                if (Settings.Graphics.ContentTooltips) {
+                    string note = (cachedNode.GivesAtlasPoint
+                        && string.Equals(icons[i].content, cachedNode.AtlasPointType, StringComparison.OrdinalIgnoreCase))
+                        ? "Awards an atlas point" : null;
+                    contentIconRects.Add((iconRect, icons[i].content, note));
+                }
 
                 // Star badge centered on the icon's bottom edge for the content that grants the point.
                 if (badge && customIconsLoaded
@@ -804,40 +808,47 @@ public partial class ExileMapsCore
             Graphics.DrawImage(bestFile, rect, new RectangleF(0, 0, 1, 1), Color.White);
 
             if (Settings.Graphics.BiomeTooltips)
-                contentIconRects.Add((rect, bestName));
+                contentIconRects.Add((rect, bestName, null));
         } catch (Exception e) {
             LogError("Error drawing biome icon: " + e.Message);
         }
     }
 
-    // Shows the content name as a tooltip when the cursor is over a content icon drawn this frame.
-    // contentIconRects is populated by DrawContentRow; checked topmost-last so stacked icons resolve
-    // to the one drawn last. Drawn near the cursor, after all other passes.
-    private void DrawContentIconTooltip()
+    // Shows a tooltip for the content/biome icon under the cursor (topmost-last so stacked icons resolve
+    // to the last drawn). contentIconRects is populated by DrawContentRow / DrawBiomeIcon. Drawn last.
+    private void DrawIconTooltips()
     {
-        if (!ContentIconsEnabled || contentIconRects.Count == 0)
+        if (contentIconRects.Count == 0)
             return;
 
         try {
             Vector2 cursor = ImGuiNET.ImGui.GetMousePos();
-            string content = null;
+            string title = null, note = null;
             for (int i = contentIconRects.Count - 1; i >= 0; i--) {
                 var r = contentIconRects[i].rect;
                 if (cursor.X >= r.Left && cursor.X <= r.Right && cursor.Y >= r.Top && cursor.Y <= r.Bottom) {
-                    content = contentIconRects[i].content;
+                    title = contentIconRects[i].title;
+                    note = contentIconRects[i].note;
                     break;
                 }
             }
-            if (content == null)
+            if (title == null)
                 return;
 
             Vector2 pos = cursor + new Vector2(16, 16);
-            using (Graphics.SetTextScale(1.0f))
-                DrawCenteredTextWithBorder(content, pos + new Vector2(Graphics.MeasureText(content).X / 2f, 0),
+            using (Graphics.SetTextScale(1.0f)) {
+                DrawCenteredTextWithBorder(title, pos + new Vector2(Graphics.MeasureText(title).X / 2f, 0),
                     Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor,
                     Settings.Graphics.ContentIconTint, 10, 6);
+                if (!string.IsNullOrEmpty(note)) {
+                    Vector2 notePos = pos + new Vector2(0, Graphics.MeasureText(title).Y + 4);
+                    DrawCenteredTextWithBorder(note, notePos + new Vector2(Graphics.MeasureText(note).X / 2f, 0),
+                        Settings.Graphics.AtlasPointBadgeColor, Settings.Graphics.BackgroundColor,
+                        Settings.Graphics.ContentIconTint, 10, 6);
+                }
+            }
         } catch (Exception e) {
-            DebugSwallow("DrawContentIconTooltip", e);
+            DebugSwallow("DrawIconTooltips", e);
         }
     }
 
