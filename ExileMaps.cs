@@ -215,8 +215,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             customIconsLoaded = true;
         }
 
-        // Load per-content-type icon PNGs from textures/icon-*.png (icon-breach.png etc.).
-        var texturesDir = Path.Combine(DirectoryFullName, "textures");
+        // Load per-content-type icon PNGs from textures/content/icon-*.png (icon-breach.png etc.).
+        var texturesDir = Path.Combine(DirectoryFullName, "textures", "content");
         foreach (var file in Directory.GetFiles(texturesDir, "icon-*.png")) {
             var name = Path.GetFileName(file);
             try {

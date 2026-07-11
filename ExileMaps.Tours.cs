@@ -62,7 +62,7 @@ public partial class ExileMapsCore
     {
         try
         {
-            var full = Path.Combine(DirectoryFullName, "textures", file);
+            var full = Path.Combine(DirectoryFullName, "textures", "nav", file);
             if (!File.Exists(full)) { LogError($"Panel button texture missing: {file}"); return IntPtr.Zero; }
             Graphics.InitImage(file, full);
             return Graphics.GetTextureId(file);

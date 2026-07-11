@@ -24,11 +24,11 @@
   </ItemGroup>
   <ItemGroup>
     <None Remove="json\*.json" />
-    <None Remove="textures\*.png" />
+    <None Remove="textures\**\*.png" />
     <Content Include="json\*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="textures\*.png">
+    <Content Include="textures\**\*.png">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
