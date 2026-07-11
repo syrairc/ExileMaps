@@ -84,7 +84,7 @@ public partial class ExileMapsCore
                 Normal = L("waypoints-normal.png"), Hover = L("waypoints-hover.png"),
                 Pressed = L("waypoints-pressed.png"), Tooltip = L("waypoints-tooltip.png"),
                 NormalSize = btnSz, PressedSize = btnSz,
-                TooltipSize = new Vector2(120, 39),
+                TooltipSize = new Vector2(187, 55),
                 GetOpen = () => WaypointPanelIsOpen, Toggle = () => WaypointPanelIsOpen = !WaypointPanelIsOpen,
             },
             new PanelButtonDef {
@@ -92,7 +92,7 @@ public partial class ExileMapsCore
                 Normal = L("tours-normal.png"), Hover = L("tours-hover.png"),
                 Pressed = L("tours-pressed.png"), Tooltip = L("tours-tooltip.png"),
                 NormalSize = btnSz, PressedSize = btnSz,
-                TooltipSize = new Vector2(82, 39),
+                TooltipSize = new Vector2(187, 55),
                 GetOpen = () => toursPanelOpen, Toggle = () => toursPanelOpen = !toursPanelOpen,
             },
             new PanelButtonDef {
@@ -100,7 +100,7 @@ public partial class ExileMapsCore
                 Normal = L("atlas-normal.png"), Hover = L("atlas-hover.png"),
                 Pressed = L("atlas-pressed.png"), Tooltip = L("atlas-tooltip.png"),
                 NormalSize = btnSz, PressedSize = btnSz,
-                TooltipSize = new Vector2(165, 39),
+                TooltipSize = new Vector2(187, 55),
                 GetOpen = () => atlasOverviewOpen, Toggle = () => atlasOverviewOpen = !atlasOverviewOpen,
             },
             // Action button (not a toggle): GetOpen stays false so it returns to normal after the
@@ -110,7 +110,7 @@ public partial class ExileMapsCore
                 Normal = L("export-normal.png"), Hover = L("export-hover.png"),
                 Pressed = L("export-pressed.png"), Tooltip = L("export-tooltip.png"),
                 NormalSize = btnSz, PressedSize = btnSz,
-                TooltipSize = new Vector2(145, 39),
+                TooltipSize = new Vector2(187, 55),
                 GetOpen = () => false, Toggle = () => ExportAtlasHtml(),
             },
             // Hidden (see DrawPanelButtonBar) unless expeditions are enabled and loaded.
@@ -119,7 +119,7 @@ public partial class ExileMapsCore
                 Normal = L("expeditions-normal.png"), Hover = L("expeditions-hover.png"),
                 Pressed = L("expeditions-pressed.png"), Tooltip = L("expeditions-tooltip.png"),
                 NormalSize = btnSz, PressedSize = btnSz,
-                TooltipSize = new Vector2(140, 39),
+                TooltipSize = new Vector2(187, 55),
                 GetOpen = () => expeditionsPanelOpen, Toggle = () => expeditionsPanelOpen = !expeditionsPanelOpen,
             },
         };
