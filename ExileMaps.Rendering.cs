@@ -747,6 +747,59 @@ public partial class ExileMapsCore
         }
     }
 
+    // Draws one biome icon (highest-weight biome on the node that has a loaded icon) centered above the
+    // map name. Gated the same way as the content row.
+    private void DrawBiomeIcon(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
+            if (!Settings.Graphics.ShowBiomeIcon || loadedBiomeIcons.Count == 0)
+                return;
+            if (cachedNode.IsVisited && !cachedNode.IsAttempted)
+                return;
+            if (!cachedNode.MapType.Highlight || cachedNode.Biomes.Count == 0)
+                return;
+
+            bool visGateFails =
+                (!Settings.Maps.Content.ShowRingsOnLockedNodes && !cachedNode.IsUnlocked) ||
+                (!Settings.Maps.Content.ShowRingsOnUnlockedNodes && cachedNode.IsUnlocked) ||
+                (!Settings.Maps.Content.ShowRingsOnHiddenNodes && !cachedNode.IsVisible);
+            if (visGateFails)
+                return;
+
+            // Highest-weight biome that resolves to a loaded icon.
+            string bestName = null, bestFile = null;
+            float bestW = float.NegativeInfinity;
+            foreach (var b in cachedNode.Biomes.Values) {
+                if (b?.Name == null || b.Weight <= bestW)
+                    continue;
+                var file = ResolveBiomeIconFile(b.Name);
+                if (file == null)
+                    continue;
+                bestW = b.Weight;
+                bestName = b.Name;
+                bestFile = file;
+            }
+            if (bestFile == null)
+                return;
+
+            float artW = cachedNode.ArtWidth > 1f ? cachedNode.ArtWidth : 40f;
+            float mag = nodeCurrentPosition.Width / artW;
+            if (mag > maxNodeZoomMagnification) maxNodeZoomMagnification = mag;
+            float zoom = maxNodeZoomMagnification > 0.0001f ? mag / maxNodeZoomMagnification : 1f;
+
+            float size = Settings.Graphics.BiomeIconSize * zoom;
+            float centerY = nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY
+                          + Settings.Graphics.BiomeIconOffsetY * zoom;
+            var rect = new RectangleF(nodeCurrentPosition.Center.X - size / 2f, centerY - size / 2f, size, size);
+            Graphics.DrawImage(bestFile, rect, new RectangleF(0, 0, 1, 1), Color.White);
+
+            if (Settings.Graphics.BiomeTooltips)
+                contentIconRects.Add((rect, bestName));
+        } catch (Exception e) {
+            LogError("Error drawing biome icon: " + e.Message);
+        }
+    }
+
     // Shows the content name as a tooltip when the cursor is over a content icon drawn this frame.
     // contentIconRects is populated by DrawContentRow; checked topmost-last so stacked icons resolve
     // to the one drawn last. Drawn near the cursor, after all other passes.

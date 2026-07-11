@@ -476,13 +476,15 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 }
                 if (perf) PerfMonitor.Record("Render.Fills", Stopwatch.GetTimestamp() - t0);
 
-                // 3. Content row (per-type icon PNGs below the map name)
+                // 3. Biome icon (above name) + content row (below name)
                 t0 = Stopwatch.GetTimestamp();
                 contentIconRects.Clear();
                 contentRowTopByCoord.Clear();
                 indicatorBaseTopByCoord.Clear();
-                foreach (var (node, rect) in nodePositions)
+                foreach (var (node, rect) in nodePositions) {
+                    DrawBiomeIcon(node, rect);
                     DrawContentRow(node, rect);
+                }
                 if (perf) PerfMonitor.Record("Render.ContentRow", Stopwatch.GetTimestamp() - t0);
 
                 // 3c-3f. Indicators (favorites, special, atlas-point, atlas-quest)
