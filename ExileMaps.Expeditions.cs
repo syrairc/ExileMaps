@@ -301,7 +301,8 @@ public partial class ExileMapsCore
             var texts = new List<string>();
             ReadPopupRumors(popup, texts);
 
-            // decode current rumours, dedupe, order by weight desc. Unknown rumours still show (raw).
+            // decode current rumours, dedupe, order by weight desc. Popup text we can't decode (rumour
+            // names not in RumorWeights, plus the popup's header strings) is dropped rather than shown raw.
             var rows = new List<(string content, string desc, float w)>();
             var seen = new HashSet<string>();
             foreach (var t in texts)
