@@ -231,7 +231,8 @@ public partial class ExileMapsCore
     // named accessor exists and its top-level IngameUi index is not stable, so find it by texture.
     private const string LogbookPopupTexture = "LogbookRevealPopupBg";
     // Cache the top-level IngameUi child index the popup was last found under, so the per-frame lookup
-    // rechecks one subtree instead of scanning all ~120 children.
+    // rechecks one subtree instead of scanning all ~120 children. Only helps while the popup is up -
+    // once it closes the index misses and this falls back to a full top-level scan.
     private int cachedLogbookChildIndex = -1;
 
     // The visible Logbook rumours popup element, or null when it's not up. Fast-path rechecks the
@@ -293,7 +294,7 @@ public partial class ExileMapsCore
         if (ShowMinimap) return;
         try
         {
-            var popup = FindLogbookPopup();
+            var popup = frameLogbookPopup;
             if (popup == null) return;
             RectangleF prect = popup.GetClientRect();
             if (prect.Width <= 0 || prect.Height <= 0) return;
@@ -340,6 +341,8 @@ public partial class ExileMapsCore
             var screen = GameController.Window.GetWindowRectangleTimeCache.Size;
             if (x + boxW > screen.X) x = prect.Left - 8f - boxW;
             float y = prect.Top;
+            // don't let a tall rumour list run off the bottom of the screen
+            y = MathF.Min(y, screen.Y - boxH);
 
             var tl = new Vector2(x, y);
             Graphics.DrawBox(tl, new Vector2(x + boxW, y + boxH), Settings.Graphics.BackgroundColor, 5f);

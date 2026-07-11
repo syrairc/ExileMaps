@@ -102,6 +102,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private Dictionary<Vector2i, Node> mapCache = [];
     // Snapshot of AtlasPanel.Buttons, rebuilt each cache refresh. Guarded by mapCacheLock.
     private List<Classes.Expedition> expeditions = new();
+    // the rumours popup resolved once per frame in UpdateScreenBounds; reused by the overlay
+    private ExileCore2.PoEMemory.Element frameLogbookPopup;
     // Coords of maps in expeditions the user toggled "Highlight". Transient, not persisted.
     private readonly HashSet<Vector2i> highlightedExpeditionCoords = new();
     public bool refreshCache = false;

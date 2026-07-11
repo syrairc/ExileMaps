@@ -128,6 +128,7 @@ public partial class ExileMapsCore
     private void UpdateScreenBounds()
     {
         try {
+            frameLogbookPopup = null;
             var size = GameController.Window.GetWindowRectangleTimeCache.Size;
             float left = 0;
             float right = size.X;
@@ -171,10 +172,10 @@ public partial class ExileMapsCore
             // child, not under WorldMap). Reuses the same exclude+segment machinery as the map tooltip.
             if (Settings.Features.ShowExpeditions)
             {
-                var logbook = FindLogbookPopup();
-                if (logbook != null)
+                frameLogbookPopup = FindLogbookPopup();
+                if (frameLogbookPopup != null)
                 {
-                    RectangleF lb = logbook.GetClientRect();
+                    RectangleF lb = frameLogbookPopup.GetClientRect();
                     if (lb.Width > 0 && lb.Height > 0)
                     {
                         cachedExcludeRects.Add(lb);
