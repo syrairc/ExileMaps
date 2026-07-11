@@ -51,13 +51,14 @@ public partial class ExileMapsCore
     }
 
     // Rebuild the expeditions snapshot from AtlasPanel.Buttons. Called inside RefreshMapCache.
-    // The game's own Buttons list can contain several AtlasButtonNode entries describing the same
-    // physical expedition (observed live - multiple distinct button objects sharing one underlying
-    // region-action-button reference), so dedupe on content rather than trusting one-row-per-button.
+    // The Buttons list mixes Towers (ButtonType.Id != "Ocean", no rumours) with expeditions, and
+    // has 4-8 Ocean buttons per region - one candidate spawn node each, all sharing the region's
+    // rumour pool. Exactly one per region has IsVisible==true: the current spawn. So: keep Ocean
+    // only, one Expedition per region, and take the visible button's coord as the spawn.
     private void SnapshotExpeditions()
     {
         var built = new List<Classes.Expedition>();
-        var seen = new HashSet<string>();
+        var byRegion = new Dictionary<Vector2i, Classes.Expedition>();
         try
         {
             var buttons = AtlasPanel?.Buttons;
@@ -65,28 +66,27 @@ public partial class ExileMapsCore
             {
                 foreach (var b in buttons)
                 {
-                    var exp = new Classes.Expedition
+                    if (b?.ButtonType?.Id != "Ocean") continue; // drop Towers / non-expedition buttons
+
+                    var region = b.RegionCoordinate;
+                    if (!byRegion.TryGetValue(region, out var exp))
                     {
-                        ButtonCoord = b.Coordinate,
-                        RegionCoord = b.RegionCoordinate,
-                    };
-                    var nodes = b.RegionNodes;
-                    if (nodes != null)
-                        foreach (var n in nodes)
-                            exp.MapCoords.Add(n.Coordinate);
-                    var rumors = b.Rumors;
-                    if (rumors != null)
-                        foreach (var (k, v) in rumors)
-                            exp.Rumors[k] = v;
+                        exp = new Classes.Expedition { RegionCoord = region, SpawnCoord = b.Coordinate };
+                        var nodes = b.RegionNodes;
+                        if (nodes != null)
+                            foreach (var n in nodes)
+                                exp.MapCoords.Add(n.Coordinate);
+                        var rumors = b.Rumors;
+                        if (rumors != null)
+                            foreach (var (k, v) in rumors)
+                                exp.Rumors[k] = v;
+                        byRegion[region] = exp;
+                        built.Add(exp);
+                    }
 
-                    // same region + same maps + same rumours = the same real expedition, just a
-                    // repeated button entry - keep only the first one seen.
-                    string signature = $"{exp.RegionCoord.X}_{exp.RegionCoord.Y}|" +
-                        string.Join(",", exp.MapCoords.OrderBy(c => c.X).ThenBy(c => c.Y)) + "|" +
-                        string.Join(",", exp.Rumors.OrderBy(kv => kv.Key).Select(kv => $"{kv.Key}={kv.Value}"));
-                    if (!seen.Add(signature)) continue;
-
-                    built.Add(exp);
+                    // The visible button is the real current spawn; prefer its coord over the first seen.
+                    if (b.IsVisible)
+                        exp.SpawnCoord = b.Coordinate;
                 }
             }
         }
@@ -164,7 +164,7 @@ public partial class ExileMapsCore
 
         foreach (var c in e.MapCoords)
         {
-            long dist = Math.Abs((long)c.X - e.ButtonCoord.X) + Math.Abs((long)c.Y - e.ButtonCoord.Y);
+            long dist = Math.Abs((long)c.X - e.SpawnCoord.X) + Math.Abs((long)c.Y - e.SpawnCoord.Y);
             if (dist < bestDist) { bestDist = dist; best = c; found = true; }
         }
         if (!found) return null;
@@ -273,7 +273,7 @@ public partial class ExileMapsCore
                 {
                     if (!ExpeditionMatchesSearch(e, expSearchText)) continue;
 
-                    ImGui.PushID($"exp_{e.ButtonCoord.X}_{e.ButtonCoord.Y}");
+                    ImGui.PushID($"exp_{e.RegionCoord.X}_{e.RegionCoord.Y}");
 
                     bool hl = IsExpeditionHighlighted(e);
                     if (ImGui.Checkbox("##hl", ref hl)) SetExpeditionHighlight(e, hl);
@@ -286,7 +286,7 @@ public partial class ExileMapsCore
 
                     if (ImGui.CollapsingHeader(ExpeditionLabel(e)))
                     {
-                        if (ImGui.BeginTable($"rumor_rows_{e.ButtonCoord.X}_{e.ButtonCoord.Y}", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
+                        if (ImGui.BeginTable($"rumor_rows_{e.RegionCoord.X}_{e.RegionCoord.Y}", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.SizingStretchProp))
                         {
                             ImGui.TableSetupColumn("Rumor", ImGuiTableColumnFlags.WidthFixed, 200);
                             ImGui.TableSetupColumn("x", ImGuiTableColumnFlags.WidthFixed, 30);

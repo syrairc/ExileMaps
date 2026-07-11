@@ -7,7 +7,8 @@ namespace ExileMaps.Classes;
 // Score/Label are derived at draw time from the live rumour weights, so they are not stored here.
 public class Expedition
 {
-    public Vector2i ButtonCoord;
+    // Coord of the region's IsVisible button - the current spawn location (one per region).
+    public Vector2i SpawnCoord;
     public Vector2i RegionCoord;
     public List<Vector2i> MapCoords = new();
     public Dictionary<string, int> Rumors = new();
