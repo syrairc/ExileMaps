@@ -155,8 +155,11 @@ public partial class ExileMapsCore
         }
     }
 
-    // Draw the expedition icon at each region's current spawn node (the IsVisible button's coord).
-    // Gated behind ShowExpeditionMarkers. Skips off-screen / unresolved nodes.
+    // Draw the expedition icon at each region's current spawn node (the IsVisible button's coord),
+    // plus an always-on box over it listing the region's possible rumours. Gated behind
+    // ShowExpeditionMarkers. Skips off-screen / unresolved nodes, and skips the region whose game
+    // button is currently visible - we detect that via the live rumours popup and let the game's own
+    // UI take over (the button's own Element rect never resolves, so the popup is the only signal).
     private void DrawExpeditionMarkers()
     {
         if (!Settings.Features.ShowExpeditionMarkers) return;
@@ -165,9 +168,20 @@ public partial class ExileMapsCore
         List<Classes.Expedition> snapshot;
         lock (mapCacheLock) snapshot = expeditions.ToList();
 
+        // Which region's button is up right now? Hide its marker+overlay so we don't fight the popup.
+        Classes.Expedition popupExp = null;
+        if (frameLogbookPopup != null)
+        {
+            var popupTexts = new List<string>();
+            ReadPopupRumors(frameLogbookPopup, popupTexts);
+            popupExp = FindExpeditionForPopup(new HashSet<string>(popupTexts));
+        }
+
         var fullUV = new RectangleF(0, 0, 1, 1);
         foreach (var e in snapshot)
         {
+            if (ReferenceEquals(e, popupExp)) continue; // game button visible for this region
+
             Node node;
             lock (mapCacheLock)
                 if (!mapCache.TryGetValue(e.SpawnCoord, out node)) node = null;
@@ -180,7 +194,55 @@ public partial class ExileMapsCore
             float size = MathF.Max(rect.Width, rect.Height);
             var iconRect = new RectangleF(rect.Center.X - size / 2f, rect.Top - size, size, size);
             Graphics.DrawImage("icon-expedition.png", iconRect, fullUV, Color.White);
+
+            DrawExpeditionPossibleRumors(e, iconRect);
         }
+    }
+
+    // Compact box above the expedition indicator listing the region's POSSIBLE rumours (the whole
+    // pool from Button.Rumors, decoded + weight-sorted). Always on while the marker draws; the caller
+    // already skips the region whose game button is up.
+    private void DrawExpeditionPossibleRumors(Classes.Expedition e, RectangleF iconRect)
+    {
+        try
+        {
+            var rows = new List<(string content, float w)>();
+            foreach (var (text, _) in e.Rumors)
+                if (Settings.Expeditions.RumorWeights.TryGetValue(text, out var r))
+                    rows.Add((r.Content, r.Weight));
+            if (rows.Count == 0) return;
+            rows.Sort((a, b) => b.w.CompareTo(a.w));
+
+            System.Drawing.Color color = Settings.Graphics.FontColor;
+            var lines = new List<string> { "Possible rumours" };
+            foreach (var (content, _) in rows) lines.Add("- " + content);
+
+            float pad = 6f, lineH = 0f, maxW = 0f;
+            foreach (var t in lines)
+            {
+                var m = Graphics.MeasureText(t);
+                if (m.X > maxW) maxW = m.X;
+                if (m.Y > lineH) lineH = m.Y;
+            }
+            float boxW = maxW + pad * 2f;
+            float boxH = lines.Count * lineH + pad * 2f;
+
+            // center above the icon; drop below it if it'd run off the top, and clamp horizontally.
+            float x = iconRect.Center.X - boxW / 2f;
+            float y = iconRect.Top - boxH - 2f;
+            var screen = GameController.Window.GetWindowRectangleTimeCache.Size;
+            x = Math.Clamp(x, 0f, MathF.Max(0f, screen.X - boxW));
+            if (y < 0f) y = iconRect.Bottom + 2f;
+
+            Graphics.DrawBox(new Vector2(x, y), new Vector2(x + boxW, y + boxH), Settings.Graphics.BackgroundColor, 5f);
+            float cy = y + pad;
+            foreach (var t in lines)
+            {
+                Graphics.DrawText(t, new Vector2(x + pad, cy), color);
+                cy += lineH;
+            }
+        }
+        catch (Exception ex) { LogError($"DrawExpeditionPossibleRumors failed: {ex.Message}"); }
     }
 
     // true only if every map in the expedition is currently highlighted (so the checkbox reflects
@@ -285,6 +347,25 @@ public partial class ExileMapsCore
             ReadPopupRumors(ch, into, depth + 1);
     }
 
+    // Which expedition does the open popup belong to? Match by the popup's current rumour texts
+    // against each region's pool and take the best overlap. currentTexts is the popup's raw rumour
+    // keys (the `seen` set from the overlay). Returns null if nothing overlaps.
+    private Classes.Expedition FindExpeditionForPopup(HashSet<string> currentTexts)
+    {
+        List<Classes.Expedition> snapshot;
+        lock (mapCacheLock) snapshot = expeditions.ToList();
+
+        Classes.Expedition best = null; int bestOverlap = 0;
+        foreach (var e in snapshot)
+        {
+            int overlap = 0;
+            foreach (var (text, _) in e.Rumors)
+                if (currentTexts.Contains(text)) overlap++;
+            if (overlap > bestOverlap) { bestOverlap = overlap; best = e; }
+        }
+        return best;
+    }
+
     // When the rumours popup is up, draw a decode overlay beside it: the popup's CURRENT rumours
     // (read from the popup itself, not Button.Rumors which is only the region's possible pool),
     // decoded via RumorWeights and ordered by weight. Graphics-drawn so it tracks the popup.
@@ -304,26 +385,56 @@ public partial class ExileMapsCore
 
             // decode current rumours, dedupe, order by weight desc. Popup text we can't decode (rumour
             // names not in RumorWeights, plus the popup's header strings) is dropped rather than shown raw.
-            var rows = new List<(string content, string desc, float w)>();
+            var rows = new List<(string content, string desc, float w, bool faded)>();
             var seen = new HashSet<string>();
             foreach (var t in texts)
             {
                 if (!seen.Add(t)) continue;
                 if (Settings.Expeditions.RumorWeights.TryGetValue(t, out var r))
-                    rows.Add((r.Content, r.Description, r.Weight));
+                    rows.Add((r.Content, r.Description, r.Weight, false));
             }
             if (rows.Count == 0) return;
             rows.Sort((a, b) => b.w.CompareTo(a.w));
 
+            // Hold Alt to also list the region's other possible rumours (the ones that didn't roll),
+            // decoded from the matching expedition's pool and shown faded below the current ones.
+            bool showPossible = ExileCore2.Input.GetKeyState(System.Windows.Forms.Keys.Menu);
+            if (showPossible)
+            {
+                var exp = FindExpeditionForPopup(seen);
+                if (exp != null)
+                {
+                    var extra = new List<(string content, string desc, float w, bool faded)>();
+                    foreach (var (text, _) in exp.Rumors)
+                    {
+                        if (!seen.Add(text)) continue;
+                        if (Settings.Expeditions.RumorWeights.TryGetValue(text, out var r))
+                            extra.Add((r.Content, r.Description, r.Weight, true));
+                    }
+                    extra.Sort((a, b) => b.w.CompareTo(a.w));
+                    rows.AddRange(extra);
+                }
+            }
+
+            // Faded rows (possible-but-not-rolled) get a dimmed alpha; current rows stay full.
+            System.Drawing.Color fontColor = Settings.Graphics.FontColor;
+            System.Drawing.Color Dim(System.Drawing.Color c) => System.Drawing.Color.FromArgb(90, c.R, c.G, c.B);
+
             // Build the display lines (content header + indented description per rumour).
             var lines = new List<(string text, System.Drawing.Color color)>();
-            lines.Add(("Rumours", Settings.Graphics.FontColor));
-            foreach (var (content, desc, _) in rows)
+            lines.Add(("Rumours", fontColor));
+            foreach (var (content, desc, _, faded) in rows)
             {
-                lines.Add(("- " + content, Settings.Graphics.FontColor));
+                var head = faded ? Dim(fontColor) : fontColor;
+                lines.Add(("- " + content, head));
                 if (!string.IsNullOrEmpty(desc))
-                    lines.Add(("    " + desc, System.Drawing.Color.FromArgb(180, 180, 180)));
+                {
+                    var sub = System.Drawing.Color.FromArgb(faded ? 90 : 180, 180, 180, 180);
+                    lines.Add(("    " + desc, sub));
+                }
             }
+            if (showPossible)
+                lines.Add(("(Alt: showing possible rumours)", Dim(fontColor)));
 
             // Measure box.
             float pad = 8f, lineH = 0f, maxW = 0f;
