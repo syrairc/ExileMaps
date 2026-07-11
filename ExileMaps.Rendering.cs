@@ -609,6 +609,37 @@ public partial class ExileMapsCore
         return resolved;
     }
 
+    // Biome-name -> biome-*.png alias table (for names whose file base isn't just lowercase+stripped).
+    private static readonly System.Collections.Generic.Dictionary<string, string> BiomeIconAliases =
+        new(System.StringComparer.OrdinalIgnoreCase)
+    {
+    };
+
+    // Resolves a biome name to a loaded biome-<x>.png, or null. Alias table first, then literal
+    // lowercase+space-stripped form. Memoized; loadedBiomeIcons is init-only.
+    private string ResolveBiomeIconFile(string biomeName)
+    {
+        if (string.IsNullOrEmpty(biomeName))
+            return null;
+        if (biomeIconFileCache.TryGetValue(biomeName, out var cached))
+            return cached;
+
+        string resolved = null;
+        if (BiomeIconAliases.TryGetValue(biomeName, out var alias)) {
+            var aliased = $"biome-{alias}.png";
+            if (loadedBiomeIcons.Contains(aliased))
+                resolved = aliased;
+        }
+        if (resolved == null) {
+            var literal = $"biome-{biomeName.ToLower().Replace(" ", "")}.png";
+            if (loadedBiomeIcons.Contains(literal))
+                resolved = literal;
+        }
+
+        biomeIconFileCache[biomeName] = resolved;
+        return resolved;
+    }
+
     // Icon file used for content with no matching icon-<content>.png (tinted with UnknownContentColor).
     private const string BlankContentIcon = "icon-blank.png";
 

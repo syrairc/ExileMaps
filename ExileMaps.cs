@@ -88,6 +88,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     // Content-name -> resolved icon-<x>.png file (null = no file). loadedContentIcons is init-only so
     // this never needs invalidating; kills the per-node ToLower/Replace/interpolation string allocs.
     private readonly Dictionary<string, string> contentIconFileCache = new(StringComparer.OrdinalIgnoreCase);
+    // Biome-name -> resolved biome-<x>.png file (null = no file). Sibling of contentIconFileCache.
+    private readonly Dictionary<string, string> biomeIconFileCache = new(StringComparer.OrdinalIgnoreCase);
     // Reused across DrawContentIcons calls so the per-node icon list isn't reallocated every frame.
     private readonly List<(string file, string content, Color tint)> contentIconScratch = [];
     // Per-frame memo of node screen rects. Element.GetClientRect() walks the parent chain (a
@@ -159,6 +161,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private readonly Dictionary<PathTextureStyle, IntPtr> pathTextureIds = new();
     // Per-content-type icon PNGs: icon-<contenttype>.png, keyed by file name.
     private readonly HashSet<string> loadedContentIcons = new(StringComparer.OrdinalIgnoreCase);
+    // Per-biome icon PNGs: biome-<biomename>.png, keyed by file name.
+    private readonly HashSet<string> loadedBiomeIcons = new(StringComparer.OrdinalIgnoreCase);
     // Largest screen-px-per-art-unit magnification seen (== full zoom). Self-calibrates the content
     // icon zoom factor so settings tuned "at full zoom" scale down correctly as the atlas zooms out.
     private float maxNodeZoomMagnification = 0f;
@@ -235,6 +239,22 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             }
         }
         LogMessage($"ExileMaps: loaded {loadedContentIcons.Count} content icons.");
+
+        // Load per-biome icon PNGs from textures/biomes/biome-*.png (biome-desert.png etc.).
+        var biomesDir = Path.Combine(DirectoryFullName, "textures", "biomes");
+        if (Directory.Exists(biomesDir)) {
+            foreach (var file in Directory.GetFiles(biomesDir, "biome-*.png")) {
+                var name = Path.GetFileName(file);
+                try {
+                    Graphics.InitImage(name, file);
+                    Graphics.GetTextureId(name);
+                    loadedBiomeIcons.Add(name);
+                } catch (Exception e) {
+                    LogError($"Failed to load biome icon {name}: {e.Message}");
+                }
+            }
+        }
+        LogMessage($"ExileMaps: loaded {loadedBiomeIcons.Count} biome icons.");
 
         // Textured atlas panel buttons (waypoints / tours / atlas), with per-state + tooltip images.
         LoadPanelButtonTextures();
