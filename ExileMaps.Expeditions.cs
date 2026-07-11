@@ -227,7 +227,7 @@ public partial class ExileMapsCore
         catch (Exception ex) { LogError($"WaypointNearestInExpedition failed: {ex.Message}"); }
     }
 
-    // The rumours popup bg carries this texture (…/MapQuickUseButton/LogbookRevealPopupBg.dds). No
+    // The rumours popup bg carries this texture (.../MapQuickUseButton/LogbookRevealPopupBg.dds). No
     // named accessor exists and its top-level IngameUi index is not stable, so find it by texture.
     private const string LogbookPopupTexture = "LogbookRevealPopupBg";
     // Cache the top-level IngameUi child index the popup was last found under, so the per-frame lookup
