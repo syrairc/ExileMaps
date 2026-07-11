@@ -1,6 +1,7 @@
 // Expeditions: rumour-data load, panel, highlight, waypoint. See docs/superpowers/specs/2026-07-09-expeditions-feature-design.md
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Numerics;
@@ -122,6 +123,40 @@ public partial class ExileMapsCore
         return false;
     }
 
+    // Ring on each on-screen node belonging to a highlighted expedition. Mirrors DrawSearchPing's
+    // draw call (AtlasOverview.cs) so the two ring styles stay consistent.
+    private void DrawExpeditionHighlight()
+    {
+        if (highlightedExpeditionCoords.Count == 0) return;
+        // Minimap mode never repopulates nodePositions; skip like DrawSearchPing does.
+        if (ShowMinimap) return;
+
+        Color color = Settings.Expeditions.HighlightColor;
+        foreach (var (node, rect) in nodePositions)
+        {
+            if (!highlightedExpeditionCoords.Contains(node.Coordinates)) continue;
+            var center = rect.Center;
+            float radius = MathF.Max(rect.Width, rect.Height) * 0.62f;
+            Graphics.DrawCircle(center, radius, color, 3f, 24);
+        }
+    }
+
+    // true only if every map in the expedition is currently highlighted (so the checkbox reflects
+    // a partial toggle as unchecked rather than silently lying).
+    private bool IsExpeditionHighlighted(Classes.Expedition e)
+    {
+        foreach (var c in e.MapCoords)
+            if (!highlightedExpeditionCoords.Contains(c)) return false;
+        return e.MapCoords.Count > 0;
+    }
+
+    private void SetExpeditionHighlight(Classes.Expedition e, bool on)
+    {
+        foreach (var c in e.MapCoords)
+            if (on) highlightedExpeditionCoords.Add(c);
+            else highlightedExpeditionCoords.Remove(c);
+    }
+
     private void DrawExpeditionsPanel()
     {
         try
@@ -155,6 +190,12 @@ public partial class ExileMapsCore
                     if (!ExpeditionMatchesSearch(e, expSearchText)) continue;
 
                     ImGui.PushID($"exp_{e.ButtonCoord.X}_{e.ButtonCoord.Y}");
+
+                    bool hl = IsExpeditionHighlighted(e);
+                    if (ImGui.Checkbox("##hl", ref hl)) SetExpeditionHighlight(e, hl);
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("Highlight this expedition's maps on the atlas.");
+                    ImGui.SameLine();
+
                     if (ImGui.CollapsingHeader(ExpeditionLabel(e)))
                     {
                         foreach (var (text, count) in e.Rumors.OrderByDescending(kv =>

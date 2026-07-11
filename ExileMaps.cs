@@ -102,6 +102,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private Dictionary<Vector2i, Node> mapCache = [];
     // Snapshot of AtlasPanel.Buttons, rebuilt each cache refresh. Guarded by mapCacheLock.
     private List<Classes.Expedition> expeditions = new();
+    // Coords of maps in expeditions the user toggled "Highlight". Transient, not persisted.
+    private readonly HashSet<Vector2i> highlightedExpeditionCoords = new();
     public bool refreshCache = false;
     private bool refreshingCache = false;
     // When set, the next background refresh clears the cache first (atlas reopen / area change).
@@ -515,6 +517,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         DrawProgressReadout();
         DrawSearchPing();
+        DrawExpeditionHighlight();
 
         t0 = Stopwatch.GetTimestamp();
         DrawTours();
