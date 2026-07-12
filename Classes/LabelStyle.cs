@@ -52,9 +52,10 @@ namespace ExileMaps.Classes
     // Where an override's icon draws relative to the node. Ignored when the icon replaces the node icon.
     public enum IconPosition
     {
-        AboveNode,
-        BelowName,
-        LeftOfName,
+        AboveIcon,
+        BelowLabel,
+        LeftOfLabel,
+        RightOfLabel,
     }
 
     // One override layer. Only fields whose Override* is true are applied; the rest fall through.
@@ -103,7 +104,7 @@ namespace ExileMaps.Classes
         public bool IconEnabled { get; set; }
         public SpriteIcon Icon { get; set; } = SpriteIcon.Circle;
         public bool IconReplacesNode { get; set; }
-        public IconPosition IconPosition { get; set; } = IconPosition.LeftOfName;
+        public IconPosition IconPosition { get; set; } = IconPosition.LeftOfLabel;
         public float IconOffsetX { get; set; }
         public float IconOffsetY { get; set; }
         [JsonConverter(typeof(JsonColorConverter))]

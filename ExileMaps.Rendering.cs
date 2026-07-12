@@ -746,19 +746,23 @@ public partial class ExileMapsCore
         return maxNodeZoomMagnification > 0.0001f ? mag / maxNodeZoomMagnification : 1f;
     }
 
-    // Rect for an icon in the "biome slot": left of the name box, centered on the name row. Measure the
-    // name at its own label scale so we line up with the rendered box (MeasureText + 10 matches
-    // DrawStyledLabel's box width), then a gap so it isn't flush against the border.
-    private RectangleF BiomeSlotRect(Node node, RectangleF nodePos, float size, float zoom)
+    // Half the drawn name box width, measured at the label's own scale so icons line up with the box
+    // (MeasureText + 10 matches DrawStyledLabel), or a small slot when names are off.
+    private float NameHalf(Node node)
     {
         var style = ResolveLabelStyle(node);
-        float nameHalf;
         using (Graphics.SetTextScale(style.TextScale))
-            nameHalf = Settings.Maps.ShowMapNames
+            return Settings.Maps.ShowMapNames
                 ? (Graphics.MeasureText(MapLabelText(node)).X + 10f) / 2f
                 : 20f;
+    }
+
+    // Rect for an icon in the "biome slot": left of the name box, centered on the name row, with a gap
+    // so it isn't flush against the border.
+    private RectangleF BiomeSlotRect(Node node, RectangleF nodePos, float size, float zoom)
+    {
         float gap = size * 0.28f;
-        float boxLeft = nodePos.Center.X + Settings.Graphics.MapNameOffsetX - nameHalf;
+        float boxLeft = nodePos.Center.X + Settings.Graphics.MapNameOffsetX - NameHalf(node);
         float x = boxLeft - gap - size;
         float centerY = nodePos.Center.Y + Settings.Graphics.MapNameOffsetY
                       + Settings.Graphics.BiomeIconOffsetY * zoom;
@@ -803,23 +807,42 @@ public partial class ExileMapsCore
         }
     }
 
-    // Center for a LeftOfName override icon: left of the name box, pushed one biome-slot further left
-    // so it clears a present biome icon. Fixed slot width (offset knobs tune it) - see the design's
-    // ponytail note.
-    private Vector2 LeftOfNameSlot(Node node, RectangleF nodePos, float size, float zoom)
+    // Leftmost x the icon cluster left of the name occupies (favorite, then biome), or the name box
+    // left when neither draws - so a LeftOfLabel icon takes the first free spot instead of assuming a
+    // biome/favorite icon is always there. Biome rect is already recorded this frame; the favorite draws
+    // in a later pass but its position is deterministic, so recompute it the same way.
+    private float LeftIconClusterEdge(Node node, RectangleF nodePos, float zoom)
     {
-        var style = ResolveLabelStyle(node);
-        float nameHalf;
-        using (Graphics.SetTextScale(style.TextScale))
-            nameHalf = Settings.Maps.ShowMapNames
-                ? (Graphics.MeasureText(MapLabelText(node)).X + 10f) / 2f
-                : 20f;
-        float biomeSlot = Settings.Graphics.BiomeIconSize * 1.28f * zoom;
-        float gap = size * 0.28f;
-        float boxLeft = nodePos.Center.X + Settings.Graphics.MapNameOffsetX - nameHalf;
-        float x = boxLeft - biomeSlot - gap - size * 0.5f;
-        float centerY = nodePos.Center.Y + Settings.Graphics.MapNameOffsetY;
-        return new Vector2(x, centerY);
+        float edge = nodePos.Center.X + Settings.Graphics.MapNameOffsetX - NameHalf(node);
+        bool hasBiome = biomeIconRectByCoord.TryGetValue(node.Coordinates, out var biomeRect);
+        if (hasBiome)
+            edge = biomeRect.Left;
+        if (node.IsFavorited && !node.IsVisited) {
+            float favSize = Settings.Graphics.FavoriteIconSize * zoom;
+            if (hasBiome)
+                edge = biomeRect.X - biomeRect.Height * 0.12f - favSize;
+            else
+                edge = BiomeSlotRect(node, nodePos, favSize, zoom).Left;
+        }
+        return edge;
+    }
+
+    // Rightmost x the name row occupies, including the weight value when it's drawn, so a RightOfLabel
+    // icon clears the weight instead of overlapping it. Weight footprint mirrors DrawWeight (scale 1.0).
+    private float RightIconClusterEdge(Node node, RectangleF nodePos)
+    {
+        float edge = nodePos.Center.X + Settings.Graphics.MapNameOffsetX + NameHalf(node);
+        if (Settings.Graphics.DrawWeightOnMap && !node.IsVisited && node.MapType.Highlight) {
+            using (Graphics.SetTextScale(1.0f)) {
+                float offsetX = Settings.Maps.ShowMapNames
+                    ? Graphics.MeasureText(MapLabelText(node)).X / 2f + 20f : 40f;
+                float weightRight = nodePos.Center.X + Settings.Graphics.MapNameOffsetX + offsetX
+                                  + Graphics.MeasureText($"{node.Weight:0}").X + 8f;
+                if (weightRight > edge)
+                    edge = weightRight;
+            }
+        }
+        return edge;
     }
 
     // Draws the single winning override icon at its slot (replace-node icons are drawn by DrawMapNode).
@@ -841,18 +864,22 @@ public partial class ExileMapsCore
             float zoom = NodeZoom(cachedNode, nodeCurrentPosition);
             float size = ov.IconSize * zoom;
 
+            float gap = size * 0.28f;
+            float rowY = nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY;
             Vector2 center;
             switch (ov.IconPosition) {
-                case IconPosition.AboveNode:
+                case IconPosition.AboveIcon:
                     center = new Vector2(nodeCurrentPosition.Center.X, nodeCurrentPosition.Top - size * 0.5f);
                     break;
-                case IconPosition.BelowName:
+                case IconPosition.BelowLabel:
                     center = new Vector2(nodeCurrentPosition.Center.X,
-                        nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY
-                        + (Settings.Graphics.ContentRowOffsetY + Settings.Graphics.ContentIconSize) * zoom);
+                        rowY + (Settings.Graphics.ContentRowOffsetY + Settings.Graphics.ContentIconSize) * zoom);
                     break;
-                default:
-                    center = LeftOfNameSlot(cachedNode, nodeCurrentPosition, size, zoom);
+                case IconPosition.RightOfLabel:
+                    center = new Vector2(RightIconClusterEdge(cachedNode, nodeCurrentPosition) + gap + size * 0.5f, rowY);
+                    break;
+                default: // LeftOfLabel
+                    center = new Vector2(LeftIconClusterEdge(cachedNode, nodeCurrentPosition, zoom) - gap - size * 0.5f, rowY);
                     break;
             }
             center += new Vector2(ov.IconOffsetX, ov.IconOffsetY);
