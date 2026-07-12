@@ -23,16 +23,37 @@ public partial class ExileMapsCore
         if (Section("Base Style"))
             DrawBaseStyleControls(Settings.Labels.Base);
 
-        // Override sections collapsed by default - most users only touch a couple.
-        if (ImGui.CollapsingHeader("Favorite Maps Override"))
-            DrawOverrideControls("fav", Settings.Labels.Favorite);
+        if (ImGui.CollapsingHeader("How Overrides Work")) {
+            ImGui.TextWrapped(
+                "Base Style sets the look for every map name. Each override section below lets a " +
+                "category (favorites, special maps, a content type, a biome) replace parts of that base look.");
+            ImGui.Spacing();
+            ImGui.TextWrapped(
+                "Every override row starts with a checkbox. That checkbox is the OVERRIDE toggle: off means " +
+                "\"leave this property at the base value\", on means \"use the value I set on this row instead\".");
+            ImGui.Spacing();
+            ImGui.TextWrapped(
+                "So the by-weight rows show TWO checkboxes. The first (leftmost) decides whether this override " +
+                "controls the setting at all. The second is the actual value being overridden - the on/off state " +
+                "of \"color by weight\". Leftmost off = ignore this row entirely; leftmost on + second off = force " +
+                "the setting off for this category.");
+            ImGui.Spacing();
+            ImGui.TextWrapped(
+                "When several overrides apply to one map, higher priority wins per property. " +
+                "Highest to lowest: Special, Content, Favorite, Map (future), Biome, Base.");
+        }
 
+        // Override sections collapsed by default - most users only touch a couple.
+        // Ordered high-to-low priority (Special wins over Content wins over Favorite wins over Biome).
         if (ImGui.CollapsingHeader("Special Maps Override"))
             DrawOverrideControls("special", Settings.Labels.Special);
 
         if (ImGui.CollapsingHeader("Content Overrides"))
             DrawOverrideManager("content", Settings.Labels.Content,
                 Settings.Maps.Content.ContentTypes.Keys);
+
+        if (ImGui.CollapsingHeader("Favorite Maps Override"))
+            DrawOverrideControls("fav", Settings.Labels.Favorite);
 
         if (ImGui.CollapsingHeader("Biome Overrides"))
             DrawOverrideManager("biome", Settings.Labels.Biome,
@@ -96,9 +117,9 @@ public partial class ExileMapsCore
         // Border lives on the box: no box, no border.
         if (s.BoxVisible) {
             Color bc = s.BoxColor;
-            if (ColorRGBA("Box Color##base", ref bc)) s.BoxColor = bc;
+            if (ColorRGBA("Background Color##base", ref bc)) s.BoxColor = bc;
             bool bw = s.BoxColorByWeight;
-            if (ImGui.Checkbox("Box color by weight##base", ref bw)) s.BoxColorByWeight = bw;
+            if (ImGui.Checkbox("Background color by weight##base", ref bw)) s.BoxColorByWeight = bw;
 
             bool rv = s.BorderVisible;
             if (ImGui.Checkbox("Enable Border##base", ref rv)) s.BorderVisible = rv;
@@ -149,35 +170,31 @@ public partial class ExileMapsCore
             bool v = o.BoxVisible; if (ImGui.Checkbox($"Enable Background##{id}", ref v)) o.BoxVisible = v; });
             o.OverrideBoxVisible = ovr; }
 
-        // Box color/opacity rows only when the box is shown for this override.
-        if (o.BoxVisible) {
-            { bool ovr = o.OverrideBoxColor; Row("bcol", ref ovr, () => {
-                Color v = o.BoxColor; if (ColorRGBA($"Box Color##{id}", ref v)) o.BoxColor = v; });
-                o.OverrideBoxColor = ovr; }
+        // Every property is an independent override - don't gate sibling rows on a value toggle,
+        // or unchecking Enable Background makes the box/border override rows vanish.
+        { bool ovr = o.OverrideBoxColor; Row("bcol", ref ovr, () => {
+            Color v = o.BoxColor; if (ColorRGBA($"Background Color##{id}", ref v)) o.BoxColor = v; });
+            o.OverrideBoxColor = ovr; }
 
-            { bool ovr = o.OverrideBoxColorByWeight; Row("bw", ref ovr, () => {
-                bool v = o.BoxColorByWeight; if (ImGui.Checkbox($"Box color by weight##{id}", ref v)) o.BoxColorByWeight = v; });
-                o.OverrideBoxColorByWeight = ovr; }
+        { bool ovr = o.OverrideBoxColorByWeight; Row("bw", ref ovr, () => {
+            bool v = o.BoxColorByWeight; if (ImGui.Checkbox($"Background color by weight##{id}", ref v)) o.BoxColorByWeight = v; });
+            o.OverrideBoxColorByWeight = ovr; }
 
-            // Border lives on the box: no box, no border.
-            { bool ovr = o.OverrideBorderVisible; Row("rvis", ref ovr, () => {
-                bool v = o.BorderVisible; if (ImGui.Checkbox($"Enable Border##{id}", ref v)) o.BorderVisible = v; });
-                o.OverrideBorderVisible = ovr; }
+        { bool ovr = o.OverrideBorderVisible; Row("rvis", ref ovr, () => {
+            bool v = o.BorderVisible; if (ImGui.Checkbox($"Enable Border##{id}", ref v)) o.BorderVisible = v; });
+            o.OverrideBorderVisible = ovr; }
 
-            if (o.BorderVisible) {
-                { bool ovr = o.OverrideBorderColor; Row("rcol", ref ovr, () => {
-                    Color v = o.BorderColor; if (ColorRGBA($"Border Color##{id}", ref v)) o.BorderColor = v; });
-                    o.OverrideBorderColor = ovr; }
+        { bool ovr = o.OverrideBorderColor; Row("rcol", ref ovr, () => {
+            Color v = o.BorderColor; if (ColorRGBA($"Border Color##{id}", ref v)) o.BorderColor = v; });
+            o.OverrideBorderColor = ovr; }
 
-                { bool ovr = o.OverrideBorderColorByWeight; Row("rw", ref ovr, () => {
-                    bool v = o.BorderColorByWeight; if (ImGui.Checkbox($"Border color by weight##{id}", ref v)) o.BorderColorByWeight = v; });
-                    o.OverrideBorderColorByWeight = ovr; }
+        { bool ovr = o.OverrideBorderColorByWeight; Row("rw", ref ovr, () => {
+            bool v = o.BorderColorByWeight; if (ImGui.Checkbox($"Border color by weight##{id}", ref v)) o.BorderColorByWeight = v; });
+            o.OverrideBorderColorByWeight = ovr; }
 
-                { bool ovr = o.OverrideBorderThickness; Row("rt", ref ovr, () => {
-                    int v = o.BorderThickness; if (ImGui.SliderInt($"Border Thickness##{id}", ref v, 1, 8)) o.BorderThickness = v; });
-                    o.OverrideBorderThickness = ovr; }
-            }
-        }
+        { bool ovr = o.OverrideBorderThickness; Row("rt", ref ovr, () => {
+            int v = o.BorderThickness; if (ImGui.SliderInt($"Border Thickness##{id}", ref v, 1, 8)) o.BorderThickness = v; });
+            o.OverrideBorderThickness = ovr; }
     }
 
     // ---- dynamic per-type manager (Option A: add-combo + collapsible cards) ----
