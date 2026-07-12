@@ -398,9 +398,7 @@ public partial class ExileMapsCore
     // Reused by ResolveLabelStyle so the per-node-per-frame label pass allocates nothing. Render-thread only.
     private readonly LabelStyle _scratchLabelStyle = new();
 
-    // Composes the final label look for a node: Base -> Biome -> Favorite -> Content -> Special,
-    // higher layer wins each contested property. Multi-content/biome picks the highest-weight entry.
-    // (Map layer between Favorite and Biome is future - no per-map override yet.)
+    // Apply order Base -> Biome -> Map -> Favorite -> Content -> Special; higher layer wins per property.
     private LabelStyle ResolveLabelStyle(Node node)
     {
         var s = _scratchLabelStyle;
@@ -408,6 +406,8 @@ public partial class ExileMapsCore
 
         var biomeOv = HighestWeightBiomeOverride(node);
         biomeOv?.ApplyTo(s);
+
+        MapOverride(node)?.ApplyTo(s);
 
         if (node.IsFavorited)
             Settings.Labels.Favorite.ApplyTo(s);
@@ -454,6 +454,15 @@ public partial class ExileMapsCore
             }
         }
         return best;
+    }
+
+    // The override for this node's map (keyed by ShortestId), or null. One map per node, no tie-break.
+    private LabelStyleOverride MapOverride(Node node)
+    {
+        var id = node.MapType?.ShortestId;
+        if (string.IsNullOrEmpty(id) || Settings.Labels.Map.Count == 0)
+            return null;
+        return Settings.Labels.Map.TryGetValue(id, out var ov) ? ov : null;
     }
 
     // Resolves any by-weight colors on the style against the node's weight (Bad->Good gradient),
