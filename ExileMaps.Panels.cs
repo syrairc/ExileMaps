@@ -123,8 +123,6 @@ public partial class ExileMapsCore
             DrawHolder("Process Unlocked Map Nodes");
             DrawHolder("Process Locked Map Nodes");
             DrawHolder("Process Hidden Map Nodes");
-            DrawHolder("Draw Connections for Visited Map Nodes");
-            DrawHolder("Draw Connections for Hidden Map Nodes");
             DrawHolder("Recalculate Node Weights on Refresh");
         }
 
@@ -160,13 +158,18 @@ public partial class ExileMapsCore
         }
 
         if (Section("Connection Lines")) {
-            DrawHolder("Line Color");
+            DrawHolder("Show Connection Lines");
+            DrawCustom(Settings.Graphics?.SepConnectionConditions?.DrawDelegate);
+            DrawHolder("Connections for Completed Maps");
+            DrawHolder("Connections for Locked Maps");
+            DrawHolder("Connections for Visible Maps");
             DrawHolder("Line Width");
             DrawHolder("Draw Lines as Gradients");
             DrawHolder("Visited Line Color");
             DrawHolder("Unlocked Line Color");
             DrawHolder("Locked Line Color");
-            DrawHolder("Distance Marker Scale");
+            DrawHolder("Connection Line Opacity");
+            DrawHolder("Line Color");
         }
 
         if (Section("Map Labels")) {
