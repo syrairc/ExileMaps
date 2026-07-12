@@ -230,7 +230,7 @@ public partial class ExileMapsCore
         }
 
         if (Section("Special Map Markers")) {
-            DrawHolder("Show Special Map Indicator");
+            DrawHolder("Special Map Indicator");
             DrawHolder("Hide Completed Special Maps");
             DrawHolder("Special Map Marker Color");
             DrawHolder("Special Map Marker Scale");

@@ -92,6 +92,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private readonly Dictionary<Vector2i, RectangleF> frameRectCache = [];
     private RectangleF cachedScreenRect;
     private readonly List<RectangleF> cachedExcludeRects = [];
+    // Subset of cachedExcludeRects that lines must not be drawn ACROSS (map tooltip + rumours popup).
+    // The segment test only cares about these - crossing chrome/HUD/expedition rects is fine.
+    private readonly List<RectangleF> cachedLineBlockRects = [];
     // True when a map node tooltip is up this frame. The tooltip's exclude rect drops the hovered
     // node from selectedNodes, so its icon/name are redrawn separately on top (DrawHoveredNodeOverTooltip).
     private bool mapTooltipVisible;
@@ -489,6 +492,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 foreach (var (node, rect) in nodePositions) {
                     DrawBiomeIcon(node, rect);
                     DrawContentRow(node, rect);
+                    DrawOverrideIcon(node, rect);
                 }
                 if (perf) PerfMonitor.Record("Render.ContentRow", Stopwatch.GetTimestamp() - t0);
 

@@ -196,6 +196,7 @@ public partial class ExileMapsCore
             var existingKey = Settings.Maps.Content.ContentTypes.Keys.FirstOrDefault(k => k == id || k.Replace(" ", "") == id);
             if (existingKey != null) {
                 var existing = Settings.Maps.Content.ContentTypes[existingKey];
+                existing.Id = id;
                 existing.Name = name;
                 if (!string.IsNullOrEmpty(icon))
                     existing.AtlasIcon = icon;
@@ -207,7 +208,7 @@ public partial class ExileMapsCore
                     Settings.Maps.Content.ContentTypes.TryAdd(id, existing);
                 }
                 updated++;
-            } else if (Settings.Maps.Content.ContentTypes.TryAdd(id, new Content { Name = name, Weight = 25.0f, AtlasIcon = icon, Color = defaultColor })) {
+            } else if (Settings.Maps.Content.ContentTypes.TryAdd(id, new Content { Id = id, Name = name, Weight = 25.0f, AtlasIcon = icon, Color = defaultColor })) {
                 added++;
                 LogMessage($"Added Content Type: {id}");
             }

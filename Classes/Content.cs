@@ -97,6 +97,10 @@ namespace ExileMaps.Classes
             }
         }
 
+        // Stable content id (the ContentTypes dict key, e.g. "GrandExpedition"). Use this for lookups;
+        // Name is a display string and can differ (spaced, renamed).
+        public string Id { get; set; }
+
         // Atlas icon path scraped from EndgameMapContentVisualIdentity. Stored for later rendering;
         // not drawn yet.
         public string AtlasIcon { get; set; }
