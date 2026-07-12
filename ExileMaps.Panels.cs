@@ -170,6 +170,7 @@ public partial class ExileMapsCore
             DrawHolder("Locked Line Color");
             DrawHolder("Connection Line Opacity");
             DrawHolder("Line Color");
+            DrawHolder("Distance Marker Scale");
         }
 
         if (Section("Map Labels")) {
