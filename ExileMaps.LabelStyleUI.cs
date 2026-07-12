@@ -40,7 +40,7 @@ public partial class ExileMapsCore
             ImGui.Spacing();
             ImGui.TextWrapped(
                 "When several overrides apply to one map, higher priority wins per property. " +
-                "Highest to lowest: Special, Content, Favorite, Map (future), Biome, Base.");
+                "Highest to lowest: Special, Content, Favorite, Map, Biome, Base.");
         }
 
         // Override sections collapsed by default - most users only touch a couple.
@@ -50,14 +50,20 @@ public partial class ExileMapsCore
 
         if (ImGui.CollapsingHeader("Content Overrides"))
             DrawOverrideManager("content", Settings.Labels.Content,
-                Settings.Maps.Content.ContentTypes.Keys);
+                Settings.Maps.Content.ContentTypes.Keys.Select(k => (k, k)));
 
         if (ImGui.CollapsingHeader("Favorite Maps Override"))
             DrawOverrideControls("fav", Settings.Labels.Favorite);
 
+        if (ImGui.CollapsingHeader("Map Overrides"))
+            DrawOverrideManager("map", Settings.Labels.Map,
+                Settings.Maps.Maps.Values
+                    .Where(m => !string.IsNullOrEmpty(m.ShortestId))
+                    .Select(m => (m.ShortestId, m.Name)));
+
         if (ImGui.CollapsingHeader("Biome Overrides"))
             DrawOverrideManager("biome", Settings.Labels.Biome,
-                Settings.Maps.Biomes.Biomes.Keys);
+                Settings.Maps.Biomes.Biomes.Keys.Select(k => (k, k)));
 
         // Any change to the label config marks the profile dirty so the periodic snapshot captures it
         // (same persistence path weights use via profileDirty). Catches field edits and override add/remove.
@@ -195,26 +201,63 @@ public partial class ExileMapsCore
         { bool ovr = o.OverrideBorderThickness; Row("rt", ref ovr, () => {
             int v = o.BorderThickness; if (ImGui.SliderInt($"Border Thickness##{id}", ref v, 1, 8)) o.BorderThickness = v; });
             o.OverrideBorderThickness = ovr; }
+
+        // ---- icon (override-only). IconEnabled is the gate; no Override* toggle. ----
+        ImGui.Separator();
+        bool iconOn = o.IconEnabled;
+        if (ImGui.Checkbox($"Icon##{id}_iconon", ref iconOn)) o.IconEnabled = iconOn;
+        if (iconOn) {
+            int iconIdx = (int)o.Icon;
+            var iconNames = Enum.GetNames(typeof(SpriteIcon));
+            ImGui.SetNextItemWidth(160);
+            if (ImGui.Combo($"Glyph##{id}_icon", ref iconIdx, iconNames, iconNames.Length))
+                o.Icon = (SpriteIcon)iconIdx;
+
+            bool repl = o.IconReplacesNode;
+            if (ImGui.Checkbox($"Replaces node icon##{id}_iconrepl", ref repl)) o.IconReplacesNode = repl;
+
+            Color it = o.IconTint;
+            if (ColorRGB($"Icon Tint##{id}_icontint", ref it)) o.IconTint = it;
+            float isz = o.IconSize;
+            if (ImGui.SliderFloat($"Icon Size##{id}_iconsize", ref isz, 8f, 64f)) o.IconSize = isz;
+
+            // Position + offset only matter when NOT replacing the node icon (replace = exact center).
+            if (!o.IconReplacesNode) {
+                int posIdx = (int)o.IconPosition;
+                var posNames = Enum.GetNames(typeof(IconPosition));
+                ImGui.SetNextItemWidth(160);
+                if (ImGui.Combo($"Icon Position##{id}_iconpos", ref posIdx, posNames, posNames.Length))
+                    o.IconPosition = (IconPosition)posIdx;
+                float ox = o.IconOffsetX;
+                if (ImGui.SliderFloat($"Icon Offset X##{id}_iconox", ref ox, -100f, 100f)) o.IconOffsetX = ox;
+                float oy = o.IconOffsetY;
+                if (ImGui.SliderFloat($"Icon Offset Y##{id}_iconoy", ref oy, -100f, 100f)) o.IconOffsetY = oy;
+            }
+        }
     }
 
     // ---- dynamic per-type manager (Option A: add-combo + collapsible cards) ----
 
     private void DrawOverrideManager(string id, Dictionary<string, LabelStyleOverride> dict,
-        IEnumerable<string> allTypes)
+        IEnumerable<(string key, string label)> types)
     {
-        var available = allTypes.Where(t => !string.IsNullOrEmpty(t) && !dict.ContainsKey(t))
-            .OrderBy(t => t).ToArray();
+        var all = types.Where(t => !string.IsNullOrEmpty(t.key))
+            .GroupBy(t => t.key).Select(g => g.First()).ToList();
+        var labelByKey = all.ToDictionary(t => t.key, t => t.label);
+
+        var available = all.Where(t => !dict.ContainsKey(t.key)).OrderBy(t => t.label).ToArray();
 
         if (available.Length > 0) {
             if (!_labelMgrSel.TryGetValue(id, out int sel) || sel >= available.Length) sel = 0;
+            var labels = available.Select(t => t.label).ToArray();
             ImGui.SetNextItemWidth(200);
-            if (ImGui.Combo($"##{id}_add_combo", ref sel, available, available.Length))
+            if (ImGui.Combo($"##{id}_add_combo", ref sel, labels, labels.Length))
                 _labelMgrSel[id] = sel;
             ImGui.SameLine();
             if (ImGui.Button($"+ Add##{id}")) {
-                var type = available[Math.Clamp(sel, 0, available.Length - 1)];
+                var key = available[Math.Clamp(sel, 0, available.Length - 1)].key;
                 // Seed from the base look (a type resolves to base absent other layers/node weight).
-                dict[type] = LabelStyleOverride.FromStyle(Settings.Labels.Base);
+                dict[key] = LabelStyleOverride.FromStyle(Settings.Labels.Base);
                 _labelMgrSel[id] = 0;
             }
         } else {
@@ -222,8 +265,9 @@ public partial class ExileMapsCore
         }
 
         string toRemove = null;
-        foreach (var kv in dict.OrderBy(k => k.Key).ToList()) {
-            bool open = SettingsHelpers.SubHeader($"{kv.Key}##{id}_{kv.Key}");
+        foreach (var kv in dict.OrderBy(k => labelByKey.TryGetValue(k.Key, out var l) ? l : k.Key).ToList()) {
+            string header = labelByKey.TryGetValue(kv.Key, out var lbl) ? lbl : kv.Key;
+            bool open = SettingsHelpers.SubHeader($"{header}##{id}_{kv.Key}");
             if (open) {
                 DrawOverrideControls($"{id}_{kv.Key}", kv.Value);
                 if (ImGui.Button($"Remove##{id}_{kv.Key}"))
