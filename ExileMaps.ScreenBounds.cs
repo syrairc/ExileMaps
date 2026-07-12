@@ -151,6 +151,7 @@ public partial class ExileMapsCore
 
             // Rebuild the per-frame exclude set: live tooltip rects + cached chrome + live HUD rects.
             cachedExcludeRects.Clear();
+            cachedLineBlockRects.Clear();
 
             // Don't render over the map tooltip. Its child index varies, so identify it
             // by its popup texture (selected/unselected) instead of a fixed position. Kept per-frame
@@ -165,6 +166,7 @@ public partial class ExileMapsCore
                 RectangleF mapTooltip = tooltip.GetClientRect();
                 mapTooltip.Inflate(mapTooltip.Width * 0.1f, mapTooltip.Height * 0.1f);
                 cachedExcludeRects.Add(mapTooltip);
+                cachedLineBlockRects.Add(mapTooltip);
                 mapTooltipVisible = true;
             }
 
@@ -178,6 +180,7 @@ public partial class ExileMapsCore
                 if (lb.Width > 0 && lb.Height > 0)
                 {
                     cachedExcludeRects.Add(lb);
+                    cachedLineBlockRects.Add(lb);
                     mapTooltipVisible = true;
                 }
             }
@@ -232,7 +235,7 @@ public partial class ExileMapsCore
         if (!mapTooltipVisible)
             return true;
 
-        foreach (var tooltip in cachedExcludeRects)
+        foreach (var tooltip in cachedLineBlockRects)
             if (SegmentIntersectsRect(start, end, tooltip))
                 return false;
 
