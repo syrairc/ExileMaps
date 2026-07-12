@@ -154,6 +154,7 @@ public partial class ExileMapsCore
 
                 AddNodeContentFromIdentity(node, newNode);
                 AddIdBasedContent(newNode);
+                AddNodeBiome(node, newNode);
                 SetAtlasPassive(node, newNode);
                 AddSpecialModifiers(node, newNode);
 
@@ -293,15 +294,13 @@ public partial class ExileMapsCore
         }
     }
 
-    // Per-node biome: AtlasPanelNode.Biome is a single EndgameMapBiome keyed by Id (its Name is blank
-    // in memory). Map the Id onto the biome definition so DrawBiomeIcon, label biome-overrides, and the
-    // biome-weight term in RecalculateWeight can read it. Keyed by the definition's Name, like content.
+    // Per-node biome comes straight off the game: AtlasPanelNode.Biome is a single EndgameMapBiome whose
+    // Name is blank in memory, so the Id is the real key (e.g. "Swamp"). No settings/biomes.json lookup.
     private void AddNodeBiome(AtlasNodeDescription node, Node toNode) {
         var biomeId = node.Element?.Biome?.Id;
         if (string.IsNullOrEmpty(biomeId))
             return;
-        if (Settings.Maps.Biomes.Biomes.TryGetValue(biomeId, out var biome))
-            toNode.Biomes.TryAdd(biome.Name, biome);
+        toNode.Biomes[biomeId] = new Biome { Name = biomeId };
     }
 
     // Some maps carry content the ContentIdentity list doesn't include but the area id reveals.

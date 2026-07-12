@@ -589,10 +589,12 @@ public partial class ExileMapsCore
     private static readonly System.Collections.Generic.Dictionary<string, string> BiomeIconAliases =
         new(System.StringComparer.OrdinalIgnoreCase)
     {
-        // city biome ids carry a "City" suffix the file names drop
+        // city biome ids don't match their file base 1:1
         { "EzomyteCity", "ezomyte" },
         { "FaridunCity", "faridun" },
         { "VaalCity", "vaal" },
+        { "BreachCity", "breach" },
+        { "OriathCity", "oriath" },
     };
 
     // Resolves a biome name to a loaded biome-<x>.png, or null. Alias table first, then literal
