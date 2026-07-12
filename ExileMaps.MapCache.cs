@@ -205,9 +205,11 @@ public partial class ExileMapsCore
                 cachedNode.Id = fullId.Trim();
                 cachedNode.MapType = ResolveMapType(fullId.Trim().Replace("_NoBoss", ""), fullId);
                 cachedNode.Content.Clear();
+                cachedNode.Biomes.Clear();
                 cachedNode.SpecialModifiers.Clear();
                 AddNodeContentFromIdentity(node, cachedNode);
                 AddIdBasedContent(cachedNode);
+                AddNodeBiome(node, cachedNode);
                 SetAtlasPassive(node, cachedNode);
                 AddSpecialModifiers(node, cachedNode);
                 cachedNode.StaticResolved = true;
@@ -289,6 +291,17 @@ public partial class ExileMapsCore
             if (contentType != null)
                 toNode.Content.TryAdd(contentType.Name, contentType);
         }
+    }
+
+    // Per-node biome: AtlasPanelNode.Biome is a single EndgameMapBiome keyed by Id (its Name is blank
+    // in memory). Map the Id onto the biome definition so DrawBiomeIcon, label biome-overrides, and the
+    // biome-weight term in RecalculateWeight can read it. Keyed by the definition's Name, like content.
+    private void AddNodeBiome(AtlasNodeDescription node, Node toNode) {
+        var biomeId = node.Element?.Biome?.Id;
+        if (string.IsNullOrEmpty(biomeId))
+            return;
+        if (Settings.Maps.Biomes.Biomes.TryGetValue(biomeId, out var biome))
+            toNode.Biomes.TryAdd(biome.Name, biome);
     }
 
     // Some maps carry content the ContentIdentity list doesn't include but the area id reveals.
