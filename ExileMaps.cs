@@ -492,6 +492,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 foreach (var (node, rect) in nodePositions) {
                     DrawBiomeIcon(node, rect);
                     DrawContentRow(node, rect);
+                    DrawOverrideIcon(node, rect);
                 }
                 if (perf) PerfMonitor.Record("Render.ContentRow", Stopwatch.GetTimestamp() - t0);
 

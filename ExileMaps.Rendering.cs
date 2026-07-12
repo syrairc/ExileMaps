@@ -80,6 +80,7 @@ public partial class ExileMapsCore
             var rect = node.MapNode.Element.GetClientRect();
             DrawMapNode(node, rect);            // fill icon (skips special maps)
             DrawContentRow(node, rect);          // content-type icon row
+            DrawOverrideIcon(node, rect);       // override icon (single winner)
             DrawSpecialIndicator(node, rect);   // special-map icon
             using (Graphics.SetTextScale(1.0f)) // 1.0 for the normal name; special name self-scales
                 DrawMapName(node, rect);        // normal map name (skips special maps)
@@ -179,7 +180,14 @@ public partial class ExileMapsCore
         Color color = cachedNode.MapType.ColorNodesByWeight ? ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, (weight - minMapWeight) / (maxMapWeight - minMapWeight)) : cachedNode.MapType.NodeColor;
 
         if (customIconsLoaded && Settings.Graphics.UseNodeIcons) {
-            DrawNodeSprite(nodeCurrentPosition.Center, radius * 2f, radius * 2f, cachedNode.MapType.Icon, color);
+            var iconOv = ResolveIconOverride(cachedNode);
+            if (iconOv != null && iconOv.IconReplacesNode) {
+                float zoom = NodeZoom(cachedNode, nodeCurrentPosition);
+                float isize = iconOv.IconSize * zoom;
+                DrawNodeSprite(nodeCurrentPosition.Center, isize, isize, iconOv.Icon, iconOv.IconTint);
+            } else {
+                DrawNodeSprite(nodeCurrentPosition.Center, radius * 2f, radius * 2f, cachedNode.MapType.Icon, color);
+            }
         } else {
             Graphics.DrawCircleFilled(nodeCurrentPosition.Center, radius, color, 16);
         }
@@ -463,6 +471,26 @@ public partial class ExileMapsCore
         if (string.IsNullOrEmpty(id) || Settings.Labels.Map.Count == 0)
             return null;
         return Settings.Labels.Map.TryGetValue(id, out var ov) ? ov : null;
+    }
+
+    // Single-winner icon resolution: highest-priority layer that applies AND has IconEnabled.
+    // Priority high->low: Special, Content, Favorite, Map, Biome. Returns null if none.
+    private LabelStyleOverride ResolveIconOverride(Node node)
+    {
+        if (node.IsSpecial && Settings.Labels.Special.IconEnabled)
+            return Settings.Labels.Special;
+        var content = HighestWeightContentOverride(node);
+        if (content != null && content.IconEnabled)
+            return content;
+        if (node.IsFavorited && Settings.Labels.Favorite.IconEnabled)
+            return Settings.Labels.Favorite;
+        var map = MapOverride(node);
+        if (map != null && map.IconEnabled)
+            return map;
+        var biome = HighestWeightBiomeOverride(node);
+        if (biome != null && biome.IconEnabled)
+            return biome;
+        return null;
     }
 
     // Resolves any by-weight colors on the style against the node's weight (Bad->Good gradient),
@@ -772,6 +800,65 @@ public partial class ExileMapsCore
             contentIconRects.Add((rect, bestName, null));
         } catch (Exception e) {
             LogError("Error drawing biome icon: " + e.Message);
+        }
+    }
+
+    // Center for a LeftOfName override icon: left of the name box, pushed one biome-slot further left
+    // so it clears a present biome icon. Fixed slot width (offset knobs tune it) - see the design's
+    // ponytail note.
+    private Vector2 LeftOfNameSlot(Node node, RectangleF nodePos, float size, float zoom)
+    {
+        var style = ResolveLabelStyle(node);
+        float nameHalf;
+        using (Graphics.SetTextScale(style.TextScale))
+            nameHalf = Settings.Maps.ShowMapNames
+                ? (Graphics.MeasureText(MapLabelText(node)).X + 10f) / 2f
+                : 20f;
+        float biomeSlot = Settings.Graphics.BiomeIconSize * 1.28f * zoom;
+        float gap = size * 0.28f;
+        float boxLeft = nodePos.Center.X + Settings.Graphics.MapNameOffsetX - nameHalf;
+        float x = boxLeft - biomeSlot - gap - size * 0.5f;
+        float centerY = nodePos.Center.Y + Settings.Graphics.MapNameOffsetY;
+        return new Vector2(x, centerY);
+    }
+
+    // Draws the single winning override icon at its slot (replace-node icons are drawn by DrawMapNode).
+    // Same gates as the content row. Zoom-scaled; offsets are a post-zoom nudge in screen px.
+    private void DrawOverrideIcon(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
+            if (!customIconsLoaded)
+                return;
+            if (cachedNode.IsVisited && !cachedNode.IsAttempted)
+                return;
+            if (!cachedNode.MapType.Highlight)
+                return;
+
+            var ov = ResolveIconOverride(cachedNode);
+            if (ov == null || ov.IconReplacesNode)
+                return;
+
+            float zoom = NodeZoom(cachedNode, nodeCurrentPosition);
+            float size = ov.IconSize * zoom;
+
+            Vector2 center;
+            switch (ov.IconPosition) {
+                case IconPosition.AboveNode:
+                    center = new Vector2(nodeCurrentPosition.Center.X, nodeCurrentPosition.Top - size * 0.5f);
+                    break;
+                case IconPosition.BelowName:
+                    center = new Vector2(nodeCurrentPosition.Center.X,
+                        nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY
+                        + (Settings.Graphics.ContentRowOffsetY + Settings.Graphics.ContentIconSize) * zoom);
+                    break;
+                default:
+                    center = LeftOfNameSlot(cachedNode, nodeCurrentPosition, size, zoom);
+                    break;
+            }
+            center += new Vector2(ov.IconOffsetX, ov.IconOffsetY);
+            DrawNodeSprite(center, size, size, ov.Icon, ov.IconTint, allowFlatten: false);
+        } catch (Exception e) {
+            LogError("Error drawing override icon: " + e.Message);
         }
     }
 
