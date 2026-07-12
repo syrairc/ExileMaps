@@ -11,8 +11,10 @@ namespace ExileMaps;
 
 public partial class ExileMapsCore
 {
-    // Per-manager combo selection (idPrefix -> selected index into its available-types list).
-    private readonly Dictionary<string, int> _labelMgrSel = new();
+    // Per-manager search filter for the searchable add-combo.
+    private readonly Dictionary<string, string> _labelMgrFilter = new();
+    // Friendly combo labels for IconPosition, indexed by enum value (AboveIcon..RightOfLabel).
+    private static readonly string[] IconPositionLabels = { "Above Icon", "Below Label", "Left of Label", "Right of Label" };
     // Last-serialized label config, to detect edits. Labels are plain POCO fields (not observable),
     // so they don't raise PropertyChanged like weights do - without this the profile never gets
     // marked dirty and LoadProfile clobbers the edits on the next launch.
@@ -50,7 +52,8 @@ public partial class ExileMapsCore
 
         if (ImGui.CollapsingHeader("Content Overrides"))
             DrawOverrideManager("content", Settings.Labels.Content,
-                Settings.Maps.Content.ContentTypes.Keys.Select(k => (k, k)));
+                Settings.Maps.Content.ContentTypes.Select(
+                    kv => (kv.Key, string.IsNullOrEmpty(kv.Value?.Name) ? kv.Key : kv.Value.Name)));
 
         if (ImGui.CollapsingHeader("Favorite Maps Override"))
             DrawOverrideControls("fav", Settings.Labels.Favorite);
@@ -120,23 +123,23 @@ public partial class ExileMapsCore
 
         bool bv = s.BoxVisible;
         if (ImGui.Checkbox("Enable Background##base", ref bv)) s.BoxVisible = bv;
-        // Border lives on the box: no box, no border.
         if (s.BoxVisible) {
             Color bc = s.BoxColor;
             if (ColorRGBA("Background Color##base", ref bc)) s.BoxColor = bc;
             bool bw = s.BoxColorByWeight;
             if (ImGui.Checkbox("Background color by weight##base", ref bw)) s.BoxColorByWeight = bw;
+        }
 
-            bool rv = s.BorderVisible;
-            if (ImGui.Checkbox("Enable Border##base", ref rv)) s.BorderVisible = rv;
-            if (s.BorderVisible) {
-                Color rc = s.BorderColor;
-                if (ColorRGBA("Border Color##base", ref rc)) s.BorderColor = rc;
-                bool rw = s.BorderColorByWeight;
-                if (ImGui.Checkbox("Border color by weight##base", ref rw)) s.BorderColorByWeight = rw;
-                int rt = s.BorderThickness;
-                if (ImGui.SliderInt("Border Thickness##base", ref rt, 1, 8)) s.BorderThickness = rt;
-            }
+        // Border is its own frame - independent of the background.
+        bool rv = s.BorderVisible;
+        if (ImGui.Checkbox("Enable Border##base", ref rv)) s.BorderVisible = rv;
+        if (s.BorderVisible) {
+            Color rc = s.BorderColor;
+            if (ColorRGBA("Border Color##base", ref rc)) s.BorderColor = rc;
+            bool rw = s.BorderColorByWeight;
+            if (ImGui.Checkbox("Border color by weight##base", ref rw)) s.BorderColorByWeight = rw;
+            int rt = s.BorderThickness;
+            if (ImGui.SliderInt("Border Thickness##base", ref rt, 1, 8)) s.BorderThickness = rt;
         }
     }
 
@@ -172,35 +175,49 @@ public partial class ExileMapsCore
             ImGui.SameLine(); Color v = o.StrokeColor; if (ColorRGB($"Stroke Color##{id}", ref v)) o.StrokeColor = v; });
             o.OverrideStroke = ovr; }
 
+        // "(?)" marker with hover tooltip - reused for the nested-visibility hint below.
+        void Hint(string text)
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled("(?)");
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(text);
+        }
+
         { bool ovr = o.OverrideBoxVisible; Row("bvis", ref ovr, () => {
             bool v = o.BoxVisible; if (ImGui.Checkbox($"Enable Background##{id}", ref v)) o.BoxVisible = v; });
             o.OverrideBoxVisible = ovr; }
+        Hint("Background color options only show while the background is enabled here.");
 
-        // Every property is an independent override - don't gate sibling rows on a value toggle,
-        // or unchecking Enable Background makes the box/border override rows vanish.
-        { bool ovr = o.OverrideBoxColor; Row("bcol", ref ovr, () => {
-            Color v = o.BoxColor; if (ColorRGBA($"Background Color##{id}", ref v)) o.BoxColor = v; });
-            o.OverrideBoxColor = ovr; }
+        // Background color rows only when the box is shown for this override (mirrors Base Style).
+        if (o.BoxVisible) {
+            { bool ovr = o.OverrideBoxColor; Row("bcol", ref ovr, () => {
+                Color v = o.BoxColor; if (ColorRGBA($"Background Color##{id}", ref v)) o.BoxColor = v; });
+                o.OverrideBoxColor = ovr; }
 
-        { bool ovr = o.OverrideBoxColorByWeight; Row("bw", ref ovr, () => {
-            bool v = o.BoxColorByWeight; if (ImGui.Checkbox($"Background color by weight##{id}", ref v)) o.BoxColorByWeight = v; });
-            o.OverrideBoxColorByWeight = ovr; }
+            { bool ovr = o.OverrideBoxColorByWeight; Row("bw", ref ovr, () => {
+                bool v = o.BoxColorByWeight; if (ImGui.Checkbox($"Background color by weight##{id}", ref v)) o.BoxColorByWeight = v; });
+                o.OverrideBoxColorByWeight = ovr; }
+        }
 
+        // Border is its own frame - independent of the background.
         { bool ovr = o.OverrideBorderVisible; Row("rvis", ref ovr, () => {
             bool v = o.BorderVisible; if (ImGui.Checkbox($"Enable Border##{id}", ref v)) o.BorderVisible = v; });
             o.OverrideBorderVisible = ovr; }
+        Hint("Border color and thickness options only show while the border is enabled here.");
 
-        { bool ovr = o.OverrideBorderColor; Row("rcol", ref ovr, () => {
-            Color v = o.BorderColor; if (ColorRGBA($"Border Color##{id}", ref v)) o.BorderColor = v; });
-            o.OverrideBorderColor = ovr; }
+        if (o.BorderVisible) {
+            { bool ovr = o.OverrideBorderColor; Row("rcol", ref ovr, () => {
+                Color v = o.BorderColor; if (ColorRGBA($"Border Color##{id}", ref v)) o.BorderColor = v; });
+                o.OverrideBorderColor = ovr; }
 
-        { bool ovr = o.OverrideBorderColorByWeight; Row("rw", ref ovr, () => {
-            bool v = o.BorderColorByWeight; if (ImGui.Checkbox($"Border color by weight##{id}", ref v)) o.BorderColorByWeight = v; });
-            o.OverrideBorderColorByWeight = ovr; }
+            { bool ovr = o.OverrideBorderColorByWeight; Row("rw", ref ovr, () => {
+                bool v = o.BorderColorByWeight; if (ImGui.Checkbox($"Border color by weight##{id}", ref v)) o.BorderColorByWeight = v; });
+                o.OverrideBorderColorByWeight = ovr; }
 
-        { bool ovr = o.OverrideBorderThickness; Row("rt", ref ovr, () => {
-            int v = o.BorderThickness; if (ImGui.SliderInt($"Border Thickness##{id}", ref v, 1, 8)) o.BorderThickness = v; });
-            o.OverrideBorderThickness = ovr; }
+            { bool ovr = o.OverrideBorderThickness; Row("rt", ref ovr, () => {
+                int v = o.BorderThickness; if (ImGui.SliderInt($"Border Thickness##{id}", ref v, 1, 8)) o.BorderThickness = v; });
+                o.OverrideBorderThickness = ovr; }
+        }
 
         // ---- icon (override-only). IconEnabled is the gate; no Override* toggle. ----
         ImGui.Separator();
@@ -224,9 +241,8 @@ public partial class ExileMapsCore
             // Position + offset only matter when NOT replacing the node icon (replace = exact center).
             if (!o.IconReplacesNode) {
                 int posIdx = (int)o.IconPosition;
-                var posNames = Enum.GetNames(typeof(IconPosition));
                 ImGui.SetNextItemWidth(160);
-                if (ImGui.Combo($"Icon Position##{id}_iconpos", ref posIdx, posNames, posNames.Length))
+                if (ImGui.Combo($"Icon Position##{id}_iconpos", ref posIdx, IconPositionLabels, IconPositionLabels.Length))
                     o.IconPosition = (IconPosition)posIdx;
                 float ox = o.IconOffsetX;
                 if (ImGui.SliderFloat($"Icon Offset X##{id}_iconox", ref ox, -100f, 100f)) o.IconOffsetX = ox;
@@ -248,17 +264,23 @@ public partial class ExileMapsCore
         var available = all.Where(t => !dict.ContainsKey(t.key)).OrderBy(t => t.label).ToArray();
 
         if (available.Length > 0) {
-            if (!_labelMgrSel.TryGetValue(id, out int sel) || sel >= available.Length) sel = 0;
-            var labels = available.Select(t => t.label).ToArray();
-            ImGui.SetNextItemWidth(200);
-            if (ImGui.Combo($"##{id}_add_combo", ref sel, labels, labels.Length))
-                _labelMgrSel[id] = sel;
-            ImGui.SameLine();
-            if (ImGui.Button($"+ Add##{id}")) {
-                var key = available[Math.Clamp(sel, 0, available.Length - 1)].key;
-                // Seed from the base look (a type resolves to base absent other layers/node weight).
-                dict[key] = LabelStyleOverride.FromStyle(Settings.Labels.Base);
-                _labelMgrSel[id] = 0;
+            var filter = _labelMgrFilter.TryGetValue(id, out var f) ? f : "";
+            ImGui.SetNextItemWidth(250);
+            if (ImGui.BeginCombo($"##{id}_add_combo", "Add override...", ImGuiComboFlags.HeightLarge)) {
+                ImGui.SetNextItemWidth(-1);
+                ImGui.InputTextWithHint($"##{id}_add_filter", "Search...", ref filter, 100);
+                _labelMgrFilter[id] = filter;
+                foreach (var (key, label) in available) {
+                    if (!string.IsNullOrEmpty(filter)
+                        && !label.Contains(filter, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    if (ImGui.Selectable($"{label}##{id}_add_{key}")) {
+                        // Seed from the base look (a type resolves to base absent other layers/node weight).
+                        dict[key] = LabelStyleOverride.FromStyle(Settings.Labels.Base);
+                        _labelMgrFilter[id] = "";
+                    }
+                }
+                ImGui.EndCombo();
             }
         } else {
             ImGui.TextDisabled("All types have an override.");

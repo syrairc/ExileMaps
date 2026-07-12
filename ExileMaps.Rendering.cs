@@ -972,13 +972,12 @@ public partial class ExileMapsCore
             var boxSize = Graphics.MeasureText(text) + new Vector2(10, 4);
             var topLeft = position - new Vector2(boxSize.X / 2, boxSize.Y / 2);
 
-            // Border sits on the box: no box, no border. Fill the box first, then draw the border as a
-            // frame outline on top - filling the whole border rect would show through a translucent box.
-            bool drawBorder = style.BorderVisible && style.BoxVisible;
+            // Border is a frame outline, so it stands on its own - no background needed. Fill the box
+            // first (when enabled), then draw the border frame on top.
             if (style.BoxVisible) {
                 Graphics.DrawBox(topLeft, topLeft + boxSize, style.BoxColor, 5.0f);
             }
-            if (drawBorder) {
+            if (style.BorderVisible) {
                 Graphics.DrawFrame(topLeft, topLeft + boxSize, style.BorderColor, 5.0f, style.BorderThickness, 0);
             }
 

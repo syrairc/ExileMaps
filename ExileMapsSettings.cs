@@ -765,7 +765,7 @@ public class GraphicSettings
     public RangeNode<float> AtlasIndicatorSize { get; set; } = new RangeNode<float>(18.918f, 8, 48);
 
     [Menu("Special Map Indicator", "Draw an icon above 'special' map nodes (wider node art) instead of a solid circle, so the map art isn't covered")]
-    public ToggleNode ShowSpecialMapIndicator { get; set; } = new ToggleNode(false);
+    public ToggleNode ShowSpecialMapIndicator { get; set; } = new ToggleNode(true);
 
     [Menu("Hide Completed Special Maps", "Once a repeatable special map (e.g. Precursor Tower) is completed, drop its marker + name entirely instead of fading them. Hub specials (Gateways, Sealed Vault) always stay shown.")]
     public ToggleNode HideCompletedSpecialMaps { get; set; } = new ToggleNode(true);
