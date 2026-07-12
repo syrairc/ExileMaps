@@ -76,6 +76,16 @@ public partial class ExileMapsCore
     private sealed class ExportWaypoint { public string Name; public int X, Y; public int ColorArgb; }
     private sealed class ExportTour { public string Name; public int ColorArgb; public List<(int x, int y)> Stops = new(); }
 
+    private sealed class ExportExpedition
+    {
+        public int Id;
+        public int ColorArgb;
+        public (int x, int y) Spawn;
+        public List<(int x, int y)> Maps = new();
+        public List<string> Rumors = new();  // decoded content names, weight-sorted, deduped
+        public float TopWeight;
+    }
+
     // ---- Public entry point (called from the settings button) ----
 
     public void ExportAtlasHtml()
@@ -88,6 +98,7 @@ public partial class ExileMapsCore
             var nodes = SnapshotExportNodes();
             var waypoints = SnapshotExportWaypoints();
             var tours = SnapshotExportTours();
+            var exportExpeditions = SnapshotExportExpeditions();
 
             float minW = minMapWeight, maxW = maxMapWeight;
             var bad = Settings.Maps.BadNodeColor;
@@ -102,7 +113,7 @@ public partial class ExileMapsCore
             {
                 try
                 {
-                    string html = BuildAtlasHtml(nodes, waypoints, tours, minW, maxW,
+                    string html = BuildAtlasHtml(nodes, waypoints, tours, exportExpeditions, minW, maxW,
                         bad, good, visitedLine, unlockedLine, lockedLine, nodeRadius);
 
                     string dir = Path.Combine(DirectoryFullName, "exports");
@@ -214,6 +225,42 @@ public partial class ExileMapsCore
         return list;
     }
 
+    // Snapshot on the render thread: RumorWeights + the expeditions list are valid here, so decode
+    // each region's rumours to content names now (weight-sorted, deduped) rather than holding refs.
+    private List<ExportExpedition> SnapshotExportExpeditions()
+    {
+        var list = new List<ExportExpedition>();
+        try
+        {
+            List<Classes.Expedition> snap;
+            lock (mapCacheLock) snap = expeditions.ToList();
+            foreach (var e in snap)
+            {
+                if (e == null) continue;
+                var ee = new ExportExpedition
+                {
+                    Id = e.Id,
+                    ColorArgb = ExpeditionTint(e.Id).ToArgb(),
+                    Spawn = (e.SpawnCoord.X, e.SpawnCoord.Y),
+                };
+                foreach (var c in e.MapCoords) ee.Maps.Add((c.X, c.Y));
+
+                var rows = new List<(string content, float w)>();
+                foreach (var (text, _) in e.Rumors)
+                    if (Settings.Expeditions.RumorWeights.TryGetValue(text, out var r) && !string.IsNullOrEmpty(r.Content))
+                        rows.Add((r.Content, r.Weight));
+                rows.Sort((a, b) => b.w.CompareTo(a.w));
+                ee.TopWeight = rows.Count > 0 ? rows[0].w : 0f;
+                var seen = new HashSet<string>();
+                foreach (var (content, _) in rows)
+                    if (seen.Add(content)) ee.Rumors.Add(content);
+                list.Add(ee);
+            }
+        }
+        catch (Exception e) { LogError("Atlas export: expedition snapshot failed: " + e.Message); }
+        return list;
+    }
+
     // ---- Stats ----
 
     private struct ExportStats
@@ -313,13 +360,14 @@ public partial class ExileMapsCore
 
     private string BuildAtlasHtml(
         List<ExportNode> nodes, List<ExportWaypoint> waypoints, List<ExportTour> tours,
+        List<ExportExpedition> expeditions,
         float minW, float maxW, Color bad, Color good,
         Color visitedLine, Color unlockedLine, Color lockedLine, float nodeRadiusSetting)
     {
         var stats = ComputeExportStats(nodes, waypoints.Count);
         string svg = nodes.Count == 0
             ? "<p class='empty'>No atlas nodes were cached. Open the Atlas in-game and export again.</p>"
-            : BuildSvg(nodes, waypoints, tours, minW, maxW, bad, good, visitedLine, unlockedLine, lockedLine, nodeRadiusSetting);
+            : BuildSvg(nodes, waypoints, tours, expeditions, minW, maxW, bad, good, visitedLine, unlockedLine, lockedLine, nodeRadiusSetting);
 
         string embeddedJson = BuildEmbeddedJson(nodes, stats);
 
@@ -343,7 +391,7 @@ public partial class ExileMapsCore
 
         // Sidebar: stats dashboard
         sb.Append("<aside class='stats'>");
-        AppendStatsHtml(sb, stats);
+        AppendStatsHtml(sb, stats, expeditions);
         sb.Append("</aside>");
 
         // Main: controls + map
@@ -410,6 +458,7 @@ public partial class ExileMapsCore
 
     private string BuildSvg(
         List<ExportNode> nodes, List<ExportWaypoint> waypoints, List<ExportTour> tours,
+        List<ExportExpedition> expeditions,
         float minW, float maxW, Color bad, Color good,
         Color visitedLine, Color unlockedLine, Color lockedLine, float nodeRadiusSetting)
     {
@@ -440,6 +489,11 @@ public partial class ExileMapsCore
 
         var waypointByCoord = new Dictionary<(int, int), ExportWaypoint>();
         foreach (var w in waypoints) waypointByCoord[(w.X, w.Y)] = w;
+
+        // map coord -> expedition id, so each node can carry a data-exp tag the sidebar filter keys off.
+        var expByCoord = new Dictionary<(int, int), int>();
+        foreach (var e in expeditions)
+            foreach (var m in e.Maps) expByCoord[m] = e.Id;
 
         var sb = new StringBuilder(1 << 20);
         sb.Append($"<svg id='atlas-svg' xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {F(width)} {F(height)}'>");
@@ -476,6 +530,18 @@ public partial class ExileMapsCore
         }
         sb.Append("</g>");
 
+        // --- Expeditions (tinted rings on the region's maps + a marker at the spawn) ---
+        sb.Append("<g class='expeditions'>");
+        foreach (var e in expeditions)
+        {
+            string tint = Hex(e.ColorArgb);
+            string title = H($"Expedition #{e.Id}" + (e.Rumors.Count > 0 ? "\n" + string.Join(", ", e.Rumors) : ""));
+            foreach (var (mx, my) in e.Maps)
+                sb.Append($"<circle cx='{F(Sx(mx, my))}' cy='{F(Sy(mx, my))}' r='{F(baseR * 3f)}' fill='none' stroke='{tint}' stroke-width='2' stroke-opacity='0.7'><title>{title}</title></circle>");
+            sb.Append($"<circle cx='{F(Sx(e.Spawn.x, e.Spawn.y))}' cy='{F(Sy(e.Spawn.x, e.Spawn.y))}' r='{F(baseR * 1.6f)}' fill='{tint}' fill-opacity='0.85' stroke='#000' stroke-width='1'><title>{title}</title></circle>");
+        }
+        sb.Append("</g>");
+
         // --- Nodes ---
         sb.Append("<g class='nodes'>");
         int idx = 0;
@@ -502,6 +568,8 @@ public partial class ExileMapsCore
             sb.Append($"data-name='{H(n.Name)}' data-type='{H(n.MapType)}' data-weight='{F(n.Weight)}' ");
             sb.Append($"data-state='{StateName(n)}' data-content='{contentAttr}' data-biomes='{biomeAttr}' ");
             sb.Append($"data-coord='{n.X},{n.Y}' data-atlas='{(n.GivesAtlasPoint ? 1 : 0)}' data-quest='{(n.HasAtlasQuest ? 1 : 0)}' data-waypoint='{(n.IsWaypoint ? 1 : 0)}' ");
+            // comma-wrapped so the substring filter (",3," in data-exp) can't match ",13,"
+            if (expByCoord.TryGetValue((n.X, n.Y), out var expId)) sb.Append($"data-exp=',{expId},' ");
             sb.Append($"data-cw='{Hex(wc)}' data-cm='{Hex(n.NodeColorArgb)}' data-cs='{Hex(sc)}'>");
 
             // Node size: r = baseR for all nodes. CSS --scale-special / --scale-nodes drives visual size.
@@ -594,7 +662,7 @@ public partial class ExileMapsCore
         return sb.ToString();
     }
 
-    private static void AppendStatsHtml(StringBuilder sb, ExportStats s)
+    private static void AppendStatsHtml(StringBuilder sb, ExportStats s, List<ExportExpedition> expeditions)
     {
         // Summary cards
         sb.Append("<div class='cards'>");
@@ -635,6 +703,19 @@ public partial class ExileMapsCore
             sb.Append("</tbody></table>");
         }
 
+        // Expeditions (clicking a row highlights that expedition's maps; needs the map overlay toggle on to see rings)
+        if (expeditions.Count > 0)
+        {
+            sb.Append("<h2>Expeditions</h2>");
+            sb.Append("<table class='sortable'><thead><tr><th>#</th><th>Content</th><th>Maps</th></tr></thead><tbody>");
+            foreach (var e in expeditions.OrderByDescending(x => x.TopWeight))
+            {
+                string content = e.Rumors.Count > 0 ? string.Join(", ", e.Rumors.Take(3)) : "(unknown)";
+                sb.Append($"<tr class='clickrow' data-filter='exp' data-fval=',{e.Id},'><td><span class='sw' style='background:{Hex(e.ColorArgb)}'></span>{e.Id}</td><td>{H(content)}</td><td>{e.Maps.Count}</td></tr>");
+            }
+            sb.Append("</tbody></table>");
+        }
+
         // Biomes (clickable)
         if (s.Biomes.Count > 0)
         {
@@ -668,6 +749,7 @@ public partial class ExileMapsCore
         Tog("t-labels", "Labels", true);
         Tog("t-waypoints", "Waypoints", false);
         Tog("t-tours", "Tours", false);
+        Tog("t-expeditions", "Expeditions", false);
         Tog("t-visited", "Visited", true);
         Tog("t-locked", "Locked", true);
         sb.Append("</span>");
@@ -729,7 +811,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
 @keyframes selPulse{0%,100%{filter:drop-shadow(0 0 3px #19e9ff) drop-shadow(0 0 7px #19e9ff)}50%{filter:drop-shadow(0 0 6px #19e9ff) drop-shadow(0 0 16px #19e9ff)}}
 /* layer + state toggles flip these via body classes */
 .hide-connections .connections,.hide-rings .node circle:not(.body):not([stroke-dasharray]),
-.hide-labels .labels,.hide-waypoints .waypoints,.hide-tours .tours,
+.hide-labels .labels,.hide-waypoints .waypoints,.hide-tours .tours,.hide-expeditions .expeditions,
 .hide-visited .node.run,.hide-visited .node.completed,.hide-locked .node.locked,
 .hide-visited .labels text[data-visited='1'],.hide-locked .labels text[data-locked='1']{display:none}
 .searching .node:not(.match){opacity:.08}
@@ -799,7 +881,8 @@ body.filter-active .node.filter-match .body{stroke:var(--accent) !important;stro
   var allNodes = Array.prototype.slice.call(document.querySelectorAll('.node'));
   // Layer + state toggles
   var map = {'t-connections':'hide-connections','t-rings':'hide-rings','t-labels':'hide-labels',
-             't-waypoints':'hide-waypoints','t-tours':'hide-tours','t-visited':'hide-visited','t-locked':'hide-locked'};
+             't-waypoints':'hide-waypoints','t-tours':'hide-tours','t-expeditions':'hide-expeditions',
+             't-visited':'hide-visited','t-locked':'hide-locked'};
   Object.keys(map).forEach(function(id){
     var el = document.getElementById(id); if(!el) return;
     function apply(){ body.classList.toggle(map[id], !el.checked); }
