@@ -49,6 +49,14 @@ namespace ExileMaps.Classes
         }
     }
 
+    // Where an override's icon draws relative to the node. Ignored when the icon replaces the node icon.
+    public enum IconPosition
+    {
+        AboveNode,
+        BelowName,
+        LeftOfName,
+    }
+
     // One override layer. Only fields whose Override* is true are applied; the rest fall through.
     // Stroke enabled+color share one toggle (OverrideStroke) to match the "toggle + color" design.
     public class LabelStyleOverride
@@ -89,6 +97,18 @@ namespace ExileMaps.Classes
         public bool BorderColorByWeight { get; set; }
         public bool OverrideBorderThickness { get; set; }
         public int BorderThickness { get; set; } = 2;
+
+        // Optional per-override icon (a SpriteIcon glyph). Icons are override-only; the base style has none.
+        // Single winner across layers - see ResolveIconOverride. No Override* toggle: IconEnabled is the gate.
+        public bool IconEnabled { get; set; }
+        public SpriteIcon Icon { get; set; } = SpriteIcon.Circle;
+        public bool IconReplacesNode { get; set; }
+        public IconPosition IconPosition { get; set; } = IconPosition.LeftOfName;
+        public float IconOffsetX { get; set; }
+        public float IconOffsetY { get; set; }
+        [JsonConverter(typeof(JsonColorConverter))]
+        public Color IconTint { get; set; } = Color.FromArgb(255, 255, 255, 255);
+        public float IconSize { get; set; } = 24f;
 
         public void ApplyTo(LabelStyle s)
         {
@@ -136,6 +156,7 @@ namespace ExileMaps.Classes
         public LabelStyleOverride Special { get; set; } = new LabelStyleOverride();
         public Dictionary<string, LabelStyleOverride> Content { get; set; } = new();
         public Dictionary<string, LabelStyleOverride> Biome { get; set; } = new();
+        public Dictionary<string, LabelStyleOverride> Map { get; set; } = new();
 
         public LabelStyleSettings Clone()
         {
@@ -147,6 +168,7 @@ namespace ExileMaps.Classes
             };
             foreach (var kv in Content) c.Content[kv.Key] = kv.Value.Clone();
             foreach (var kv in Biome) c.Biome[kv.Key] = kv.Value.Clone();
+            foreach (var kv in Map) c.Map[kv.Key] = kv.Value.Clone();
             return c;
         }
 
