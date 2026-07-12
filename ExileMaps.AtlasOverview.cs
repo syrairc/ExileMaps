@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Numerics;
-using ExileCore2.Shared;
 using ImGuiNET;
 using ExileMaps.Classes;
 using GameOffsets2.Native;
@@ -241,25 +240,31 @@ public partial class ExileMapsCore
         return false;
     }
 
-    private (int total, int onscreen) cachedSearchCount = (0, 0);
-    private (int ver, string text) cachedSearchCountSig = (-1, "");
+    // Coords of every node matching the search box, rebuilt only when the cache version or text
+    // changes. DrawSearchPing reads this per on-screen node as an O(1) lookup instead of re-running
+    // the string match every frame.
+    private readonly HashSet<Vector2i> searchMatchCoords = new();
+    private (int ver, string text) searchMatchSig = (-1, null);
     private int searchOnScreenThisFrame = 0;
 
-    // Total matches memoized over the cache; on-screen count comes from the last DrawSearchPing pass.
+    private void EnsureSearchMatches()
+    {
+        var sig = (mapCacheVersion, searchPingText ?? "");
+        if (searchMatchSig.Equals(sig))
+            return;
+        searchMatchCoords.Clear();
+        lock (mapCacheLock)
+            foreach (var node in mapCache.Values)
+                if (MatchesSearch(node, searchPingText))
+                    searchMatchCoords.Add(node.Coordinates);
+        searchMatchSig = sig;
+    }
+
+    // Total matches (memoized over the cache); on-screen count comes from the last DrawSearchPing pass.
     private (int total, int onscreen) CountSearchMatches()
     {
-        var text = searchPingText;
-        var sig = (mapCacheVersion, text ?? "");
-        if (!cachedSearchCountSig.Equals(sig))
-        {
-            int total = 0;
-            lock (mapCacheLock)
-                foreach (var node in mapCache.Values)
-                    if (MatchesSearch(node, text)) total++;
-            cachedSearchCount = (total, searchOnScreenThisFrame);
-            cachedSearchCountSig = sig;
-        }
-        return (cachedSearchCount.total, searchOnScreenThisFrame);
+        EnsureSearchMatches();
+        return (searchMatchCoords.Count, searchOnScreenThisFrame);
     }
 
     // Pulsing ring on each on-screen node matching the search box. Uses the already-resolved
@@ -269,6 +274,8 @@ public partial class ExileMapsCore
         if (string.IsNullOrEmpty(searchPingText)) { searchOnScreenThisFrame = 0; return; }
         // Minimap mode never repopulates nodePositions; skip so we don't ping stale positions.
         if (ShowMinimap) { searchOnScreenThisFrame = 0; return; }
+
+        EnsureSearchMatches();
 
         int onscreen = 0;
         // Pulse 0..1 via wall-clock seconds (smooth under frame-time jitter); radius and alpha breathe.
@@ -280,15 +287,11 @@ public partial class ExileMapsCore
 
         foreach (var (node, rect) in nodePositions)
         {
-            try
-            {
-                if (!MatchesSearch(node, searchPingText)) continue;
-                onscreen++;
-                var center = rect.Center;
-                float radius = MathF.Max(rect.Width, rect.Height) * (0.55f + 0.25f * pulse);
-                Graphics.DrawCircle(center, radius, color, 3f, 24);
-            }
-            catch (Exception e) { DebugSwallow("DrawSearchPing", e); }
+            if (!searchMatchCoords.Contains(node.Coordinates)) continue;
+            onscreen++;
+            var center = rect.Center;
+            float radius = MathF.Max(rect.Width, rect.Height) * (0.55f + 0.25f * pulse);
+            Graphics.DrawCircle(center, radius, color, 3f, 24);
         }
         searchOnScreenThisFrame = onscreen;
     }

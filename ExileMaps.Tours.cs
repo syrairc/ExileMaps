@@ -62,7 +62,7 @@ public partial class ExileMapsCore
     {
         try
         {
-            var full = Path.Combine(DirectoryFullName, "textures", file);
+            var full = Path.Combine(DirectoryFullName, "textures", "nav", file);
             if (!File.Exists(full)) { LogError($"Panel button texture missing: {file}"); return IntPtr.Zero; }
             Graphics.InitImage(file, full);
             return Graphics.GetTextureId(file);
@@ -84,7 +84,7 @@ public partial class ExileMapsCore
                 Normal = L("waypoints-normal.png"), Hover = L("waypoints-hover.png"),
                 Pressed = L("waypoints-pressed.png"), Tooltip = L("waypoints-tooltip.png"),
                 NormalSize = btnSz, PressedSize = btnSz,
-                TooltipSize = new Vector2(120, 39),
+                TooltipSize = new Vector2(187, 55),
                 GetOpen = () => WaypointPanelIsOpen, Toggle = () => WaypointPanelIsOpen = !WaypointPanelIsOpen,
             },
             new PanelButtonDef {
@@ -92,7 +92,7 @@ public partial class ExileMapsCore
                 Normal = L("tours-normal.png"), Hover = L("tours-hover.png"),
                 Pressed = L("tours-pressed.png"), Tooltip = L("tours-tooltip.png"),
                 NormalSize = btnSz, PressedSize = btnSz,
-                TooltipSize = new Vector2(82, 39),
+                TooltipSize = new Vector2(187, 55),
                 GetOpen = () => toursPanelOpen, Toggle = () => toursPanelOpen = !toursPanelOpen,
             },
             new PanelButtonDef {
@@ -100,7 +100,7 @@ public partial class ExileMapsCore
                 Normal = L("atlas-normal.png"), Hover = L("atlas-hover.png"),
                 Pressed = L("atlas-pressed.png"), Tooltip = L("atlas-tooltip.png"),
                 NormalSize = btnSz, PressedSize = btnSz,
-                TooltipSize = new Vector2(165, 39),
+                TooltipSize = new Vector2(187, 55),
                 GetOpen = () => atlasOverviewOpen, Toggle = () => atlasOverviewOpen = !atlasOverviewOpen,
             },
             // Action button (not a toggle): GetOpen stays false so it returns to normal after the
@@ -110,8 +110,17 @@ public partial class ExileMapsCore
                 Normal = L("export-normal.png"), Hover = L("export-hover.png"),
                 Pressed = L("export-pressed.png"), Tooltip = L("export-tooltip.png"),
                 NormalSize = btnSz, PressedSize = btnSz,
-                TooltipSize = new Vector2(145, 39),
+                TooltipSize = new Vector2(187, 55),
                 GetOpen = () => false, Toggle = () => ExportAtlasHtml(),
+            },
+            // Hidden (see DrawPanelButtonBar) unless expeditions are enabled and loaded.
+            new PanelButtonDef {
+                Key = "expeditions",
+                Normal = L("expeditions-normal.png"), Hover = L("expeditions-hover.png"),
+                Pressed = L("expeditions-pressed.png"), Tooltip = L("expeditions-tooltip.png"),
+                NormalSize = btnSz, PressedSize = btnSz,
+                TooltipSize = new Vector2(187, 55),
+                GetOpen = () => expeditionsPanelOpen, Toggle = () => expeditionsPanelOpen = !expeditionsPanelOpen,
             },
         };
     }
@@ -175,7 +184,9 @@ public partial class ExileMapsCore
             LogError("Error building tour: " + e.Message);
             t.Segments = new();
             t.ResolvedStops = new();
-            t.BuiltVersion = -1;
+            // Mark built against the current version so a persistent failure retries on the next cache
+            // refresh, not every frame (BuiltVersion = -1 would re-run this multi-BFS + LogError per frame).
+            t.BuiltVersion = mapCacheVersion;
         }
     }
 
@@ -303,13 +314,15 @@ public partial class ExileMapsCore
             bool hasBest = false;
             Vector2i bestCoord = default;
             ExileCore2.Shared.RectangleF bestRect = default;
-            float bestDist = float.MaxValue;
+            float bestDistSq = float.MaxValue;
             foreach (var d in AtlasPanel.Descriptions)
             {
+                // GetClientRectCache (cheap struct read) + squared distance instead of a per-node
+                // GetClientRect parent-chain walk + sqrt over all ~1000 descriptions every frame.
                 ExileCore2.Shared.RectangleF r;
-                try { r = d.Element.GetClientRect(); } catch { continue; }
-                float dist = Vector2.Distance(cursor, r.Center);
-                if (dist < bestDist) { bestDist = dist; bestCoord = d.Coordinate; bestRect = r; hasBest = true; }
+                try { r = d.Element.GetClientRectCache; } catch { continue; }
+                float distSq = Vector2.DistanceSquared(cursor, r.Center);
+                if (distSq < bestDistSq) { bestDistSq = distSq; bestCoord = d.Coordinate; bestRect = r; hasBest = true; }
             }
             if (!hasBest) return;
 
@@ -761,10 +774,18 @@ public partial class ExileMapsCore
         if (!Settings.Features.ShowPanelButtons) return;
         if (panelButtons == null || panelButtons.Count == 0) return;
 
+        // Expeditions button only shows once expeditions are enabled and the atlas scan found some.
+        // Filter here (not a skip-and-continue inside the draw loop) so every downstream index,
+        // width, and SameLine decision is computed against the same visible list -- no gaps, no
+        // misaligned hover rects for wp/tours/atlas/export.
+        bool showExpeditions = ExpeditionsLoaded();
+        var visibleButtons = panelButtons.Where(d => d.Key != "expeditions" || showExpeditions).ToList();
+        if (visibleButtons.Count == 0) return;
+
         const float gap = 6f, pad = 10f, bottomMargin = 64f, hoverLift = 5f;
-        int count = panelButtons.Count;
+        int count = visibleButtons.Count;
         // Hit rect = NormalSize. Pressed sprite is the same size, centered over the same hit rect.
-        var btnSz = panelButtons[0].NormalSize;
+        var btnSz = visibleButtons[0].NormalSize;
         float barW = count * btnSz.X + (count - 1) * gap;
         float winW = barW + pad * 2f, winH = btnSz.Y + pad * 2f;
 
@@ -793,7 +814,7 @@ public partial class ExileMapsCore
 
                     for (int i = 0; i < count; i++)
                     {
-                        var def = panelButtons[i];
+                        var def = visibleButtons[i];
                         ImGui.InvisibleButton(def.Key, def.NormalSize);
 
                         bool hovered = ImGui.IsItemHovered();

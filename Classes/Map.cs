@@ -13,7 +13,7 @@ namespace ExileMaps.Classes
         private Color nodeColor = Color.FromArgb(200, 155, 155, 155);
         private bool highlight = true;
         private bool colorNodesByWeight = true;
-        private bool useWeightColorForName = true;
+        private bool useWeightColorForName = false;
         private bool favorite = false;
         private SpriteIcon icon = SpriteIcon.Circle;
 

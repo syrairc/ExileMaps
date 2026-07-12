@@ -1,24 +1,19 @@
 ﻿// Core plugin: fields, Initialise, AreaChange, Tick, Render, keybinds, events.
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Numerics;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 
 using ExileCore2;
 using ExileCore2.PoEMemory.Elements.AtlasElements;
 using ExileCore2.PoEMemory.MemoryObjects;
-using ExileCore2.Shared.Helpers;
 using ExileCore2.Shared.Nodes;
-using ExileCore2.Shared.Enums;
 
 using GameOffsets2.Native;
-
-using ImGuiNET;
 
 using RectangleF = ExileCore2.Shared.RectangleF;
 using ExileMaps.Classes;
@@ -57,16 +52,40 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private readonly List<Node> specialNodes = [];
     // Frames between on-screen node set recomputes. The cull is expensive; the draw still runs every frame.
     private const int OnScreenRecomputeInterval = 5;
+    // mapCacheVersion the last cull ran against. Forces an immediate recull when the cache refreshes,
+    // instead of the old "selectedNodes.Count == 0" retrigger (which reculled every frame whenever the
+    // on-screen set was legitimately empty).
+    private int lastCullVersion = -1;
+    // Incremental cull: most culls only re-resolve last frame's on-screen nodes plus their graph
+    // neighbors (nodes enter the screen from the edge, next to a visible node) instead of resolving all
+    // ~1000 cached node positions. lastOnScreen is the geometric on-screen set (pre-Process-filter) the
+    // next incremental pass seeds from. A periodic parallel full scan backstops cases the neighbor walk
+    // can miss (zoom-out revealing distant regions).
+    private readonly List<Node> lastOnScreen = [];
+    private readonly HashSet<Node> cullCandidates = [];
+    private int cullsSinceFullScan = 0;
+    private const int FullCullEvery = 10;
     // Waypoint-panel list filter: 0 = All, 1 = Manual only, 2 = Auto-created only.
     private int waypointListFilter = 0;
     // Reused each frame to avoid per-render allocation.
     private readonly List<(Node node, RectangleF rect)> nodePositions = [];
     // Content-icon rects drawn this frame + their content name, for hover tooltips. Cleared each frame
-    // before the content-icon pass; consulted by DrawContentIconTooltip after all nodes are drawn.
-    private readonly List<(RectangleF rect, string content)> contentIconRects = [];
+    // before the content-icon pass; consulted by DrawIconTooltips after all nodes are drawn.
+    // rect + title (content/biome name) + optional second line (e.g. "Awards an atlas point").
+    private readonly List<(RectangleF rect, string title, string note)> contentIconRects = [];
     // Top Y of the content-icon row we drew this frame, per node. Lets the atlas-point/quest indicators
     // sit above our content icons. Cleared with contentIconRects.
     private readonly Dictionary<Vector2i, float> contentRowTopByCoord = [];
+    // Biome icon rect drawn this frame, per node. Lets the favorite star sit left of it. Cleared with
+    // contentRowTopByCoord.
+    private readonly Dictionary<Vector2i, RectangleF> biomeIconRectByCoord = [];
+    // Content-name -> resolved icon-<x>.png file (null = no file). loadedContentIcons is init-only so
+    // this never needs invalidating; kills the per-node ToLower/Replace/interpolation string allocs.
+    private readonly Dictionary<string, string> contentIconFileCache = new(StringComparer.OrdinalIgnoreCase);
+    // Biome-name -> resolved biome-<x>.png file (null = no file). Sibling of contentIconFileCache.
+    private readonly Dictionary<string, string> biomeIconFileCache = new(StringComparer.OrdinalIgnoreCase);
+    // Reused across DrawContentRow calls so the per-node icon list isn't reallocated every frame.
+    private readonly List<(string file, string content, Color tint)> contentIconScratch = [];
     // Per-frame memo of node screen rects. Element.GetClientRect() walks the parent chain (a
     // process-memory read per ancestor) on every call, and the same node is needed by the line and
     // path passes within one frame. Cleared + reseeded once per frame in Render; render-thread only.
@@ -77,6 +96,15 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     // node from selectedNodes, so its icon/name are redrawn separately on top (DrawHoveredNodeOverTooltip).
     private bool mapTooltipVisible;
     private Dictionary<Vector2i, Node> mapCache = [];
+    // Snapshot of AtlasPanel.Buttons, rebuilt each cache refresh. Guarded by mapCacheLock.
+    private List<Classes.Expedition> expeditions = new();
+    // the rumours popup resolved once per frame in UpdateScreenBounds; reused by the overlay
+    private ExileCore2.PoEMemory.Element frameLogbookPopup;
+    // Button-location coords whose game expedition button is on-screen this frame (AtlasButtonNode
+    // .IsVisible). Our marker+overlay stand down at these so we don't draw over the game's own button.
+    private readonly HashSet<Vector2i> frameVisibleExpeditionButtonCoords = new();
+    // Coords of maps in expeditions the user toggled "Highlight". Transient, not persisted.
+    private readonly HashSet<Vector2i> highlightedExpeditionCoords = new();
     public bool refreshCache = false;
     private bool refreshingCache = false;
     // When set, the next background refresh clears the cache first (atlas reopen / area change).
@@ -127,6 +155,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private readonly Dictionary<PathTextureStyle, IntPtr> pathTextureIds = new();
     // Per-content-type icon PNGs: icon-<contenttype>.png, keyed by file name.
     private readonly HashSet<string> loadedContentIcons = new(StringComparer.OrdinalIgnoreCase);
+    // Per-biome icon PNGs: biome-<biomename>.png, keyed by file name.
+    private readonly HashSet<string> loadedBiomeIcons = new(StringComparer.OrdinalIgnoreCase);
     // Largest screen-px-per-art-unit magnification seen (== full zoom). Self-calibrates the content
     // icon zoom factor so settings tuned "at full zoom" scale down correctly as the atlas zooms out.
     private float maxNodeZoomMagnification = 0f;
@@ -135,6 +165,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private bool gameFilesScraped = false;
     private bool WaypointPanelIsOpen = false;
     private bool ShowMinimap = false;
+    private bool expeditionsPanelOpen = false;
+    private bool expeditionsPanelWasOpen = false;
+    private string expSearchText = "";
 
 
     #endregion
@@ -148,6 +181,24 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         // Map/Content/Biome dicts are populated by game-file scraping in Tick(), not here.
         Settings.Profiles.EnsureDefaultProfile();
+
+        // Build the label-style model from old settings on first run after upgrade.
+        MigrateLabelStyles();
+        MigrateLabelOpacity();
+
+        // Connection migrations re-seed the new toggles from old fields for upgraders. A fresh install
+        // has no settings file yet, so there's nothing to migrate - skip and let the declared defaults
+        // stand (otherwise legacy defaults clobber them and the shipped defaults become unreachable).
+        if (FindSettingsFilePath() == null) {
+            Settings.Profiles.ConnectionSettingsMigrated = true;
+            Settings.Profiles.ConnectionCategoriesMigrated = true;
+        } else {
+            MigrateConnectionSettings();
+            MigrateConnectionCategories();
+        }
+
+        // Rumours have no live game file to scrape, so seed them once here from the static json.
+        UpdateRumorData();
 
         // Mirror the persisted special-map config (names + max-weight) into the Node statics that
         // detection/weighting read. Re-synced on edit via RequestSpecialMapsRefresh.
@@ -180,8 +231,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             customIconsLoaded = true;
         }
 
-        // Load per-content-type icon PNGs from textures/icon-*.png (icon-breach.png etc.).
-        var texturesDir = Path.Combine(DirectoryFullName, "textures");
+        // Load per-content-type icon PNGs from textures/content/icon-*.png (icon-breach.png etc.).
+        var texturesDir = Path.Combine(DirectoryFullName, "textures", "content");
         foreach (var file in Directory.GetFiles(texturesDir, "icon-*.png")) {
             var name = Path.GetFileName(file);
             try {
@@ -193,6 +244,22 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             }
         }
         LogMessage($"ExileMaps: loaded {loadedContentIcons.Count} content icons.");
+
+        // Load per-biome icon PNGs from textures/biomes/biome-*.png (biome-desert.png etc.).
+        var biomesDir = Path.Combine(DirectoryFullName, "textures", "biomes");
+        if (Directory.Exists(biomesDir)) {
+            foreach (var file in Directory.GetFiles(biomesDir, "biome-*.png")) {
+                var name = Path.GetFileName(file);
+                try {
+                    Graphics.InitImage(name, file);
+                    Graphics.GetTextureId(name);
+                    loadedBiomeIcons.Add(name);
+                } catch (Exception e) {
+                    LogError($"Failed to load biome icon {name}: {e.Message}");
+                }
+            }
+        }
+        LogMessage($"ExileMaps: loaded {loadedBiomeIcons.Count} biome icons.");
 
         // Textured atlas panel buttons (waypoints / tours / atlas), with per-state + tooltip images.
         LoadPanelButtonTextures();
@@ -243,15 +310,22 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             SeedProfiles();
         }
 
-        // Atlas streams nodes progressively; re-flag refresh when cache is behind live count.
-        bool cacheBehind = AtlasPanel.Descriptions.Count > mapCache.Count;
-        if (cacheBehind)
-            refreshCache = true;
-
         screenCenter = GameController.Window.GetWindowRectangle().Center - GameController.Window.GetWindowRectangle().Location;
 
         // Bypass throttle while cache is empty or behind the live count; 0.5s floor prevents bursts.
         double elapsed = DateTime.Now.Subtract(lastRefresh).TotalSeconds;
+
+        // Atlas streams nodes progressively; re-flag refresh when the cache is behind the live count.
+        // AtlasPanel.Descriptions.Count materializes ~1000 wrapper objects, so only read it when a
+        // refresh could actually fire this tick (past the 0.5s floor, or the cache still empty) -
+        // below that the throttle blocks the refresh anyway, so the count can't change the outcome.
+        bool cacheBehind = false;
+        if (elapsed > 0.5 || mapCache.Count == 0) {
+            cacheBehind = AtlasPanel.Descriptions.Count > mapCache.Count;
+            if (cacheBehind)
+                refreshCache = true;
+        }
+
         bool throttleOpen = elapsed > Settings.Graphics.MapCacheRefreshRate
             || mapCache.Count == 0
             || (cacheBehind && elapsed > 0.5);
@@ -312,6 +386,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (debugNodeOpen) DrawNodeDebugPanel();
         if (atlasOverviewOpen) DrawAtlasOverviewPanel(); else overviewWasOpen = false;
         if (toursPanelOpen) DrawToursPanel(); else toursPanelWasOpen = false;
+        if (expeditionsPanelOpen) DrawExpeditionsPanel(); else expeditionsPanelWasOpen = false;
         if (perf) PerfMonitor.Record("Panels", Stopwatch.GetTimestamp() - t0);
 
         DrawPerfMonitorOverlay();
@@ -341,30 +416,38 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         // the line + waypoint-path passes. Cleared unconditionally so minimap mode reads fresh too.
         frameRectCache.Clear();
 
-        // Recompute on-screen set every N frames (expensive cull); redraw cached set every frame.
-        if (TickCount % OnScreenRecomputeInterval == 0 || selectedNodes.Count == 0) {
+        // Recompute the on-screen set every N frames; the draw redraws the cached set every frame.
+        if (TickCount % OnScreenRecomputeInterval == 0 || lastCullVersion != mapCacheVersion) {
             t0 = Stopwatch.GetTimestamp();
-            lock (mapCacheLock) {
-                selectedNodes.Clear();
-                selectedNodes.AddRange(mapCache.Values.AsParallel()
-                    .Where(x => Settings.Features.ProcessVisitedNodes || !x.IsVisited || x.IsAttempted)
-                    .Where(x => (Settings.Features.ProcessHiddenNodes && !x.IsVisible) || x.IsVisible)
-                    .Where(x => (Settings.Features.ProcessLockedNodes && !x.IsUnlocked) || x.IsUnlocked)
-                    .Where(x => (Settings.Features.ProcessUnlockedNodes && x.IsUnlocked) || !x.IsUnlocked)
-                    // EXPERIMENT (Change C): GetClientRectCache is the engine's last-computed rect
-                    // (a cheap struct read) instead of GetClientRect(), which re-walks the parent
-                    // chain for all ~1000 nodes every cull. VERIFY IN-GAME: pan/zoom the atlas and
-                    // confirm nodes stay aligned and Render.NodeCull drops. If overlays lag/freeze
-                    // while panning, or nodes stop appearing, the cache is stale/unpopulated.
-                    // Revert this one line to GetClientRect().Center.
-                    .Where(x => IsOnScreen(x.MapNode.Element.GetClientRectCache.Center)));
 
-                // Special maps draw their indicator regardless of visited/locked/highlight filters.
-                specialNodes.Clear();
-                specialNodes.AddRange(mapCache.Values.AsParallel()
-                    .Where(x => x.IsSpecial)
-                    .Where(x => IsOnScreen(x.MapNode.Element.GetClientRectCache.Center)));
+            // Full scan on first populate, after a cache refresh, or periodically (backstop for zoom-out
+            // revealing distant nodes the neighbor walk can't reach). Otherwise incremental.
+            bool fullScan = selectedNodes.Count == 0
+                || lastCullVersion != mapCacheVersion
+                || ++cullsSinceFullScan >= FullCullEvery;
+
+            if (fullScan) {
+                cullsSinceFullScan = 0;
+                // Parallelize the ~1000-node resolve: GetClientRectCache is a parent-chain walk while the
+                // atlas is moving (only cached when still), so a serial full scan spikes during a drag.
+                List<Node> onScreen;
+                lock (mapCacheLock)
+                    onScreen = mapCache.Values.AsParallel().Where(OnScreenSafe).ToList();
+                RebuildOnScreenSets(onScreen);
+            } else {
+                // Incremental: only last frame's on-screen nodes and their graph neighbors can be on
+                // screen now (nodes enter from the edge next to a visible node). ~a few hundred, not 1000.
+                cullCandidates.Clear();
+                foreach (var n in lastOnScreen) {
+                    cullCandidates.Add(n);
+                    foreach (var nb in n.Neighbors.Values)
+                        if (nb != null)
+                            cullCandidates.Add(nb);
+                }
+                RebuildOnScreenSets(cullCandidates);
             }
+
+            lastCullVersion = mapCacheVersion;
             if (perf) PerfMonitor.Record("Render.NodeCull", Stopwatch.GetTimestamp() - t0);
         }
 
@@ -398,31 +481,29 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 }
                 if (perf) PerfMonitor.Record("Render.Fills", Stopwatch.GetTimestamp() - t0);
 
-                // 3. Rings
-                t0 = Stopwatch.GetTimestamp();
-                foreach (var (node, rect) in nodePositions)
-                    DrawNodeRings(node, rect);
-                if (perf) PerfMonitor.Record("Render.Rings", Stopwatch.GetTimestamp() - t0);
-
-                // 3b. Content icons (game-style per-type PNGs above each node)
+                // 3. Biome icon (above name) + content row (below name)
                 t0 = Stopwatch.GetTimestamp();
                 contentIconRects.Clear();
                 contentRowTopByCoord.Clear();
-                foreach (var (node, rect) in nodePositions)
-                    DrawContentIcons(node, rect);
-                if (perf) PerfMonitor.Record("Render.ContentIcons", Stopwatch.GetTimestamp() - t0);
+                biomeIconRectByCoord.Clear();
+                foreach (var (node, rect) in nodePositions) {
+                    DrawBiomeIcon(node, rect);
+                    DrawContentRow(node, rect);
+                }
+                if (perf) PerfMonitor.Record("Render.ContentRow", Stopwatch.GetTimestamp() - t0);
 
                 // 3c-3f. Indicators (favorites, special, atlas-point, atlas-quest)
                 t0 = Stopwatch.GetTimestamp();
                 foreach (var (node, rect) in nodePositions)
                     DrawFavoriteIndicator(node, rect);
                 // Special indicators use their own on-screen set so visited/locked specials still draw.
+                // GetNodeRect memoizes the rect (seeded here, reused by the special-name pass below and
+                // by any special that's also in nodePositions), replacing a fresh parent-chain walk.
                 foreach (var node in specialNodes) {
-                    try { DrawSpecialIndicator(node, node.MapNode.Element.GetClientRect()); }
-                    catch (Exception e) { DebugSwallow("Render: special indicator", e); }
+                    var rect = GetNodeRect(node);
+                    if (rect.Width > 0)
+                        DrawSpecialIndicator(node, rect);
                 }
-                foreach (var (node, rect) in nodePositions)
-                    DrawAtlasPointIndicator(node, rect);
                 foreach (var (node, rect) in nodePositions)
                     DrawAtlasQuestIndicator(node, rect);
                 if (perf) PerfMonitor.Record("Render.Indicators", Stopwatch.GetTimestamp() - t0);
@@ -433,8 +514,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     DrawNodeLabels(node, rect);
                 // Special names from the dedicated set so visited/locked specials get labelled too.
                 foreach (var node in specialNodes) {
-                    try { DrawSpecialMapName(node, node.MapNode.Element.GetClientRect()); }
-                    catch (Exception e) { DebugSwallow("Render: special name", e); }
+                    var rect = GetNodeRect(node);
+                    if (rect.Width > 0)
+                        DrawSpecialMapName(node, rect);
                 }
                 if (perf) PerfMonitor.Record("Render.Labels", Stopwatch.GetTimestamp() - t0);
 
@@ -443,7 +525,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 DrawHoveredNodeOverTooltip();
 
                 // Content-icon hover tooltip (drawn last so it sits on top of everything).
-                DrawContentIconTooltip();
+                DrawIconTooltips();
             }
         }
 
@@ -463,12 +545,51 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         DrawProgressReadout();
         DrawSearchPing();
+        DrawExpeditionHighlight();
+        DrawExpeditionHoverRings();
+        DrawExpeditions();
 
         t0 = Stopwatch.GetTimestamp();
         DrawTours();
         if (perf) PerfMonitor.Record("Render.Tours", Stopwatch.GetTimestamp() - t0);
 
         DrawCacheProgressBar();
+    }
+
+    // On-screen test for a node's cached center, swallowing a failed memory read. Read-only, so it's
+    // safe to call from the parallel full-scan cull.
+    private bool OnScreenSafe(Node x)
+    {
+        try { return IsOnScreen(x.MapNode.Element.GetClientRectCache.Center); }
+        catch { return false; }
+    }
+
+    // Resolves each candidate's on-screen status and rebuilds selectedNodes / specialNodes / lastOnScreen
+    // from the survivors. Sequential; called with the small incremental candidate set, or the full-scan
+    // list (already on-screen, re-resolved here to apply the Process filters and seed lastOnScreen).
+    private void RebuildOnScreenSets(IEnumerable<Node> candidates)
+    {
+        var feat = Settings.Features;
+        selectedNodes.Clear();
+        specialNodes.Clear();
+        lastOnScreen.Clear();
+        foreach (var x in candidates) {
+            Vector2 center;
+            try { center = x.MapNode.Element.GetClientRectCache.Center; }
+            catch { continue; }
+            if (!IsOnScreen(center))
+                continue;
+
+            lastOnScreen.Add(x);
+            // Special maps draw their indicator regardless of the visited/locked/hidden filters.
+            if (x.IsSpecial)
+                specialNodes.Add(x);
+            if ((feat.ProcessVisitedNodes || !x.IsVisited || x.IsAttempted)
+                && ((feat.ProcessHiddenNodes && !x.IsVisible) || x.IsVisible)
+                && ((feat.ProcessLockedNodes && !x.IsUnlocked) || x.IsUnlocked)
+                && ((feat.ProcessUnlockedNodes && x.IsUnlocked) || !x.IsUnlocked))
+                selectedNodes.Add(x);
+        }
     }
 
     // Fill color for the cache reload bar.
@@ -536,7 +657,13 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             Settings.Maps.Content.ContentTypes.CollectionChanged += (_, _) => { weightsDirty = true; profileDirty = true; };
             Settings.Maps.Content.ContentTypes.PropertyChanged += (_, e) => OnSettingPropertyChanged(e?.PropertyName);
             // Full rebuild on map-list add/remove so static data (map type) re-resolves for the change.
-            Settings.Maps.Maps.CollectionChanged += (_, _) => { refreshCache = true; clearCacheOnRefresh = true; };
+            // A Map property edit (weight/color via Quick Edit) surfaces as Replace and is already
+            // covered by the debounced weight recalc; skip it so a slider drag doesn't wipe + rebuild
+            // the whole cache (which flashes the loading state).
+            Settings.Maps.Maps.CollectionChanged += (_, e) => {
+                if (e.Action == NotifyCollectionChangedAction.Replace) return;
+                refreshCache = true; clearCacheOnRefresh = true;
+            };
         } catch (Exception e) {
             LogError("Error subscribing to events: " + e.Message);
         }

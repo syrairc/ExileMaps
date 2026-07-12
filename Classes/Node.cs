@@ -13,6 +13,24 @@ public class Node
     public string Name { get; set; }
     public string Id { get; set; }
 
+    // Name.ToUpper() cached for the label pass (drawn per node per frame at 3 sites). Recomputed
+    // lazily only when Name changes; Name is set once at cache time, so this normally computes once.
+    private string _upperName;
+    private string _upperNameSource;
+    [JsonIgnore]
+    public string UppercaseName
+    {
+        get
+        {
+            if (!ReferenceEquals(_upperNameSource, Name))
+            {
+                _upperNameSource = Name;
+                _upperName = Name?.ToUpper();
+            }
+            return _upperName;
+        }
+    }
+
     [JsonIgnore]
     public bool IsUnlocked;
     
@@ -31,8 +49,20 @@ public class Node
     [JsonIgnore]
     public bool IsAttempted => !IsUnlocked && IsVisited;
     // Favorited if the map type is a favorite, or any content present on the node is favorited.
+    // Read per node per frame in the draw pass, so a plain loop instead of Any (no closure alloc).
     [JsonIgnore]
-    public bool IsFavorited => (MapType?.Favorite ?? false) || Content.Values.Any(c => c.Favorite);
+    public bool IsFavorited
+    {
+        get
+        {
+            if (MapType?.Favorite ?? false)
+                return true;
+            foreach (var c in Content.Values)
+                if (c.Favorite)
+                    return true;
+            return false;
+        }
+    }
     [JsonIgnore]
     public List<Vector2i> NeighborCoordinates { get; set; } = [];
     [JsonIgnore]

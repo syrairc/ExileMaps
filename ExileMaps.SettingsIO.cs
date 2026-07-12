@@ -1,5 +1,6 @@
 ﻿// Settings I/O: profile management, import/export, v1 migration, file dialogs.
 using System;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -135,6 +136,138 @@ public partial class ExileMapsCore
             LogMessage($"Detected pre-rework settings; backed up to {backup}. Import available in plugin settings.");
         } catch (Exception e) {
             LogError("Error detecting old settings: " + e.Message);
+        }
+    }
+
+    // One-time: build the new label-style model from the old scattered color settings, then backfill
+    // every existing profile so switching profiles right after upgrade doesn't snap to raw defaults.
+    private void MigrateLabelStyles()
+    {
+        try {
+            if (Settings.Profiles.LabelStyleMigrated)
+                return;
+
+            var g = Settings.Graphics;
+            var migrated = LabelStyleSettings.Defaults();
+
+            Color font = g.FontColor;
+            migrated.Base.TextColor = Color.FromArgb(255, font.R, font.G, font.B);
+
+            Color bg = g.BackgroundColor;
+            migrated.Base.BoxColor = Color.FromArgb(255, bg.R, bg.G, bg.B);
+            migrated.Base.BoxOpacity = bg.A;
+
+            migrated.Base.TextColorByWeight = g.MapNameTextColorSource == LabelColorSource.Weight;
+            migrated.Base.BorderColorByWeight = g.MapNameBorderColorSource == LabelColorSource.Weight;
+
+            if (g.MapNameTextColorSource == LabelColorSource.Static) {
+                var c = g.MapNameTextStaticColor;
+                migrated.Base.TextColor = Color.FromArgb(255, c.R, c.G, c.B);
+            }
+            if (g.MapNameBorderColorSource == LabelColorSource.Static) {
+                var c = g.MapNameBorderStaticColor;
+                migrated.Base.BorderColor = Color.FromArgb(255, c.R, c.G, c.B);
+            }
+
+            // Old plain-background label had no border.
+            if (g.LegacyMapNameStyling)
+                migrated.Base.BorderVisible = false;
+
+            Color special = g.SpecialMapNameColor;
+            migrated.Special.OverrideTextColor = true;
+            migrated.Special.TextColor = Color.FromArgb(255, special.R, special.G, special.B);
+            migrated.Special.OverrideBorderColor = true;
+            migrated.Special.BorderColor = Color.FromArgb(255, special.R, special.G, special.B);
+
+            Settings.Labels = migrated.Clone();
+            foreach (var kv in Settings.Profiles.Profiles)
+                if (kv.Value.Labels == null)
+                    kv.Value.Labels = migrated.Clone();
+
+            Settings.Profiles.LabelStyleMigrated = true;
+            LogMessage("Migrated label styles into the new model.");
+        } catch (Exception e) {
+            LogError("Label style migration failed: " + e.Message);
+        }
+    }
+
+    // Fold the old separate box/border opacity into the color alpha, once. Runs over the live labels and
+    // every profile's labels (base + all overrides). On a fresh install this just bakes the default
+    // opacities (177 box / 255 border) into the default colors, so the look is unchanged either way.
+    private void MigrateLabelOpacity()
+    {
+        try {
+            if (Settings.Profiles.LabelOpacityFolded)
+                return;
+
+            void FoldStyle(LabelStyle s) {
+                if (s == null) return;
+                s.BoxColor = Color.FromArgb(s.BoxOpacity, s.BoxColor.R, s.BoxColor.G, s.BoxColor.B);
+                s.BorderColor = Color.FromArgb(s.BorderOpacity, s.BorderColor.R, s.BorderColor.G, s.BorderColor.B);
+            }
+            void FoldOverride(LabelStyleOverride o) {
+                if (o == null) return;
+                o.BoxColor = Color.FromArgb(o.BoxOpacity, o.BoxColor.R, o.BoxColor.G, o.BoxColor.B);
+                o.BorderColor = Color.FromArgb(o.BorderOpacity, o.BorderColor.R, o.BorderColor.G, o.BorderColor.B);
+            }
+            void FoldSet(LabelStyleSettings ls) {
+                if (ls == null) return;
+                FoldStyle(ls.Base);
+                FoldOverride(ls.Favorite);
+                FoldOverride(ls.Special);
+                foreach (var o in ls.Content.Values) FoldOverride(o);
+                foreach (var o in ls.Biome.Values) FoldOverride(o);
+            }
+
+            FoldSet(Settings.Labels);
+            foreach (var kv in Settings.Profiles.Profiles)
+                FoldSet(kv.Value.Labels);
+
+            Settings.Profiles.LabelOpacityFolded = true;
+            LogMessage("Folded label box/border opacity into color alpha.");
+        } catch (Exception e) {
+            LogError("Label opacity fold migration failed: " + e.Message);
+        }
+    }
+
+    // One-time: seed the Phase 3 connection toggles from the old Features toggles so existing users
+    // see no change. Master + locked + opacity keep their defaults (no old equivalent).
+    private void MigrateConnectionSettings()
+    {
+        try {
+            if (Settings.Profiles.ConnectionSettingsMigrated)
+                return;
+
+            // Seed the intermediate 3-way fields; MigrateConnectionCategories then maps those to the 4-way
+            // toggles. Old hidden-node lines map to "locked" (not-unlocked, not-visited). Writing Hidden
+            // directly here would just get overwritten by the categories pass.
+            Settings.Graphics.ShowConnectionsForCompleted.Value = Settings.Features.DrawVisitedNodeConnections;
+            Settings.Graphics.ShowConnectionsForLocked.Value = Settings.Features.DrawHiddenNodeConnections;
+
+            Settings.Profiles.ConnectionSettingsMigrated = true;
+            LogMessage("Migrated connection-line settings to the new model.");
+        } catch (Exception e) {
+            LogError("Error migrating connection-line settings: " + e.Message);
+        }
+    }
+
+    // One-time: split the old 3-way (completed/locked/visible) toggles into the 4-way categories.
+    // old locked (not-unlocked, not-visited) = both inaccessible (revealed+locked) and hidden.
+    // old visible (both revealed) maps to accessible. completed carries over unchanged.
+    private void MigrateConnectionCategories()
+    {
+        try {
+            if (Settings.Profiles.ConnectionCategoriesMigrated)
+                return;
+
+            Settings.Graphics.ShowConnectionsForInaccessible.Value = Settings.Graphics.ShowConnectionsForLocked;
+            Settings.Graphics.ShowConnectionsForHidden.Value = Settings.Graphics.ShowConnectionsForLocked;
+            Settings.Graphics.ShowConnectionsForAccessible.Value = Settings.Graphics.ShowConnectionsForVisible;
+
+            Settings.Profiles.ConnectionCategoriesMigrated = true;
+            LogMessage("Migrated connection-line toggles to the 4-way categories.");
+        } catch (Exception e) {
+            LogError("Error migrating connection categories: " + e.Message);
         }
     }
 

@@ -211,9 +211,18 @@ public partial class ExileMapsCore
         // ImGui.GetMousePos() works over fog; UIHoverElement returns the panel background over fog,
         // which would snap to the panel center instead of the cursor position.
         var cursor = ImGui.GetMousePos();
-        var closestNode = AtlasPanel.Descriptions
-            .OrderBy(x => Vector2.Distance(cursor, x.Element.GetClientRect().Center))
-            .FirstOrDefault();
+
+        // Single-pass nearest by squared distance: no sort, no sqrt. GetClientRectCache is the
+        // engine's last-computed rect (cheap struct read) vs GetClientRect's per-node parent-chain
+        // walk. Runs every frame while a node tooltip is up (DrawHoveredNodeOverTooltip), so the old
+        // OrderBy over all ~1000 descriptions was the cost. Cache can lag a frame while panning (same
+        // accepted tradeoff as the on-screen cull); irrelevant for cursor snapping.
+        AtlasNodeDescription closestNode = null;
+        float bestDistSq = float.MaxValue;
+        foreach (var d in AtlasPanel.Descriptions) {
+            float distSq = Vector2.DistanceSquared(cursor, d.Element.GetClientRectCache.Center);
+            if (distSq < bestDistSq) { bestDistSq = distSq; closestNode = d; }
+        }
 
         if (closestNode != null && mapCache.TryGetValue(closestNode.Coordinate, out Node cachedNode))
             return cachedNode;

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.ComponentModel;
-using System.Linq;
 
 namespace ExileMaps.Classes
 {
@@ -117,11 +116,13 @@ namespace ExileMaps.Classes
         {
             try {
                 var item = (TValue)sender;
-                var key = dictionary.FirstOrDefault(x => EqualityComparer<TValue>.Default.Equals(x.Value, item)).Key;
                 // Propagate item property changes (e.g. Weight edits) so subscribers can react.
                 // Drives the debounced weight recalc. Without this, only Add/Remove notified them.
+                // No subscriber reads the key (all handlers use (_, _)), so skip the O(N) reverse
+                // lookup that used to scan the whole dictionary on every property change.
                 OnPropertyChanged(e.PropertyName);
-                OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Replace, new KeyValuePair<TKey, TValue>(key, item), new KeyValuePair<TKey, TValue>(key, item)));            }
+                OnCollectionChanged(new NotifyCollectionChangedEventArgs(NotifyCollectionChangedAction.Replace, new KeyValuePair<TKey, TValue>(default, item), new KeyValuePair<TKey, TValue>(default, item)));
+            }
             catch (Exception) {
             }
         }

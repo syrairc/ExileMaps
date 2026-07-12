@@ -13,56 +13,344 @@ namespace ExileMaps;
 
 public partial class ExileMapsCore
 {
-    // Live filter text for the settings search box (see DrawSettings).
-    private string _settingsFilter = "";
+    // Tab layout for the settings menu. We regroup the engine's flat Drawers list into tabs by
+    // drawing named holders and CustomNode delegates in the order we want. Nothing in the ISettings
+    // classes moves, so existing saved settings still load unchanged.
+    private Dictionary<string, ISettingsHolder> _holderIndex;
+    // names we already logged as missing, so a typo warns once instead of every frame.
+    private readonly HashSet<string> _missingHolderWarned = new();
 
-    // Override the engine's flat "draw every top-level Drawer" loop to prepend a search box that
-    // hides non-matching submenus. A submenu is shown if its own name/tooltip matches OR any
-    // descendant matches, so searching a leaf setting still surfaces its whole parent group.
     public override void DrawSettings()
     {
         try {
-            ImGui.SetNextItemWidth(220);
-            ImGui.InputTextWithHint("##settingsfilter", "Filter settings...", ref _settingsFilter, 64);
-            ImGui.SameLine();
-            if (ImGui.Button("Clear##settingsfilter")) _settingsFilter = "";
-            ImGui.Separator();
-        } catch (Exception ex) {
-            LogError($"Settings filter box failed: {ex.Message}");
-        }
-
-        var filter = _settingsFilter?.Trim();
-        if (string.IsNullOrEmpty(filter)) {
-            base.DrawSettings();
-            return;
-        }
-
-        try {
-            foreach (var drawer in Drawers) {
-                if (HolderMatchesFilter(drawer, filter))
-                    drawer.Draw();
+            RebuildHolderIndex();
+            if (ImGui.BeginTabBar("##exilemaps_tabs", ImGuiTabBarFlags.None)) {
+                Tab("General", DrawGeneralTab);
+                Tab("Appearance", DrawAppearanceTab);
+                Tab("Maps", DrawMapsTab);
+                Tab("Waypoints", DrawWaypointsTab);
+                Tab("Panels", DrawPanelsTab);
+                Tab("Keybinds", () => DrawHolderChildren("Keybinds"));
+                ImGui.EndTabBar();
             }
         } catch (Exception ex) {
-            LogError($"Filtered settings draw failed: {ex.Message}");
+            // never leave the user with a blank settings page - fall back to the engine's flat list.
+            LogError($"DrawSettings tabs failed, falling back to flat list: {ex.Message}");
             base.DrawSettings();
         }
     }
 
-    // True if this holder's name/tooltip contains the filter, or any descendant does.
-    private static bool HolderMatchesFilter(ISettingsHolder holder, string filter)
+    // (Name -> holder) over the whole Drawers tree, rebuilt each open. Cheap (dozens of entries) and
+    // only runs while the settings window is visible.
+    private void RebuildHolderIndex()
     {
-        if (holder == null) return false;
-        if (!string.IsNullOrEmpty(holder.Name) &&
-            holder.Name.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
-            return true;
-        if (!string.IsNullOrEmpty(holder.Tooltip) &&
-            holder.Tooltip.IndexOf(filter, StringComparison.OrdinalIgnoreCase) >= 0)
-            return true;
-        if (holder.Children != null)
-            foreach (var child in holder.Children)
-                if (HolderMatchesFilter(child, filter))
-                    return true;
-        return false;
+        _holderIndex = new Dictionary<string, ISettingsHolder>(StringComparer.OrdinalIgnoreCase);
+        void Walk(IList<ISettingsHolder> holders)
+        {
+            if (holders == null) return;
+            foreach (var h in holders) {
+                if (h != null && !string.IsNullOrEmpty(h.Name))
+                    _holderIndex[h.Name] = h;   // last wins; the names we reference are unique
+                Walk(h?.Children);
+            }
+        }
+        Walk(Drawers);
+    }
+
+    // Draw one engine holder (a [Menu] leaf or a whole submenu) by its display name.
+    private void DrawHolder(string name)
+    {
+        if (_holderIndex != null && _holderIndex.TryGetValue(name, out var h)) {
+            try { h.Draw(); }
+            catch (Exception ex) { LogError($"[Tabs] draw '{name}' failed: {ex.Message}"); }
+        } else if (_missingHolderWarned.Add(name)) {
+            LogError($"[Tabs] setting not found in menu: '{name}' (renamed?)");
+        }
+    }
+
+    // Draw a submenu's children WITHOUT its collapsing header, so it shows flat and expanded under a tab
+    // (the whole-holder Draw would render a redundant, collapsed-by-default header).
+    private void DrawHolderChildren(string name)
+    {
+        // look up in the TOP-LEVEL Drawers, not the recursive index: a nested property can share a
+        // parent's name (TourSettings has an inner 'Tours' dict) and clobber the index entry, leaving
+        // an empty holder.
+        var h = Drawers?.FirstOrDefault(d => string.Equals(d?.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (h?.Children != null) {
+            foreach (var c in h.Children) {
+                try { c?.Draw(); }
+                catch (Exception ex) { LogError($"[Tabs] draw child of '{name}' failed: {ex.Message}"); }
+            }
+        } else if (_missingHolderWarned.Add(name + ":children")) {
+            LogError($"[Tabs] submenu not found: '{name}' (renamed?)");
+        }
+    }
+
+    // Draw a CustomNode's delegate directly, for the [JsonIgnore] pickers/tables that have no menu name.
+    private void DrawCustom(Action drawDelegate)
+    {
+        try { drawDelegate?.Invoke(); }
+        catch (Exception ex) { LogError($"[Tabs] custom section failed: {ex.Message}"); }
+    }
+
+    private void Tab(string label, Action body)
+    {
+        if (!ImGui.BeginTabItem(label)) return;
+        try { body(); }
+        catch (Exception ex) { LogError($"[Tabs] '{label}' tab failed: {ex.Message}"); }
+        ImGui.EndTabItem();
+    }
+
+    // Collapsible section header for the settings tabs. Default open so nothing hides on first view;
+    // ImGui remembers the collapsed state per header after that.
+    private static bool Section(string name) => ImGui.CollapsingHeader(name, ImGuiTreeNodeFlags.DefaultOpen);
+
+    private void DrawGeneralTab()
+    {
+        if (Section("Activation")) {
+            // Root Enable has no [Menu], so it isn't in the holder index (the engine draws it specially).
+            // Bind it directly instead of via DrawHolder.
+            bool enabled = Settings.Enable;
+            if (ImGui.Checkbox("Enable", ref enabled)) Settings.Enable.Value = enabled;
+            DrawHolder("Enable Atlas Drawing");
+        }
+
+        if (Section("Node Processing")) {
+            DrawHolder("Atlas Range");
+            DrawHolder("Use Atlas Range for Node Connections");
+            DrawHolder("Process Visited Map Nodes");
+            DrawHolder("Process Unlocked Map Nodes");
+            DrawHolder("Process Locked Map Nodes");
+            DrawHolder("Process Hidden Map Nodes");
+            DrawHolder("Recalculate Node Weights on Refresh");
+        }
+
+        if (Section("Performance")) {
+            DrawHolder("Map Cache Refresh Rate");
+            DrawHolder("Show Performance Monitor");
+        }
+
+        if (Section("Overlay")) {
+            DrawHolder("Show Panel Buttons");
+            DrawHolder("Show Atlas Search Box");
+            DrawHolder("Debug Mode");
+        }
+
+        if (Section("Profiles")) {
+            DrawCustom(Settings.Profiles?.ProfileSelector?.DrawDelegate);
+            DrawCustom(Settings.WeightImportExport?.DrawDelegate);
+        }
+    }
+
+    private void DrawAppearanceTab()
+    {
+        if (Section("Nodes")) {
+            DrawHolder("Node Radius");
+            DrawHolder("Use Icons for Nodes");
+            DrawHolder("Lay Icons Flat");
+        }
+
+        if (Section("Base Colors")) {
+            DrawHolder("Font Color");
+            DrawHolder("Background Color");
+        }
+
+        if (Section("Connection Lines")) {
+            DrawHolder("Show Connection Lines");
+            // condition toggles only matter while the master is on
+            if (Settings.Graphics.ShowConnectionLines) {
+                DrawCustom(Settings.Graphics?.SepConnectionConditions?.DrawDelegate);
+                DrawHolder("Connections from Completed Maps");
+                DrawHolder("Connections from Accessible Maps");
+                DrawHolder("Connections from Inaccessible Maps");
+                DrawHolder("Connections from Hidden Maps");
+            }
+            DrawHolder("Line Width");
+            DrawHolder("Draw Lines as Gradients");
+            DrawHolder("Visited Line Color");
+            DrawHolder("Unlocked Line Color");
+            DrawHolder("Locked Line Color");
+            DrawHolder("Connection Line Opacity");
+            DrawHolder("Line Color");
+            DrawHolder("Distance Marker Scale");
+        }
+
+        if (Section("Content")) {
+            DrawHolder("Show Content Row");
+            DrawHolder("Content Icon Size");
+            DrawHolder("Content Icon Spacing");
+            DrawHolder("Content Row Offset Y");
+            DrawHolder("Skip Game-drawn Content");
+        }
+
+        if (Section("Biomes")) {
+            DrawHolder("Show Biome Icon");
+            DrawHolder("Biome Icon Size");
+            DrawHolder("Biome Icon Offset Y");
+        }
+
+        if (Section("Map Labels")) {
+            DrawMapLabelToggles();
+            DrawHolder("Map Name Offset X");
+            DrawHolder("Map Name Offset Y");
+            DrawHolder("Uppercase Map Names");
+        }
+        DrawLabelStyleSection();
+    }
+
+    private void DrawMapsTab()
+    {
+        if (Section("Map Display")) {
+            DrawCustom(Settings.Maps?.CustomMapSettings?.DrawDelegate);
+            DrawHolder("Show Weight Value");
+            DrawHolder("Show Atlas Point Badge");
+        }
+
+        if (ImGui.CollapsingHeader("Map Weights")) {
+            DrawGoodBadNodeColors();
+            DrawCustom(Settings.Maps?.MapTable?.DrawDelegate);
+        }
+
+        if (ImGui.CollapsingHeader("Biomes"))
+            DrawCustom(Settings.Maps?.Biomes?.CustomBiomeSettings?.DrawDelegate);
+
+        if (ImGui.CollapsingHeader("Content Weights"))
+            DrawCustom(Settings.Maps?.Content?.CustomContentSettings?.DrawDelegate);
+
+        if (ImGui.CollapsingHeader("Expeditions")) {
+            DrawHolder("Show Expedition Markers");
+            DrawHolder("Draw All Hidden Expedition Indicators");
+            DrawCustom(Settings.Expeditions?.RumorWeightsEditor?.DrawDelegate);
+        }
+
+        if (Section("Favorite Maps")) {
+            DrawHolder("Favorite Marker Color");
+            DrawHolder("Favorite Icon Size");
+            DrawFavoriteMapManager();
+        }
+
+        if (Section("Special Map Markers")) {
+            DrawHolder("Show Special Map Indicator");
+            DrawHolder("Hide Completed Special Maps");
+            DrawHolder("Special Map Marker Color");
+            DrawHolder("Special Map Marker Scale");
+            DrawHolder("Special Map Marker Offset");
+            DrawCustom(Settings.Graphics?.SpecialMapIconPicker?.DrawDelegate);
+            DrawHolder("Special Map Name Color");
+            DrawHolder("Show Atlas Quest Marker");
+            DrawHolder("Atlas Quest Marker Size");
+        }
+
+        if (Section("Custom Special Maps"))
+            DrawCustom(Settings.Maps?.SpecialMaps?.CustomSpecialMapSettings?.DrawDelegate);
+    }
+
+    // Good/Bad node colors drive the weight gradient (node fill + weight value). Moved here from the
+    // old Map Display table.
+    private void DrawGoodBadNodeColors()
+    {
+        var m = Settings.Maps;
+        void Edit(string id, Color c, Action<Color> set) {
+            if (ColorRGBA($"##{id}", ref c)) set(c);
+        }
+        Edit("goodnode", m.GoodNodeColor, c => m.GoodNodeColor = c);
+        ImGui.SameLine(); ImGui.Text("Good Node Color");
+        Edit("badnode", m.BadNodeColor, c => m.BadNodeColor = c);
+        ImGui.SameLine(); ImGui.Text("Bad Node Color");
+    }
+
+    // Per-node-state toggles for whether the map label draws. Moved here from Maps -> Map Display.
+    private void DrawMapLabelToggles()
+    {
+        var m = Settings.Maps;
+        bool showMapNames = m.ShowMapNames;
+        if (ImGui.Checkbox("Show Map Labels", ref showMapNames)) m.ShowMapNames = showMapNames;
+
+        bool showUnlocked = m.ShowMapNamesOnUnlockedNodes;
+        if (ImGui.Checkbox("Show Map Labels on Unlocked Nodes", ref showUnlocked)) m.ShowMapNamesOnUnlockedNodes = showUnlocked;
+
+        bool showLocked = m.ShowMapNamesOnLockedNodes;
+        if (ImGui.Checkbox("Show Map Labels on Locked Nodes", ref showLocked)) m.ShowMapNamesOnLockedNodes = showLocked;
+
+        bool showHidden = m.ShowMapNamesOnHiddenNodes;
+        if (ImGui.Checkbox("Show Map Labels on Hidden Nodes", ref showHidden)) m.ShowMapNamesOnHiddenNodes = showHidden;
+    }
+
+    private string _favMapAddFilter = "";
+    // Favorites are just Map.Favorite - this list is a view/editor over that same field (add-combo +
+    // remove buttons, same shape as the label-style override manager). No separate storage, so existing
+    // favorites already show here and profiles/waypoints keep working unchanged.
+    private void DrawFavoriteMapManager()
+    {
+        var maps = Settings.Maps?.Maps;
+        if (maps == null) return;
+
+        ImGui.Spacing();
+        ImGui.TextDisabled("Favorite maps get the star marker (and optional auto-waypoint).");
+
+        // Add box: searchable dropdown of maps not yet favorited.
+        var candidates = maps
+            .Where(kv => kv.Value != null && !kv.Value.Favorite
+                && !string.IsNullOrEmpty(kv.Value.Name)
+                && !kv.Value.Name.Contains("DNT-UNUSED"))
+            .OrderBy(kv => kv.Value.Name)
+            .ToList();
+
+        ImGui.SetNextItemWidth(250);
+        if (ImGui.BeginCombo("##fav_add", "Add favorite map...", ImGuiComboFlags.HeightLarge)) {
+            ImGui.SetNextItemWidth(-1);
+            ImGui.InputTextWithHint("##fav_add_filter", "Search maps...", ref _favMapAddFilter, 100);
+            foreach (var (key, map) in candidates) {
+                if (!string.IsNullOrEmpty(_favMapAddFilter)
+                    && !map.Name.Contains(_favMapAddFilter, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (ImGui.Selectable($"{map.Name}##fav_add_{key}")) {
+                    map.Favorite = true;
+                    _favMapAddFilter = "";
+                }
+            }
+            ImGui.EndCombo();
+        }
+
+        // Current favorites with a remove button each.
+        string toUnfav = null;
+        foreach (var (key, map) in maps.Where(kv => kv.Value?.Favorite == true)
+                     .OrderBy(kv => kv.Value.Name).ToList()) {
+            ImGui.Bullet();
+            ImGui.Text(map.Name);
+            ImGui.SameLine();
+            if (ImGui.SmallButton($"Remove##fav_rm_{key}"))
+                toUnfav = key;
+        }
+        if (toUnfav != null && maps.TryGetValue(toUnfav, out var rm))
+            rm.Favorite = false;
+    }
+
+
+    private void DrawWaypointsTab()
+    {
+        if (Section("Behavior"))
+            DrawCustom(Settings.Waypoints?.CustomWaypointSettings?.DrawDelegate);
+
+        if (Section("Path Visuals")) {
+            DrawHolder("Draw paths to waypoints");
+            DrawHolder("Waypoint Line Width");
+            DrawCustom(Settings.Graphics?.WaypointPathTexturePicker?.DrawDelegate);
+            DrawHolder("Animate Waypoint Path");
+            DrawHolder("Waypoint Dash Length");
+            DrawHolder("Waypoint Dash Gap");
+            DrawHolder("Waypoint Dash Speed");
+            DrawHolder("Waypoint Texture Scale");
+            DrawHolder("Waypoint Arrow Min Distance");
+        }
+    }
+
+    private void DrawPanelsTab()
+    {
+        if (Section("Atlas Overview"))
+            DrawHolderChildren("Atlas Overview");
+        if (Section("Tours"))
+            DrawHolderChildren("Tours");
     }
 
     private void DoDebugging() {
@@ -126,12 +414,6 @@ public partial class ExileMapsCore
         return mapIdIndex.TryGetValue(fullId, out Map byId) ? byId : null;
     }
 
-    private static void QuickColorEdit(string id, Color color, Action<Color> set) {
-        Vector4 v = new(color.R / 255f, color.G / 255f, color.B / 255f, color.A / 255f);
-        if (ImGui.ColorEdit4($"##{id}", ref v, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview | ImGuiColorEditFlags.NoInputs))
-            set(Color.FromArgb((int)(v.W * 255), (int)(v.X * 255), (int)(v.Y * 255), (int)(v.Z * 255)));
-    }
-
     // Floating popup for inline editing of the hovered node's map type and content types.
     private void DrawQuickEditPanel() {
         try {
@@ -159,33 +441,11 @@ public partial class ExileMapsCore
                 ImGui.SetNextItemWidth(220);
                 if (ImGui.SliderFloat("Weight##qe", ref weight, -50f, 50f, "%.1f")) map.Weight = weight;
 
-                QuickColorEdit("qe_node", map.NodeColor, c => map.NodeColor = c);
-                ImGui.SameLine(); ImGui.Text("Node");
-                ImGui.SameLine(); ImGui.Spacing(); ImGui.SameLine();
-                QuickColorEdit("qe_name", map.NameColor, c => map.NameColor = c);
-                ImGui.SameLine(); ImGui.Text("Name");
-                ImGui.SameLine(); ImGui.Spacing(); ImGui.SameLine();
-                QuickColorEdit("qe_bg", map.BackgroundColor, c => map.BackgroundColor = c);
-                ImGui.SameLine(); ImGui.Text("Text BG");
-
-                bool cbw = map.ColorNodesByWeight;
-                if (ImGui.Checkbox("Color node by weight##qe", ref cbw)) map.ColorNodesByWeight = cbw;
-                bool nbw = map.UseWeightColorForName;
-                if (ImGui.Checkbox("Color name by weight##qe", ref nbw)) map.UseWeightColorForName = nbw;
-
-                ImGui.Text("Icon"); ImGui.SameLine();
-                SettingsHelpers.IconPicker("qeicon", map.Icon, i => map.Icon = i);
-
                 if (quickEditNode.Content.Count > 0) {
                     ImGui.Separator();
                     ImGui.Text("Content");
                     foreach (var (cname, content) in quickEditNode.Content) {
                         ImGui.PushID($"qe_c_{cname}");
-                        QuickColorEdit("col", content.Color, c => content.Color = c);
-                        ImGui.SameLine();
-                        bool ring = content.Highlight;
-                        if (ImGui.Checkbox("Ring##c", ref ring)) content.Highlight = ring;
-                        ImGui.SameLine();
                         bool cfav = content.Favorite;
                         if (ImGui.Checkbox("Fav##c", ref cfav)) content.Favorite = cfav;
                         ImGui.SameLine();
