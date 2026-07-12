@@ -690,8 +690,8 @@ public class GraphicSettings
     [Menu("Biome Icon Size", "Width/height of the biome icon in pixels at full zoom.")]
     public RangeNode<float> BiomeIconSize { get; set; } = new RangeNode<float>(24f, 8f, 48f);
 
-    [Menu("Biome Icon Offset Y", "Vertical pixel offset (at full zoom) of the biome icon above the map name. Negative = upward. Scales with zoom.")]
-    public RangeNode<float> BiomeIconOffsetY { get; set; } = new RangeNode<float>(-30f, -200f, 200f);
+    [Menu("Biome Icon Offset Y", "Vertical nudge (at full zoom) of the biome icon relative to the map name row. Negative = upward. Scales with zoom.")]
+    public RangeNode<float> BiomeIconOffsetY { get; set; } = new RangeNode<float>(0f, -200f, 200f);
 
     [Menu("Biome Tooltips", "Show a tooltip with the biome name when hovering the biome icon.")]
     public ToggleNode BiomeTooltips { get; set; } = new ToggleNode(true);

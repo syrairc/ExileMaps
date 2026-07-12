@@ -728,8 +728,8 @@ public partial class ExileMapsCore
         }
     }
 
-    // Draws one biome icon (highest-weight biome on the node that has a loaded icon) centered above the
-    // map name. Gated the same way as the content row.
+    // Draws one biome icon (highest-weight biome on the node that has a loaded icon) to the left of the
+    // map name, with a small gap. Gated the same way as the content row.
     private void DrawBiomeIcon(Node cachedNode, RectangleF nodeCurrentPosition)
     {
         try {
@@ -769,9 +769,23 @@ public partial class ExileMapsCore
             float zoom = maxNodeZoomMagnification > 0.0001f ? mag / maxNodeZoomMagnification : 1f;
 
             float size = Settings.Graphics.BiomeIconSize * zoom;
+
+            // Sit left of the name box. Measure the name at its own label scale so we line up with the
+            // rendered box (MeasureText + 10 matches DrawStyledLabel's box width), then a gap so it isn't
+            // flush against the border.
+            var style = ResolveLabelStyle(cachedNode);
+            float nameHalf;
+            using (Graphics.SetTextScale(style.TextScale))
+                nameHalf = Settings.Maps.ShowMapNames
+                    ? (Graphics.MeasureText(MapLabelText(cachedNode)).X + 10f) / 2f
+                    : 20f;
+
+            float gap = size * 0.35f;
+            float boxLeft = nodeCurrentPosition.Center.X + Settings.Graphics.MapNameOffsetX - nameHalf;
+            float x = boxLeft - gap - size;
             float centerY = nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY
                           + Settings.Graphics.BiomeIconOffsetY * zoom;
-            var rect = new RectangleF(nodeCurrentPosition.Center.X - size / 2f, centerY - size / 2f, size, size);
+            var rect = new RectangleF(x, centerY - size / 2f, size, size);
             Graphics.DrawImage(bestFile, rect, new RectangleF(0, 0, 1, 1), Color.White);
 
             if (Settings.Graphics.BiomeTooltips)
