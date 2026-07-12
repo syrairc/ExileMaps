@@ -159,10 +159,13 @@ public partial class ExileMapsCore
 
         if (Section("Connection Lines")) {
             DrawHolder("Show Connection Lines");
-            DrawCustom(Settings.Graphics?.SepConnectionConditions?.DrawDelegate);
-            DrawHolder("Connections for Completed Maps");
-            DrawHolder("Connections for Locked Maps");
-            DrawHolder("Connections for Visible Maps");
+            // condition toggles only matter while the master is on
+            if (Settings.Graphics.ShowConnectionLines) {
+                DrawCustom(Settings.Graphics?.SepConnectionConditions?.DrawDelegate);
+                DrawHolder("Connections for Completed Maps");
+                DrawHolder("Connections for Locked Maps");
+                DrawHolder("Connections for Visible Maps");
+            }
             DrawHolder("Line Width");
             DrawHolder("Draw Lines as Gradients");
             DrawHolder("Visited Line Color");
