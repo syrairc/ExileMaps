@@ -92,7 +92,7 @@ public partial class ExileMapsCore
         if (ColorRGB("Stroke Color##base", ref sc)) s.StrokeColor = sc;
 
         bool bv = s.BoxVisible;
-        if (ImGui.Checkbox("Show box##base", ref bv)) s.BoxVisible = bv;
+        if (ImGui.Checkbox("Enable Background##base", ref bv)) s.BoxVisible = bv;
         // Border lives on the box: no box, no border.
         if (s.BoxVisible) {
             Color bc = s.BoxColor;
@@ -101,7 +101,7 @@ public partial class ExileMapsCore
             if (ImGui.Checkbox("Box color by weight##base", ref bw)) s.BoxColorByWeight = bw;
 
             bool rv = s.BorderVisible;
-            if (ImGui.Checkbox("Show border##base", ref rv)) s.BorderVisible = rv;
+            if (ImGui.Checkbox("Enable Border##base", ref rv)) s.BorderVisible = rv;
             if (s.BorderVisible) {
                 Color rc = s.BorderColor;
                 if (ColorRGBA("Border Color##base", ref rc)) s.BorderColor = rc;
@@ -146,7 +146,7 @@ public partial class ExileMapsCore
             o.OverrideStroke = ovr; }
 
         { bool ovr = o.OverrideBoxVisible; Row("bvis", ref ovr, () => {
-            bool v = o.BoxVisible; if (ImGui.Checkbox($"Show box##{id}", ref v)) o.BoxVisible = v; });
+            bool v = o.BoxVisible; if (ImGui.Checkbox($"Enable Background##{id}", ref v)) o.BoxVisible = v; });
             o.OverrideBoxVisible = ovr; }
 
         // Box color/opacity rows only when the box is shown for this override.
@@ -161,7 +161,7 @@ public partial class ExileMapsCore
 
             // Border lives on the box: no box, no border.
             { bool ovr = o.OverrideBorderVisible; Row("rvis", ref ovr, () => {
-                bool v = o.BorderVisible; if (ImGui.Checkbox($"Show border##{id}", ref v)) o.BorderVisible = v; });
+                bool v = o.BorderVisible; if (ImGui.Checkbox($"Enable Border##{id}", ref v)) o.BorderVisible = v; });
                 o.OverrideBorderVisible = ovr; }
 
             if (o.BorderVisible) {
