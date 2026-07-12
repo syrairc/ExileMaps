@@ -778,7 +778,7 @@ public partial class ExileMapsCore
         // Filter here (not a skip-and-continue inside the draw loop) so every downstream index,
         // width, and SameLine decision is computed against the same visible list -- no gaps, no
         // misaligned hover rects for wp/tours/atlas/export.
-        bool showExpeditions = Settings.Features.ShowExpeditions && ExpeditionsLoaded();
+        bool showExpeditions = ExpeditionsLoaded();
         var visibleButtons = panelButtons.Where(d => d.Key != "expeditions" || showExpeditions).ToList();
         if (visibleButtons.Count == 0) return;
 

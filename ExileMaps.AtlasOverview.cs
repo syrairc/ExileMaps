@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Numerics;
-using ExileCore2.Shared;
 using ImGuiNET;
 using ExileMaps.Classes;
 using GameOffsets2.Native;

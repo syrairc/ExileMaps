@@ -89,10 +89,25 @@ public partial class ExileMapsCore
         }
     }
 
+    // one node -> one category, its toggle decides. completed > accessible > inaccessible > hidden.
+    private bool ConnectionCategoryEnabled(Node node)
+    {
+        if (node.IsVisited || node.IsCompleted)
+            return Settings.Graphics.ShowConnectionsForCompleted;
+        if (node.IsUnlocked)
+            return Settings.Graphics.ShowConnectionsForAccessible;
+        if (node.IsVisible)
+            return Settings.Graphics.ShowConnectionsForInaccessible;
+        return Settings.Graphics.ShowConnectionsForHidden;
+    }
+
     private void DrawConnections(Node cachedNode, RectangleF nodeCurrentPosition)
     {
         if (!Settings.Graphics.ShowConnectionLines)
             return;
+
+        // Source category is the same for every neighbor, so resolve it once.
+        bool srcEnabled = ConnectionCategoryEnabled(cachedNode);
 
         foreach (Vector2i coordinates in cachedNode.GetNeighborCoordinates())
         {
@@ -102,19 +117,9 @@ public partial class ExileMapsCore
             if (!mapCache.TryGetValue(coordinates, out Node destinationNode))
                 continue;
 
-            // OR-any draw rule: an edge draws if any category it belongs to has its toggle on.
-            // locked = not unlocked and not visited. In the atlas unlocked implies visible, so these
-            // three categories cover every edge in practice.
-            bool completedEdge = cachedNode.IsVisited || cachedNode.IsCompleted
-                                 || destinationNode.IsVisited || destinationNode.IsCompleted;
-            bool lockedEdge = (!cachedNode.IsUnlocked && !cachedNode.IsVisited)
-                              || (!destinationNode.IsUnlocked && !destinationNode.IsVisited);
-            bool visibleEdge = cachedNode.IsVisible && destinationNode.IsVisible;
-
-            bool draw = (completedEdge && Settings.Graphics.ShowConnectionsForCompleted)
-                        || (lockedEdge && Settings.Graphics.ShowConnectionsForLocked)
-                        || (visibleEdge && Settings.Graphics.ShowConnectionsForVisible);
-            if (!draw)
+            // OR-any draw rule: an edge draws if either endpoint falls in an enabled category.
+            // Each node lands in exactly one: completed > accessible > inaccessible > hidden.
+            if (!srcEnabled && !ConnectionCategoryEnabled(destinationNode))
                 continue;
 
             // Reuse the neighbor's rect from the per-frame memo if it was already read this frame
@@ -272,19 +277,15 @@ public partial class ExileMapsCore
     private bool SpecialHiddenWhenCompleted(Node node, bool userAdded)
         => Settings.Graphics.HideCompletedSpecialMaps && SpecialFadesWhenCompleted(node, userAdded);
 
-    // Fallback tint when a style key is missing from settings (silver).
-    private static readonly Color AtlasPointColor = Color.FromArgb(255, 200, 200, 205);
+    // Fixed gold + size for the atlas-point badge drawn at the bottom of a content icon.
+    private static readonly Color AtlasBadgeColor = Color.FromArgb(255, 255, 200, 40);
+    private const float AtlasBadgeSize = 10f;
 
     // The Y above which the atlas-point/quest indicators should sit so they clear any content icons on
     // the node: our drawn content row (recorded this frame) or, on visible nodes, the game's own content
     // icon cluster. Defaults to the node's top edge when there are no content icons.
     private float IndicatorBaseTop(Node node, RectangleF rect)
     {
-        // Called once by the atlas-point pass and once by the quest pass, both with the same rect for
-        // a given node; memoize so a node with both indicators does the child-rect read at most once.
-        if (indicatorBaseTopByCoord.TryGetValue(node.Coordinates, out var memo))
-            return memo;
-
         float top = rect.Center.Y - rect.Height / 2f;
 
         if (contentRowTopByCoord.TryGetValue(node.Coordinates, out var rowTop)) {
@@ -301,7 +302,6 @@ public partial class ExileMapsCore
             } catch (Exception e) { DebugSwallow("IndicatorBaseTop: host rect", e); }
         }
 
-        indicatorBaseTopByCoord[node.Coordinates] = top;
         return top;
     }
 
@@ -312,26 +312,6 @@ public partial class ExileMapsCore
             if (!string.IsNullOrEmpty(c.AtlasIcon))
                 return true;
         return false;
-    }
-
-    // Draws a marker above nodes that grant an atlas passive point. Color and icon are user-configurable
-    // per type (Settings.Graphics.AtlasPointColors/AtlasPointIcons); "Generic" = non-content points.
-    private void DrawAtlasPointIndicator(Node cachedNode, RectangleF nodeCurrentPosition)
-    {
-        try {
-            if (!Settings.Graphics.ShowAtlasPointIndicator || !cachedNode.GivesAtlasPoint || cachedNode.IsVisited || !customIconsLoaded)
-                return;
-
-            string key = string.IsNullOrEmpty(cachedNode.AtlasPointType) ? "Generic" : cachedNode.AtlasPointType;
-            Color color = Settings.Graphics.AtlasPointColors.TryGetValue(key, out var cn) ? cn : AtlasPointColor;
-            SpriteIcon icon = Settings.Graphics.AtlasPointIcons.TryGetValue(key, out var ic) ? ic : SpriteIcon.Star8;
-
-            float size = Settings.Graphics.AtlasIndicatorSize;
-            Vector2 center = new Vector2(nodeCurrentPosition.Center.X, IndicatorBaseTop(cachedNode, nodeCurrentPosition) - size / 2f - 2f);
-            DrawNodeSprite(center, size, size, icon, color, allowFlatten: false);
-        } catch (Exception e) {
-            LogError("Error drawing atlas point indicator: " + e.Message);
-        }
     }
 
     // Golden tint for the atlas-quest marker.
@@ -359,12 +339,18 @@ public partial class ExileMapsCore
             if (!cachedNode.IsFavorited || cachedNode.IsVisited)
                 return;
 
-            Vector2 iconSize = new Vector2(48, 48) * Settings.Graphics.FavoriteIconScale;
+            float zoom = NodeZoom(cachedNode, nodeCurrentPosition);
+            float favSize = Settings.Graphics.FavoriteIconSize * zoom;
 
-            Vector2 iconPosition = nodeCurrentPosition.Center - new Vector2(0, nodeCurrentPosition.Height / 2 + 20);
-            iconPosition -= new Vector2(iconSize.X / 2, iconSize.Y);
-
-            RectangleF iconRect = new RectangleF(iconPosition.X, iconPosition.Y, iconSize.X, iconSize.Y);
+            RectangleF iconRect;
+            if (biomeIconRectByCoord.TryGetValue(cachedNode.Coordinates, out var biomeRect)) {
+                // sit left of the biome icon, centered on it
+                float gap = biomeRect.Height * 0.12f;
+                iconRect = new RectangleF(biomeRect.X - gap - favSize, biomeRect.Center.Y - favSize / 2f, favSize, favSize);
+            } else {
+                // no biome icon: take the biome slot (left of the name box)
+                iconRect = BiomeSlotRect(cachedNode, nodeCurrentPosition, favSize, zoom);
+            }
             if (customIconsLoaded)
                 DrawNodeSprite(iconRect.Center, iconRect.Width, iconRect.Height, SpriteIcon.Star5, Settings.Graphics.FavoriteColor, allowFlatten: false);
             else
@@ -376,7 +362,7 @@ public partial class ExileMapsCore
 
     private void DrawWeight(Node cachedNode, RectangleF nodeCurrentPosition)
     {
-        if (Settings.Graphics.WeightDisplayMode == WeightDisplayMode.None ||
+        if (!Settings.Graphics.DrawWeightOnMap ||
             (!cachedNode.IsVisible && !Settings.Maps.ShowMapNamesOnHiddenNodes) ||
             (cachedNode.IsUnlocked && !Settings.Maps.ShowMapNamesOnUnlockedNodes) ||
             (!cachedNode.IsUnlocked && !Settings.Maps.ShowMapNamesOnLockedNodes) ||
@@ -389,19 +375,13 @@ public partial class ExileMapsCore
         norm = Math.Clamp(norm, 0f, 1f);
         Color wc = ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, norm);
 
+        // Sit the value just right of the name (or the node if names are off).
         float offsetX = Settings.Maps.ShowMapNames ? (Graphics.MeasureText(MapLabelText(cachedNode)).X / 2) + 20 : 40;
-        Vector2 discCenter = new(nodeCurrentPosition.Center.X + offsetX + Settings.Graphics.MapNameOffsetX,
-                                 nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY);
-
-        float r = Settings.Graphics.WeightIconSize / 2f;
-        Graphics.DrawCircleFilled(discCenter, r, wc, 16);
-
-        if (Settings.Graphics.WeightDisplayMode == WeightDisplayMode.IconAndValue) {
-            var text = $"{cachedNode.Weight:0}";
-            Vector2 textPos = new(discCenter.X + r + 4, discCenter.Y);
-            DrawCenteredTextWithBackground(text, new Vector2(textPos.X + Graphics.MeasureText(text).X / 2f, textPos.Y),
-                wc, Settings.Graphics.BackgroundColor, true, 8, 3);
-        }
+        var text = $"{cachedNode.Weight:0}";
+        Vector2 pos = new(nodeCurrentPosition.Center.X + offsetX + Settings.Graphics.MapNameOffsetX,
+                          nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY);
+        DrawCenteredTextWithBackground(text, new Vector2(pos.X + Graphics.MeasureText(text).X / 2f, pos.Y),
+            wc, Settings.Graphics.BackgroundColor, true, 8, 3);
     }
     // 8 neighbor offsets for a 1px text stroke (ported from ExileNameplates DataTextRenderer).
     private static readonly Vector2[] LabelStrokeOffsets =
@@ -636,13 +616,6 @@ public partial class ExileMapsCore
             if (!cachedNode.MapType.Highlight)
                 return;
 
-            bool visGateFails =
-                (!Settings.Maps.Content.ShowRingsOnLockedNodes && !cachedNode.IsUnlocked) ||
-                (!Settings.Maps.Content.ShowRingsOnUnlockedNodes && cachedNode.IsUnlocked) ||
-                (!Settings.Maps.Content.ShowRingsOnHiddenNodes && !cachedNode.IsVisible);
-            if (visGateFails)
-                return;
-
             // Zoom factor: screen-px-per-art-unit normalized to 1.0 at full zoom (see the old row).
             float artW = cachedNode.ArtWidth > 1f ? cachedNode.ArtWidth : 40f;
             float mag = nodeCurrentPosition.Width / artW;
@@ -651,7 +624,7 @@ public partial class ExileMapsCore
 
             float size = Settings.Graphics.ContentIconSize * zoom;
             float spacing = Settings.Graphics.ContentIconSpacing * zoom;
-            Color tint = Settings.Graphics.ContentIconTint;
+            Color tint = Color.White;
             var fullUV = new RectangleF(0, 0, 1, 1);
 
             // Collect distinct icon files (dedup by file so boss variants share one). content name kept
@@ -670,8 +643,6 @@ public partial class ExileMapsCore
             }
 
             foreach (var (contentName, content) in cachedNode.Content) {
-                if (!content.Highlight)
-                    continue;
                 // game draws its own icon on visible nodes for content with an atlas icon (map boss,
                 // expedition, unique map...). skip ours to avoid a dup. fogged nodes show no in-game
                 // content, so we still draw there.
@@ -701,26 +672,24 @@ public partial class ExileMapsCore
 
             bool badge = Settings.Graphics.ShowAtlasPointBadge && cachedNode.GivesAtlasPoint
                          && !string.IsNullOrEmpty(cachedNode.AtlasPointType);
-            float badgeSize = Settings.Graphics.AtlasPointBadgeSize * zoom;
+            float badgeSize = AtlasBadgeSize * zoom;
 
             for (int i = 0; i < icons.Count; i++) {
                 float x = startX + i * (size + spacing);
                 var iconRect = new RectangleF(x, centerY - size / 2f, size, size);
                 Graphics.DrawImage(icons[i].file, iconRect, fullUV, icons[i].tint);
 
-                if (Settings.Graphics.ContentTooltips) {
-                    string note = (cachedNode.GivesAtlasPoint
-                        && string.Equals(icons[i].content, cachedNode.AtlasPointType, StringComparison.OrdinalIgnoreCase))
-                        ? "Awards an atlas point" : null;
-                    contentIconRects.Add((iconRect, icons[i].content, note));
-                }
+                string note = (cachedNode.GivesAtlasPoint
+                    && string.Equals(icons[i].content, cachedNode.AtlasPointType, StringComparison.OrdinalIgnoreCase))
+                    ? "Awards an atlas point" : null;
+                contentIconRects.Add((iconRect, icons[i].content, note));
 
-                // Star badge centered on the icon's bottom edge for the content that grants the point.
+                // Gold star badge centered on the icon's bottom edge for the content that grants the point.
                 if (badge && customIconsLoaded
                     && string.Equals(icons[i].content, cachedNode.AtlasPointType, StringComparison.OrdinalIgnoreCase)) {
                     var badgeCenter = new Vector2(iconRect.Center.X, iconRect.Bottom);
                     DrawNodeSprite(badgeCenter, badgeSize, badgeSize, SpriteIcon.Star8,
-                        Settings.Graphics.AtlasPointBadgeColor, allowFlatten: false);
+                        AtlasBadgeColor, allowFlatten: false);
                 }
             }
         } catch (Exception e) {
@@ -730,6 +699,34 @@ public partial class ExileMapsCore
 
     // Draws one biome icon (highest-weight biome on the node that has a loaded icon) to the left of the
     // map name, with a small gap. Gated the same way as the content row.
+    // Per-node zoom factor (also feeds the running maxNodeZoomMagnification used to normalize sizes).
+    private float NodeZoom(Node node, RectangleF nodePos)
+    {
+        float artW = node.ArtWidth > 1f ? node.ArtWidth : 40f;
+        float mag = nodePos.Width / artW;
+        if (mag > maxNodeZoomMagnification) maxNodeZoomMagnification = mag;
+        return maxNodeZoomMagnification > 0.0001f ? mag / maxNodeZoomMagnification : 1f;
+    }
+
+    // Rect for an icon in the "biome slot": left of the name box, centered on the name row. Measure the
+    // name at its own label scale so we line up with the rendered box (MeasureText + 10 matches
+    // DrawStyledLabel's box width), then a gap so it isn't flush against the border.
+    private RectangleF BiomeSlotRect(Node node, RectangleF nodePos, float size, float zoom)
+    {
+        var style = ResolveLabelStyle(node);
+        float nameHalf;
+        using (Graphics.SetTextScale(style.TextScale))
+            nameHalf = Settings.Maps.ShowMapNames
+                ? (Graphics.MeasureText(MapLabelText(node)).X + 10f) / 2f
+                : 20f;
+        float gap = size * 0.28f;
+        float boxLeft = nodePos.Center.X + Settings.Graphics.MapNameOffsetX - nameHalf;
+        float x = boxLeft - gap - size;
+        float centerY = nodePos.Center.Y + Settings.Graphics.MapNameOffsetY
+                      + Settings.Graphics.BiomeIconOffsetY * zoom;
+        return new RectangleF(x, centerY - size / 2f, size, size);
+    }
+
     private void DrawBiomeIcon(Node cachedNode, RectangleF nodeCurrentPosition)
     {
         try {
@@ -738,13 +735,6 @@ public partial class ExileMapsCore
             if (cachedNode.IsVisited && !cachedNode.IsAttempted)
                 return;
             if (!cachedNode.MapType.Highlight || cachedNode.Biomes.Count == 0)
-                return;
-
-            bool visGateFails =
-                (!Settings.Maps.Content.ShowRingsOnLockedNodes && !cachedNode.IsUnlocked) ||
-                (!Settings.Maps.Content.ShowRingsOnUnlockedNodes && cachedNode.IsUnlocked) ||
-                (!Settings.Maps.Content.ShowRingsOnHiddenNodes && !cachedNode.IsVisible);
-            if (visGateFails)
                 return;
 
             // Highest-weight biome that resolves to a loaded icon.
@@ -763,33 +753,13 @@ public partial class ExileMapsCore
             if (bestFile == null)
                 return;
 
-            float artW = cachedNode.ArtWidth > 1f ? cachedNode.ArtWidth : 40f;
-            float mag = nodeCurrentPosition.Width / artW;
-            if (mag > maxNodeZoomMagnification) maxNodeZoomMagnification = mag;
-            float zoom = maxNodeZoomMagnification > 0.0001f ? mag / maxNodeZoomMagnification : 1f;
-
+            float zoom = NodeZoom(cachedNode, nodeCurrentPosition);
             float size = Settings.Graphics.BiomeIconSize * zoom;
-
-            // Sit left of the name box. Measure the name at its own label scale so we line up with the
-            // rendered box (MeasureText + 10 matches DrawStyledLabel's box width), then a gap so it isn't
-            // flush against the border.
-            var style = ResolveLabelStyle(cachedNode);
-            float nameHalf;
-            using (Graphics.SetTextScale(style.TextScale))
-                nameHalf = Settings.Maps.ShowMapNames
-                    ? (Graphics.MeasureText(MapLabelText(cachedNode)).X + 10f) / 2f
-                    : 20f;
-
-            float gap = size * 0.35f;
-            float boxLeft = nodeCurrentPosition.Center.X + Settings.Graphics.MapNameOffsetX - nameHalf;
-            float x = boxLeft - gap - size;
-            float centerY = nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY
-                          + Settings.Graphics.BiomeIconOffsetY * zoom;
-            var rect = new RectangleF(x, centerY - size / 2f, size, size);
+            var rect = BiomeSlotRect(cachedNode, nodeCurrentPosition, size, zoom);
             Graphics.DrawImage(bestFile, rect, new RectangleF(0, 0, 1, 1), Color.White);
 
-            if (Settings.Graphics.BiomeTooltips)
-                contentIconRects.Add((rect, bestName, null));
+            biomeIconRectByCoord[cachedNode.Coordinates] = rect;
+            contentIconRects.Add((rect, bestName, null));
         } catch (Exception e) {
             LogError("Error drawing biome icon: " + e.Message);
         }
@@ -820,12 +790,12 @@ public partial class ExileMapsCore
             using (Graphics.SetTextScale(1.0f)) {
                 DrawCenteredTextWithBorder(title, pos + new Vector2(Graphics.MeasureText(title).X / 2f, 0),
                     Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor,
-                    Settings.Graphics.ContentIconTint, 10, 6);
+                    Color.White, 10, 6);
                 if (!string.IsNullOrEmpty(note)) {
                     Vector2 notePos = pos + new Vector2(0, Graphics.MeasureText(title).Y + 4);
                     DrawCenteredTextWithBorder(note, notePos + new Vector2(Graphics.MeasureText(note).X / 2f, 0),
-                        Settings.Graphics.AtlasPointBadgeColor, Settings.Graphics.BackgroundColor,
-                        Settings.Graphics.ContentIconTint, 10, 6);
+                        AtlasBadgeColor, Settings.Graphics.BackgroundColor,
+                        Color.White, 10, 6);
                 }
             }
         } catch (Exception e) {
@@ -878,18 +848,14 @@ public partial class ExileMapsCore
             var boxSize = Graphics.MeasureText(text) + new Vector2(10, 4);
             var topLeft = position - new Vector2(boxSize.X / 2, boxSize.Y / 2);
 
-            // Border sits on the box: no box, no border.
+            // Border sits on the box: no box, no border. Fill the box first, then draw the border as a
+            // frame outline on top - filling the whole border rect would show through a translucent box.
             bool drawBorder = style.BorderVisible && style.BoxVisible;
-            if (drawBorder) {
-                // opacity is the color's own alpha now.
-                Graphics.DrawBox(topLeft, topLeft + boxSize, style.BorderColor, 5.0f);
-            }
             if (style.BoxVisible) {
-                float t = drawBorder ? style.BorderThickness : 0;
-                t = MathF.Min(t, MathF.Min(boxSize.X, boxSize.Y) / 2f - 1f);
-                if (t < 0f) t = 0f;
-                var inset = new Vector2(t, t);
-                Graphics.DrawBox(topLeft + inset, topLeft + boxSize - inset, style.BoxColor, 4.0f);
+                Graphics.DrawBox(topLeft, topLeft + boxSize, style.BoxColor, 5.0f);
+            }
+            if (drawBorder) {
+                Graphics.DrawFrame(topLeft, topLeft + boxSize, style.BorderColor, 5.0f, style.BorderThickness, 0);
             }
 
             var textPos = topLeft + new Vector2(5f, 2f);

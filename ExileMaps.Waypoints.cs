@@ -539,9 +539,9 @@ public partial class ExileMapsCore
 
         iconPosition -= new Vector2(0, 20);
         Vector2 waypointTextPosition = iconPosition - new Vector2(0, 10);
-        // Add step count + path weight to waypoint label if available
+        // Add step count to waypoint label if available
         string displayText = waypoint.StepCount >= 0
-            ? $"{waypoint.Name} ({waypoint.StepCount} steps, {waypoint.PathWeight:0} wt)"
+            ? $"{waypoint.Name} ({waypoint.StepCount} steps)"
             : waypoint.Name;
 
         DrawCenteredTextWithBackground(displayText, waypointTextPosition, Settings.Graphics.FontColor, Settings.Graphics.BackgroundColor, true, 10, 4);

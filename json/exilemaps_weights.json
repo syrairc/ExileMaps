@@ -3,7 +3,7 @@
     "MapAbyss": 0,
     "MapAlpineRidge": 25,
     "MapArroyo": 12,
-    "MapAugury": 18,
+    "MapAugury": 7.8,
     "MapAzmerianRanges": 18,
     "MapBackwash": 38,
     "MapBastille": 38,
@@ -178,7 +178,8 @@
     "ExpeditionLogBook_Tundra": 12,
     "ExpeditionLogBook_Wastes": 12,
     "MapMortuary": 12,
-    "MapUniqueReactor_04": 12
+    "MapUniqueReactor_04": 12,
+    "MapUniqueMerchant03_Beach": 1
   },
   "Content": {
     "PowerfulMapBoss": 25,
@@ -246,7 +247,17 @@
     "AllDropsNotGold": 25,
     "LivesAndEffectiveness": 25,
     "ItemRarityGreater": 25,
-    "DuplicatedRares": 25
+    "DuplicatedRares": 25,
+    "DeadlyMapBoss": 1,
+    "Sanctified": 1,
+    "SanctifiedBoss": 1,
+    "CorruptionNexus": 1,
+    "Corrupted": 1,
+    "Hideout": 1,
+    "Trader": 1,
+    "UniqueMap": 1,
+    "DeliriumGigaMirror": 1,
+    "GrandExpedition": 25
   },
   "Biomes": {
     "Desert": 0,

@@ -206,12 +206,14 @@ public partial class ExileMapsCore
 
         string toRemove = null;
         foreach (var kv in dict.OrderBy(k => k.Key).ToList()) {
-            if (ImGui.CollapsingHeader($"{kv.Key}##{id}_{kv.Key}")) {
+            bool open = SettingsHelpers.SubHeader($"{kv.Key}##{id}_{kv.Key}");
+            if (open) {
                 DrawOverrideControls($"{id}_{kv.Key}", kv.Value);
                 if (ImGui.Button($"Remove##{id}_{kv.Key}"))
                     toRemove = kv.Key;
                 ImGui.Separator();
             }
+            SettingsHelpers.SubHeaderEnd();
         }
         if (toRemove != null)
             dict.Remove(toRemove);

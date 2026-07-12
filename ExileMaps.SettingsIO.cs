@@ -230,24 +230,6 @@ public partial class ExileMapsCore
         }
     }
 
-    // Phase 2: map the old DrawWeightOnMap bool onto the new WeightDisplayMode enum, once.
-    private void MigrateContentDisplay()
-    {
-        try {
-            if (Settings.Profiles.ContentDisplayMigrated)
-                return;
-
-            Settings.Graphics.WeightDisplayMode = Settings.Maps.DrawWeightOnMap
-                ? WeightDisplayMode.IconAndValue
-                : WeightDisplayMode.None;
-
-            Settings.Profiles.ContentDisplayMigrated = true;
-            LogMessage("Migrated content-display settings to the new model.");
-        } catch (Exception e) {
-            LogError("Error migrating content-display settings: " + e.Message);
-        }
-    }
-
     // One-time: seed the Phase 3 connection toggles from the old Features toggles so existing users
     // see no change. Master + locked + opacity keep their defaults (no old equivalent).
     private void MigrateConnectionSettings()
@@ -256,13 +238,36 @@ public partial class ExileMapsCore
             if (Settings.Profiles.ConnectionSettingsMigrated)
                 return;
 
+            // Seed the intermediate 3-way fields; MigrateConnectionCategories then maps those to the 4-way
+            // toggles. Old hidden-node lines map to "locked" (not-unlocked, not-visited). Writing Hidden
+            // directly here would just get overwritten by the categories pass.
             Settings.Graphics.ShowConnectionsForCompleted.Value = Settings.Features.DrawVisitedNodeConnections;
-            Settings.Graphics.ShowConnectionsForVisible.Value = Settings.Features.DrawHiddenNodeConnections;
+            Settings.Graphics.ShowConnectionsForLocked.Value = Settings.Features.DrawHiddenNodeConnections;
 
             Settings.Profiles.ConnectionSettingsMigrated = true;
             LogMessage("Migrated connection-line settings to the new model.");
         } catch (Exception e) {
             LogError("Error migrating connection-line settings: " + e.Message);
+        }
+    }
+
+    // One-time: split the old 3-way (completed/locked/visible) toggles into the 4-way categories.
+    // old locked (not-unlocked, not-visited) = both inaccessible (revealed+locked) and hidden.
+    // old visible (both revealed) maps to accessible. completed carries over unchanged.
+    private void MigrateConnectionCategories()
+    {
+        try {
+            if (Settings.Profiles.ConnectionCategoriesMigrated)
+                return;
+
+            Settings.Graphics.ShowConnectionsForInaccessible.Value = Settings.Graphics.ShowConnectionsForLocked;
+            Settings.Graphics.ShowConnectionsForHidden.Value = Settings.Graphics.ShowConnectionsForLocked;
+            Settings.Graphics.ShowConnectionsForAccessible.Value = Settings.Graphics.ShowConnectionsForVisible;
+
+            Settings.Profiles.ConnectionCategoriesMigrated = true;
+            LogMessage("Migrated connection-line toggles to the 4-way categories.");
+        } catch (Exception e) {
+            LogError("Error migrating connection categories: " + e.Message);
         }
     }
 

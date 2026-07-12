@@ -1,4 +1,3 @@
-// Expeditions: rumour-data load, panel, highlight, waypoint. See docs/superpowers/specs/2026-07-09-expeditions-feature-design.md
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -195,6 +194,9 @@ public partial class ExileMapsCore
     // Maps of the marker currently under the cursor, ringed in the expedition tint. Set during layout.
     private readonly HashSet<Vector2i> frameHoverExpeditionMaps = new();
     private System.Drawing.Color frameHoverExpeditionTint;
+    // Region of the live game expedition button under the cursor this frame (null if none). Set in
+    // ScanExpeditionButtons, consumed in LayoutExpeditions to ring the same maps a marker hover would.
+    private Vector2i? frameHoverButtonRegion;
 
     // Distinct, stable tint per expedition so a region's scattered markers/overlays read as one group.
     // Golden-ratio hue spacing keeps neighbouring ids far apart in colour.
@@ -226,16 +228,35 @@ public partial class ExileMapsCore
         frameExpeditionIcons.Clear();
         frameExpeditionPanels.Clear();
         frameHoverExpeditionMaps.Clear();
+
+        // Snapshot the expeditions once, lazily - both the hover-region and marker paths reuse it, but
+        // a frame with neither (no hover, markers off) copies nothing.
+        List<Classes.Expedition> snapshot = null;
+        List<Classes.Expedition> Snapshot() {
+            if (snapshot == null) lock (mapCacheLock) snapshot = expeditions.ToList();
+            return snapshot;
+        }
+
+        // hovering a real game expedition button rings its region's maps, same as hovering our marker
+        if (frameHoverButtonRegion is Vector2i hoverRegion)
+        {
+            var he = Snapshot().FirstOrDefault(x => x.RegionCoord.Equals(hoverRegion));
+            if (he != null)
+            {
+                frameHoverExpeditionMaps.UnionWith(he.MapCoords);
+                frameHoverExpeditionTint = ExpeditionTint(he.Id);
+            }
+        }
+
         if (ShowMinimap) return;
 
         // Popup decode panel (beside the game's rumours tooltip), independent of the markers toggle.
-        if (Settings.Features.ShowExpeditions && frameLogbookPopup != null)
+        if (Settings.Features.ShowPanelButtons && frameLogbookPopup != null)
             LayoutPopupOverlay();
 
         if (!Settings.Features.ShowExpeditionMarkers) return;
 
-        List<Classes.Expedition> snapshot;
-        lock (mapCacheLock) snapshot = expeditions.ToList();
+        Snapshot();
         var screen = GameController.Window.GetWindowRectangleTimeCache.Size;
         var mouse = ImGuiNET.ImGui.GetMousePos();
 
@@ -311,7 +332,7 @@ public partial class ExileMapsCore
 
             System.Drawing.Color color = Settings.Graphics.FontColor;
             System.Drawing.Color sub = System.Drawing.Color.FromArgb(180, 180, 180, 180);
-            var lines = new List<(string, System.Drawing.Color)> { ($"#{e.Id} Possible rumours", tint) };
+            var lines = new List<(string, System.Drawing.Color)> { ($"Expedition #{e.Id}", tint) };
             foreach (var (content, desc, _) in rows)
             {
                 lines.Add(("- " + content, color));
@@ -432,7 +453,8 @@ public partial class ExileMapsCore
     {
         frameLogbookPopup = null;
         frameVisibleExpeditionButtonCoords.Clear();
-        if (!Settings.Features.ShowExpeditions) return;
+        frameHoverButtonRegion = null;
+        if (!Settings.Features.ShowPanelButtons) return;
         try
         {
             var buttons = AtlasPanel?.Buttons;
@@ -450,6 +472,7 @@ public partial class ExileMapsCore
                 var children = b.Children;
                 var visual = children != null && children.Count > 0 ? children[0] : null;
                 if (visual == null || !visual.HasShinyHighlight) continue;
+                frameHoverButtonRegion = b.RegionCoordinate; // hovered game button's region
                 var tip = visual.Tooltip;
                 if (tip == null || !tip.IsVisible) continue;
                 var r = tip.GetClientRect();
@@ -470,25 +493,6 @@ public partial class ExileMapsCore
             ReadPopupRumors(ch, into, depth + 1);
     }
 
-    // Which expedition does the open popup belong to? Match by the popup's current rumour texts
-    // against each region's pool and take the best overlap. currentTexts is the popup's raw rumour
-    // keys (the `seen` set from the overlay). Returns null if nothing overlaps.
-    private Classes.Expedition FindExpeditionForPopup(HashSet<string> currentTexts)
-    {
-        List<Classes.Expedition> snapshot;
-        lock (mapCacheLock) snapshot = expeditions.ToList();
-
-        Classes.Expedition best = null; int bestOverlap = 0;
-        foreach (var e in snapshot)
-        {
-            int overlap = 0;
-            foreach (var (text, _) in e.Rumors)
-                if (currentTexts.Contains(text)) overlap++;
-            if (overlap > bestOverlap) { bestOverlap = overlap; best = e; }
-        }
-        return best;
-    }
-
     // Lay out the decode overlay beside the game's rumours popup: the popup's CURRENT rumours (read from
     // the popup itself, not Button.Rumors which is only the region's possible pool), decoded via
     // RumorWeights and ordered by weight. Position tracks the popup; drawn later by DrawExpeditions.
@@ -506,57 +510,31 @@ public partial class ExileMapsCore
 
             // decode current rumours, dedupe, order by weight desc. Popup text we can't decode (rumour
             // names not in RumorWeights, plus the popup's header strings) is dropped rather than shown raw.
-            var rows = new List<(string content, string desc, float w, bool faded)>();
+            var rows = new List<(string content, string desc, float w)>();
             var seen = new HashSet<string>();
             foreach (var t in texts)
             {
                 if (!seen.Add(t)) continue;
                 if (Settings.Expeditions.RumorWeights.TryGetValue(t, out var r))
-                    rows.Add((r.Content, r.Description, r.Weight, false));
+                    rows.Add((r.Content, r.Description, r.Weight));
             }
             if (rows.Count == 0) return;
             rows.Sort((a, b) => b.w.CompareTo(a.w));
 
-            // Hold Alt to also list the region's other possible rumours (the ones that didn't roll),
-            // decoded from the matching expedition's pool and shown faded below the current ones.
-            bool showPossible = ExileCore2.Input.GetKeyState(System.Windows.Forms.Keys.Menu);
-            if (showPossible)
-            {
-                var exp = FindExpeditionForPopup(seen);
-                if (exp != null)
-                {
-                    var extra = new List<(string content, string desc, float w, bool faded)>();
-                    foreach (var (text, _) in exp.Rumors)
-                    {
-                        if (!seen.Add(text)) continue;
-                        if (Settings.Expeditions.RumorWeights.TryGetValue(text, out var r))
-                            extra.Add((r.Content, r.Description, r.Weight, true));
-                    }
-                    extra.Sort((a, b) => b.w.CompareTo(a.w));
-                    rows.AddRange(extra);
-                }
-            }
-
-            // Faded rows (possible-but-not-rolled) get a dimmed alpha; current rows stay full.
             System.Drawing.Color fontColor = Settings.Graphics.FontColor;
-            System.Drawing.Color Dim(System.Drawing.Color c) => System.Drawing.Color.FromArgb(90, c.R, c.G, c.B);
 
             // Build the display lines (content header + indented description per rumour).
             var lines = new List<(string text, System.Drawing.Color color)>();
             lines.Add(("Rumours", fontColor));
-            foreach (var (content, desc, _, faded) in rows)
+            foreach (var (content, desc, _) in rows)
             {
-                var head = faded ? Dim(fontColor) : fontColor;
-                lines.Add(("- " + content, head));
+                lines.Add(("- " + content, fontColor));
                 if (!string.IsNullOrEmpty(desc))
                 {
-                    var sub = System.Drawing.Color.FromArgb(faded ? 90 : 180, 180, 180, 180);
+                    var sub = System.Drawing.Color.FromArgb(180, 180, 180, 180);
                     lines.Add(("    " + desc, sub));
                 }
             }
-            if (showPossible)
-                lines.Add(("(Alt: showing possible rumours)", Dim(fontColor)));
-
             const float pad = 8f;
             var (boxW, boxH, lineH) = MeasurePanel(lines, pad);
 

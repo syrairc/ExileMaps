@@ -28,7 +28,6 @@ public partial class ExileMapsCore
                 Tab("General", DrawGeneralTab);
                 Tab("Appearance", DrawAppearanceTab);
                 Tab("Maps", DrawMapsTab);
-                Tab("Content", DrawContentTab);
                 Tab("Waypoints", DrawWaypointsTab);
                 Tab("Panels", DrawPanelsTab);
                 Tab("Keybinds", () => DrawHolderChildren("Keybinds"));
@@ -134,7 +133,6 @@ public partial class ExileMapsCore
         if (Section("Overlay")) {
             DrawHolder("Show Panel Buttons");
             DrawHolder("Show Atlas Search Box");
-            DrawHolder("Show Expeditions Button");
             DrawHolder("Debug Mode");
         }
 
@@ -162,9 +160,10 @@ public partial class ExileMapsCore
             // condition toggles only matter while the master is on
             if (Settings.Graphics.ShowConnectionLines) {
                 DrawCustom(Settings.Graphics?.SepConnectionConditions?.DrawDelegate);
-                DrawHolder("Connections for Completed Maps");
-                DrawHolder("Connections for Locked Maps");
-                DrawHolder("Connections for Visible Maps");
+                DrawHolder("Connections from Completed Maps");
+                DrawHolder("Connections from Accessible Maps");
+                DrawHolder("Connections from Inaccessible Maps");
+                DrawHolder("Connections from Hidden Maps");
             }
             DrawHolder("Line Width");
             DrawHolder("Draw Lines as Gradients");
@@ -176,7 +175,22 @@ public partial class ExileMapsCore
             DrawHolder("Distance Marker Scale");
         }
 
+        if (Section("Content")) {
+            DrawHolder("Show Content Row");
+            DrawHolder("Content Icon Size");
+            DrawHolder("Content Icon Spacing");
+            DrawHolder("Content Row Offset Y");
+            DrawHolder("Skip Game-drawn Content");
+        }
+
+        if (Section("Biomes")) {
+            DrawHolder("Show Biome Icon");
+            DrawHolder("Biome Icon Size");
+            DrawHolder("Biome Icon Offset Y");
+        }
+
         if (Section("Map Labels")) {
+            DrawMapLabelToggles();
             DrawHolder("Map Name Offset X");
             DrawHolder("Map Name Offset Y");
             DrawHolder("Uppercase Map Names");
@@ -186,17 +200,34 @@ public partial class ExileMapsCore
 
     private void DrawMapsTab()
     {
-        if (Section("Map Display"))
+        if (Section("Map Display")) {
             DrawCustom(Settings.Maps?.CustomMapSettings?.DrawDelegate);
+            DrawHolder("Show Weight Value");
+            DrawHolder("Show Atlas Point Badge");
+        }
 
         if (ImGui.CollapsingHeader("Map Weights")) {
-            DrawCustom(Settings.Graphics?.WeightDisplayPicker?.DrawDelegate);
-            DrawHolder("Weight Icon Size");
+            DrawGoodBadNodeColors();
             DrawCustom(Settings.Maps?.MapTable?.DrawDelegate);
         }
 
         if (ImGui.CollapsingHeader("Biomes"))
             DrawCustom(Settings.Maps?.Biomes?.CustomBiomeSettings?.DrawDelegate);
+
+        if (ImGui.CollapsingHeader("Content Weights"))
+            DrawCustom(Settings.Maps?.Content?.CustomContentSettings?.DrawDelegate);
+
+        if (ImGui.CollapsingHeader("Expeditions")) {
+            DrawHolder("Show Expedition Markers");
+            DrawHolder("Draw All Hidden Expedition Indicators");
+            DrawCustom(Settings.Expeditions?.RumorWeightsEditor?.DrawDelegate);
+        }
+
+        if (Section("Favorite Maps")) {
+            DrawHolder("Favorite Marker Color");
+            DrawHolder("Favorite Icon Size");
+            DrawFavoriteMapManager();
+        }
 
         if (Section("Special Map Markers")) {
             DrawHolder("Show Special Map Indicator");
@@ -206,45 +237,95 @@ public partial class ExileMapsCore
             DrawHolder("Special Map Marker Offset");
             DrawCustom(Settings.Graphics?.SpecialMapIconPicker?.DrawDelegate);
             DrawHolder("Special Map Name Color");
+            DrawHolder("Show Atlas Quest Marker");
+            DrawHolder("Atlas Quest Marker Size");
         }
 
         if (Section("Custom Special Maps"))
             DrawCustom(Settings.Maps?.SpecialMaps?.CustomSpecialMapSettings?.DrawDelegate);
     }
 
-    private void DrawContentTab()
+    // Good/Bad node colors drive the weight gradient (node fill + weight value). Moved here from the
+    // old Map Display table.
+    private void DrawGoodBadNodeColors()
     {
-        DrawCustom(Settings.Graphics?.SepPhase2?.DrawDelegate);
-        DrawHolder("Show Content Row");
-        DrawHolder("Content Icon Size");
-        DrawHolder("Content Icon Spacing");
-        DrawHolder("Content Row Offset Y");
-        DrawHolder("Content Icon Tint");
-        DrawHolder("Skip Game-drawn Content");
-        DrawHolder("Content Tooltips");
-        DrawHolder("Show Biome Icon");
-        DrawHolder("Biome Icon Size");
-        DrawHolder("Biome Icon Offset Y");
-        DrawHolder("Biome Tooltips");
-        DrawHolder("Show Atlas Point Badge");
-        DrawHolder("Atlas Point Badge Size");
-        DrawHolder("Atlas Point Badge Color");
+        var m = Settings.Maps;
+        void Edit(string id, Color c, Action<Color> set) {
+            if (ColorRGBA($"##{id}", ref c)) set(c);
+        }
+        Edit("goodnode", m.GoodNodeColor, c => m.GoodNodeColor = c);
+        ImGui.SameLine(); ImGui.Text("Good Node Color");
+        Edit("badnode", m.BadNodeColor, c => m.BadNodeColor = c);
+        ImGui.SameLine(); ImGui.Text("Bad Node Color");
+    }
 
-        if (Section("Atlas Point Markers")) {
-            DrawHolder("Show Atlas Point Marker");
-            DrawHolder("Show Atlas Quest Marker");
-            DrawHolder("Atlas Marker Size");
-            DrawCustom(Settings.Graphics?.AtlasPointStylePicker?.DrawDelegate);
+    // Per-node-state toggles for whether the map label draws. Moved here from Maps -> Map Display.
+    private void DrawMapLabelToggles()
+    {
+        var m = Settings.Maps;
+        bool showMapNames = m.ShowMapNames;
+        if (ImGui.Checkbox("Show Map Labels", ref showMapNames)) m.ShowMapNames = showMapNames;
+
+        bool showUnlocked = m.ShowMapNamesOnUnlockedNodes;
+        if (ImGui.Checkbox("Show Map Labels on Unlocked Nodes", ref showUnlocked)) m.ShowMapNamesOnUnlockedNodes = showUnlocked;
+
+        bool showLocked = m.ShowMapNamesOnLockedNodes;
+        if (ImGui.Checkbox("Show Map Labels on Locked Nodes", ref showLocked)) m.ShowMapNamesOnLockedNodes = showLocked;
+
+        bool showHidden = m.ShowMapNamesOnHiddenNodes;
+        if (ImGui.Checkbox("Show Map Labels on Hidden Nodes", ref showHidden)) m.ShowMapNamesOnHiddenNodes = showHidden;
+    }
+
+    private string _favMapAddFilter = "";
+    // Favorites are just Map.Favorite - this list is a view/editor over that same field (add-combo +
+    // remove buttons, same shape as the label-style override manager). No separate storage, so existing
+    // favorites already show here and profiles/waypoints keep working unchanged.
+    private void DrawFavoriteMapManager()
+    {
+        var maps = Settings.Maps?.Maps;
+        if (maps == null) return;
+
+        ImGui.Spacing();
+        ImGui.TextDisabled("Favorite maps get the star marker (and optional auto-waypoint).");
+
+        // Add box: searchable dropdown of maps not yet favorited.
+        var candidates = maps
+            .Where(kv => kv.Value != null && !kv.Value.Favorite
+                && !string.IsNullOrEmpty(kv.Value.Name)
+                && !kv.Value.Name.Contains("DNT-UNUSED"))
+            .OrderBy(kv => kv.Value.Name)
+            .ToList();
+
+        ImGui.SetNextItemWidth(250);
+        if (ImGui.BeginCombo("##fav_add", "Add favorite map...", ImGuiComboFlags.HeightLarge)) {
+            ImGui.SetNextItemWidth(-1);
+            ImGui.InputTextWithHint("##fav_add_filter", "Search maps...", ref _favMapAddFilter, 100);
+            foreach (var (key, map) in candidates) {
+                if (!string.IsNullOrEmpty(_favMapAddFilter)
+                    && !map.Name.Contains(_favMapAddFilter, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (ImGui.Selectable($"{map.Name}##fav_add_{key}")) {
+                    map.Favorite = true;
+                    _favMapAddFilter = "";
+                }
+            }
+            ImGui.EndCombo();
         }
 
-        if (ImGui.CollapsingHeader("Content Weights"))
-            DrawCustom(Settings.Maps?.Content?.CustomContentSettings?.DrawDelegate);
-
-        DrawHolder("Show Expedition Markers");
-        DrawHolder("Draw All Hidden Expedition Indicators");
-        if (ImGui.CollapsingHeader("Expedition Rumor Weights"))
-            DrawCustom(Settings.Expeditions?.RumorWeightsEditor?.DrawDelegate);
+        // Current favorites with a remove button each.
+        string toUnfav = null;
+        foreach (var (key, map) in maps.Where(kv => kv.Value?.Favorite == true)
+                     .OrderBy(kv => kv.Value.Name).ToList()) {
+            ImGui.Bullet();
+            ImGui.Text(map.Name);
+            ImGui.SameLine();
+            if (ImGui.SmallButton($"Remove##fav_rm_{key}"))
+                toUnfav = key;
+        }
+        if (toUnfav != null && maps.TryGetValue(toUnfav, out var rm))
+            rm.Favorite = false;
     }
+
 
     private void DrawWaypointsTab()
     {
@@ -261,11 +342,6 @@ public partial class ExileMapsCore
             DrawHolder("Waypoint Dash Speed");
             DrawHolder("Waypoint Texture Scale");
             DrawHolder("Waypoint Arrow Min Distance");
-        }
-
-        if (Section("Favorite Marker")) {
-            DrawHolder("Favorite Marker Color");
-            DrawHolder("Favorite Marker Scale");
         }
     }
 
@@ -338,12 +414,6 @@ public partial class ExileMapsCore
         return mapIdIndex.TryGetValue(fullId, out Map byId) ? byId : null;
     }
 
-    private static void QuickColorEdit(string id, Color color, Action<Color> set) {
-        Vector4 v = new(color.R / 255f, color.G / 255f, color.B / 255f, color.A / 255f);
-        if (ImGui.ColorEdit4($"##{id}", ref v, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreview | ImGuiColorEditFlags.NoInputs))
-            set(Color.FromArgb((int)(v.W * 255), (int)(v.X * 255), (int)(v.Y * 255), (int)(v.Z * 255)));
-    }
-
     // Floating popup for inline editing of the hovered node's map type and content types.
     private void DrawQuickEditPanel() {
         try {
@@ -371,33 +441,11 @@ public partial class ExileMapsCore
                 ImGui.SetNextItemWidth(220);
                 if (ImGui.SliderFloat("Weight##qe", ref weight, -50f, 50f, "%.1f")) map.Weight = weight;
 
-                QuickColorEdit("qe_node", map.NodeColor, c => map.NodeColor = c);
-                ImGui.SameLine(); ImGui.Text("Node");
-                ImGui.SameLine(); ImGui.Spacing(); ImGui.SameLine();
-                QuickColorEdit("qe_name", map.NameColor, c => map.NameColor = c);
-                ImGui.SameLine(); ImGui.Text("Name");
-                ImGui.SameLine(); ImGui.Spacing(); ImGui.SameLine();
-                QuickColorEdit("qe_bg", map.BackgroundColor, c => map.BackgroundColor = c);
-                ImGui.SameLine(); ImGui.Text("Text BG");
-
-                bool cbw = map.ColorNodesByWeight;
-                if (ImGui.Checkbox("Color node by weight##qe", ref cbw)) map.ColorNodesByWeight = cbw;
-                bool nbw = map.UseWeightColorForName;
-                if (ImGui.Checkbox("Color name by weight##qe", ref nbw)) map.UseWeightColorForName = nbw;
-
-                ImGui.Text("Icon"); ImGui.SameLine();
-                SettingsHelpers.IconPicker("qeicon", map.Icon, i => map.Icon = i);
-
                 if (quickEditNode.Content.Count > 0) {
                     ImGui.Separator();
                     ImGui.Text("Content");
                     foreach (var (cname, content) in quickEditNode.Content) {
                         ImGui.PushID($"qe_c_{cname}");
-                        QuickColorEdit("col", content.Color, c => content.Color = c);
-                        ImGui.SameLine();
-                        bool ring = content.Highlight;
-                        if (ImGui.Checkbox("Ring##c", ref ring)) content.Highlight = ring;
-                        ImGui.SameLine();
                         bool cfav = content.Favorite;
                         if (ImGui.Checkbox("Fav##c", ref cfav)) content.Favorite = cfav;
                         ImGui.SameLine();

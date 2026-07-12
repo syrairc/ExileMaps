@@ -7,19 +7,13 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Numerics;
-using System.Text.Json;
-using System.Text.RegularExpressions;
 
 using ExileCore2;
 using ExileCore2.PoEMemory.Elements.AtlasElements;
 using ExileCore2.PoEMemory.MemoryObjects;
-using ExileCore2.Shared.Helpers;
 using ExileCore2.Shared.Nodes;
-using ExileCore2.Shared.Enums;
 
 using GameOffsets2.Native;
-
-using ImGuiNET;
 
 using RectangleF = ExileCore2.Shared.RectangleF;
 using ExileMaps.Classes;
@@ -82,10 +76,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     // Top Y of the content-icon row we drew this frame, per node. Lets the atlas-point/quest indicators
     // sit above our content icons. Cleared with contentIconRects.
     private readonly Dictionary<Vector2i, float> contentRowTopByCoord = [];
-    // Per-frame memo of IndicatorBaseTop, keyed by coord. It's called once by the atlas-point pass and
-    // once by the quest pass; a node with both would otherwise do the child-rect read twice. Cleared
-    // with contentRowTopByCoord.
-    private readonly Dictionary<Vector2i, float> indicatorBaseTopByCoord = [];
+    // Biome icon rect drawn this frame, per node. Lets the favorite star sit left of it. Cleared with
+    // contentRowTopByCoord.
+    private readonly Dictionary<Vector2i, RectangleF> biomeIconRectByCoord = [];
     // Content-name -> resolved icon-<x>.png file (null = no file). loadedContentIcons is init-only so
     // this never needs invalidating; kills the per-node ToLower/Replace/interpolation string allocs.
     private readonly Dictionary<string, string> contentIconFileCache = new(StringComparer.OrdinalIgnoreCase);
@@ -192,8 +185,17 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         // Build the label-style model from old settings on first run after upgrade.
         MigrateLabelStyles();
         MigrateLabelOpacity();
-        MigrateContentDisplay();
-        MigrateConnectionSettings();
+
+        // Connection migrations re-seed the new toggles from old fields for upgraders. A fresh install
+        // has no settings file yet, so there's nothing to migrate - skip and let the declared defaults
+        // stand (otherwise legacy defaults clobber them and the shipped defaults become unreachable).
+        if (FindSettingsFilePath() == null) {
+            Settings.Profiles.ConnectionSettingsMigrated = true;
+            Settings.Profiles.ConnectionCategoriesMigrated = true;
+        } else {
+            MigrateConnectionSettings();
+            MigrateConnectionCategories();
+        }
 
         // Rumours have no live game file to scrape, so seed them once here from the static json.
         UpdateRumorData();
@@ -483,7 +485,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 t0 = Stopwatch.GetTimestamp();
                 contentIconRects.Clear();
                 contentRowTopByCoord.Clear();
-                indicatorBaseTopByCoord.Clear();
+                biomeIconRectByCoord.Clear();
                 foreach (var (node, rect) in nodePositions) {
                     DrawBiomeIcon(node, rect);
                     DrawContentRow(node, rect);
@@ -502,8 +504,6 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     if (rect.Width > 0)
                         DrawSpecialIndicator(node, rect);
                 }
-                foreach (var (node, rect) in nodePositions)
-                    DrawAtlasPointIndicator(node, rect);
                 foreach (var (node, rect) in nodePositions)
                     DrawAtlasQuestIndicator(node, rect);
                 if (perf) PerfMonitor.Record("Render.Indicators", Stopwatch.GetTimestamp() - t0);
