@@ -73,6 +73,9 @@ public class ExileMapsSettings : ISettings
         // Set once the label-style model has been migrated from the old scattered color settings.
         public bool LabelStyleMigrated { get; set; } = false;
 
+        // Set once box/border opacity has been folded into the color alpha (separate opacity sliders removed).
+        public bool LabelOpacityFolded { get; set; } = false;
+
         // Set once the Phase 2 content-display settings have been migrated from the old bool flags.
         public bool ContentDisplayMigrated { get; set; } = false;
 

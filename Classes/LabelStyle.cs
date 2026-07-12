@@ -21,13 +21,15 @@ namespace ExileMaps.Classes
 
         public bool BoxVisible { get; set; } = true;
         [JsonConverter(typeof(JsonColorConverter))]
-        public Color BoxColor { get; set; } = Color.FromArgb(255, 0, 0, 0);
+        public Color BoxColor { get; set; } = Color.FromArgb(177, 0, 0, 0);
+        // legacy: opacity is the color alpha now. Kept for JSON load + the one-time fold migration.
         public int BoxOpacity { get; set; } = 177;
         public bool BoxColorByWeight { get; set; } = false;
 
         public bool BorderVisible { get; set; } = true;
         [JsonConverter(typeof(JsonColorConverter))]
         public Color BorderColor { get; set; } = Color.FromArgb(255, 120, 120, 130);
+        // legacy: see BoxOpacity.
         public int BorderOpacity { get; set; } = 255;
         public bool BorderColorByWeight { get; set; } = false;
         public int BorderThickness { get; set; } = 2;
@@ -159,7 +161,7 @@ namespace ExileMaps.Classes
                 TextColor = Color.FromArgb(255, 255, 255, 255),
                 TextColorByWeight = false,
                 BoxVisible = true,
-                BoxColor = Color.FromArgb(255, 0, 0, 0),
+                BoxColor = Color.FromArgb(177, 0, 0, 0),
                 BoxOpacity = 177,
                 BorderVisible = true,
                 BorderColor = Color.FromArgb(255, 120, 120, 130),

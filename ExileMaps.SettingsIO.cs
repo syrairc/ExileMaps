@@ -191,6 +191,45 @@ public partial class ExileMapsCore
         }
     }
 
+    // Fold the old separate box/border opacity into the color alpha, once. Runs over the live labels and
+    // every profile's labels (base + all overrides). On a fresh install this just bakes the default
+    // opacities (177 box / 255 border) into the default colors, so the look is unchanged either way.
+    private void MigrateLabelOpacity()
+    {
+        try {
+            if (Settings.Profiles.LabelOpacityFolded)
+                return;
+
+            void FoldStyle(LabelStyle s) {
+                if (s == null) return;
+                s.BoxColor = Color.FromArgb(s.BoxOpacity, s.BoxColor.R, s.BoxColor.G, s.BoxColor.B);
+                s.BorderColor = Color.FromArgb(s.BorderOpacity, s.BorderColor.R, s.BorderColor.G, s.BorderColor.B);
+            }
+            void FoldOverride(LabelStyleOverride o) {
+                if (o == null) return;
+                o.BoxColor = Color.FromArgb(o.BoxOpacity, o.BoxColor.R, o.BoxColor.G, o.BoxColor.B);
+                o.BorderColor = Color.FromArgb(o.BorderOpacity, o.BorderColor.R, o.BorderColor.G, o.BorderColor.B);
+            }
+            void FoldSet(LabelStyleSettings ls) {
+                if (ls == null) return;
+                FoldStyle(ls.Base);
+                FoldOverride(ls.Favorite);
+                FoldOverride(ls.Special);
+                foreach (var o in ls.Content.Values) FoldOverride(o);
+                foreach (var o in ls.Biome.Values) FoldOverride(o);
+            }
+
+            FoldSet(Settings.Labels);
+            foreach (var kv in Settings.Profiles.Profiles)
+                FoldSet(kv.Value.Labels);
+
+            Settings.Profiles.LabelOpacityFolded = true;
+            LogMessage("Folded label box/border opacity into color alpha.");
+        } catch (Exception e) {
+            LogError("Label opacity fold migration failed: " + e.Message);
+        }
+    }
+
     // Phase 2: map the old DrawWeightOnMap bool onto the new WeightDisplayMode enum, once.
     private void MigrateContentDisplay()
     {

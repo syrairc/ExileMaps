@@ -191,6 +191,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         // Build the label-style model from old settings on first run after upgrade.
         MigrateLabelStyles();
+        MigrateLabelOpacity();
         MigrateContentDisplay();
         MigrateConnectionSettings();
 

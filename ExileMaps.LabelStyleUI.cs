@@ -62,6 +62,17 @@ public partial class ExileMapsCore
         return false;
     }
 
+    // RGBA picker - the alpha bar is the box/border opacity (no separate slider).
+    private static bool ColorRGBA(string id, ref Color c)
+    {
+        Vector4 v = new(c.R / 255f, c.G / 255f, c.B / 255f, c.A / 255f);
+        if (ImGui.ColorEdit4(id, ref v, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaBar)) {
+            c = Color.FromArgb((int)(v.W * 255), (int)(v.X * 255), (int)(v.Y * 255), (int)(v.Z * 255));
+            return true;
+        }
+        return false;
+    }
+
     // ---- base style: plain controls, no toggles ----
 
     private void DrawBaseStyleControls(LabelStyle s)
@@ -85,9 +96,7 @@ public partial class ExileMapsCore
         // Border lives on the box: no box, no border.
         if (s.BoxVisible) {
             Color bc = s.BoxColor;
-            if (ColorRGB("Box Color##base", ref bc)) s.BoxColor = bc;
-            int bo = s.BoxOpacity;
-            if (ImGui.SliderInt("Box Opacity##base", ref bo, 0, 255)) s.BoxOpacity = bo;
+            if (ColorRGBA("Box Color##base", ref bc)) s.BoxColor = bc;
             bool bw = s.BoxColorByWeight;
             if (ImGui.Checkbox("Box color by weight##base", ref bw)) s.BoxColorByWeight = bw;
 
@@ -95,9 +104,7 @@ public partial class ExileMapsCore
             if (ImGui.Checkbox("Show border##base", ref rv)) s.BorderVisible = rv;
             if (s.BorderVisible) {
                 Color rc = s.BorderColor;
-                if (ColorRGB("Border Color##base", ref rc)) s.BorderColor = rc;
-                int ro = s.BorderOpacity;
-                if (ImGui.SliderInt("Border Opacity##base", ref ro, 0, 255)) s.BorderOpacity = ro;
+                if (ColorRGBA("Border Color##base", ref rc)) s.BorderColor = rc;
                 bool rw = s.BorderColorByWeight;
                 if (ImGui.Checkbox("Border color by weight##base", ref rw)) s.BorderColorByWeight = rw;
                 int rt = s.BorderThickness;
@@ -145,12 +152,8 @@ public partial class ExileMapsCore
         // Box color/opacity rows only when the box is shown for this override.
         if (o.BoxVisible) {
             { bool ovr = o.OverrideBoxColor; Row("bcol", ref ovr, () => {
-                Color v = o.BoxColor; if (ColorRGB($"Box Color##{id}", ref v)) o.BoxColor = v; });
+                Color v = o.BoxColor; if (ColorRGBA($"Box Color##{id}", ref v)) o.BoxColor = v; });
                 o.OverrideBoxColor = ovr; }
-
-            { bool ovr = o.OverrideBoxOpacity; Row("bop", ref ovr, () => {
-                int v = o.BoxOpacity; if (ImGui.SliderInt($"Box Opacity##{id}", ref v, 0, 255)) o.BoxOpacity = v; });
-                o.OverrideBoxOpacity = ovr; }
 
             { bool ovr = o.OverrideBoxColorByWeight; Row("bw", ref ovr, () => {
                 bool v = o.BoxColorByWeight; if (ImGui.Checkbox($"Box color by weight##{id}", ref v)) o.BoxColorByWeight = v; });
@@ -163,12 +166,8 @@ public partial class ExileMapsCore
 
             if (o.BorderVisible) {
                 { bool ovr = o.OverrideBorderColor; Row("rcol", ref ovr, () => {
-                    Color v = o.BorderColor; if (ColorRGB($"Border Color##{id}", ref v)) o.BorderColor = v; });
+                    Color v = o.BorderColor; if (ColorRGBA($"Border Color##{id}", ref v)) o.BorderColor = v; });
                     o.OverrideBorderColor = ovr; }
-
-                { bool ovr = o.OverrideBorderOpacity; Row("rop", ref ovr, () => {
-                    int v = o.BorderOpacity; if (ImGui.SliderInt($"Border Opacity##{id}", ref v, 0, 255)) o.BorderOpacity = v; });
-                    o.OverrideBorderOpacity = ovr; }
 
                 { bool ovr = o.OverrideBorderColorByWeight; Row("rw", ref ovr, () => {
                     bool v = o.BorderColorByWeight; if (ImGui.Checkbox($"Border color by weight##{id}", ref v)) o.BorderColorByWeight = v; });

@@ -484,10 +484,10 @@ public partial class ExileMapsCore
         float denom = maxMapWeight - minMapWeight;
         float w = denom > 0.0001f ? Math.Clamp((node.Weight - minMapWeight) / denom, 0f, 1f) : 0.5f;
         var wc = ColorUtils.InterpolateColor(Settings.Maps.BadNodeColor, Settings.Maps.GoodNodeColor, w);
-        wc = Color.FromArgb(255, wc.R, wc.G, wc.B);
-        if (s.TextColorByWeight) s.TextColor = wc;
-        if (s.BoxColorByWeight) s.BoxColor = wc;
-        if (s.BorderColorByWeight) s.BorderColor = wc;
+        // keep each channel's own alpha - box/border opacity lives in the color alpha now.
+        if (s.TextColorByWeight) s.TextColor = Color.FromArgb(s.TextColor.A, wc.R, wc.G, wc.B);
+        if (s.BoxColorByWeight) s.BoxColor = Color.FromArgb(s.BoxColor.A, wc.R, wc.G, wc.B);
+        if (s.BorderColorByWeight) s.BorderColor = Color.FromArgb(s.BorderColor.A, wc.R, wc.G, wc.B);
     }
 
     // Draws the map name above the node on the atlas.
@@ -881,16 +881,15 @@ public partial class ExileMapsCore
             // Border sits on the box: no box, no border.
             bool drawBorder = style.BorderVisible && style.BoxVisible;
             if (drawBorder) {
-                var border = Color.FromArgb(style.BorderOpacity, style.BorderColor.R, style.BorderColor.G, style.BorderColor.B);
-                Graphics.DrawBox(topLeft, topLeft + boxSize, border, 5.0f);
+                // opacity is the color's own alpha now.
+                Graphics.DrawBox(topLeft, topLeft + boxSize, style.BorderColor, 5.0f);
             }
             if (style.BoxVisible) {
                 float t = drawBorder ? style.BorderThickness : 0;
                 t = MathF.Min(t, MathF.Min(boxSize.X, boxSize.Y) / 2f - 1f);
                 if (t < 0f) t = 0f;
                 var inset = new Vector2(t, t);
-                var box = Color.FromArgb(style.BoxOpacity, style.BoxColor.R, style.BoxColor.G, style.BoxColor.B);
-                Graphics.DrawBox(topLeft + inset, topLeft + boxSize - inset, box, 4.0f);
+                Graphics.DrawBox(topLeft + inset, topLeft + boxSize - inset, style.BoxColor, 4.0f);
             }
 
             var textPos = topLeft + new Vector2(5f, 2f);
