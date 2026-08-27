@@ -450,3 +450,6 @@ map_weights.csv
 
 # Atlas export design assets — inlined as C# constants, not needed for the plugin
 atlas-export/
+
+# Subagent-driven-development scratch workspace (ledgers, briefs, review packages)
+.superpowers/

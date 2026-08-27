@@ -1,0 +1,770 @@
+﻿
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Windows.Forms;
+using System.Linq;
+using System.Numerics;
+using ExileCore2.Shared.Attributes;
+using ExileCore2.Shared.Interfaces;
+using ExileCore2.Shared.Nodes;
+using ExileMaps.Classes;
+using ImGuiNET;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using GameOffsets2.Native;
+using static ExileMaps.ExileMapsCore;
+using System.IO;
+using ExileCore2;
+
+namespace ExileMaps;
+
+public partial class ExileMapsCore
+{
+    #region Atlas Stats
+
+    private struct AtlasStats
+    {
+        public int MapsRun;
+        public int MapsCompleted;
+        public int AtlasPointsTotal;
+        public int AtlasPointsReachable;
+        public int AtlasQuestsReachable;
+        public int ReachableMaps;
+        public Dictionary<string, (int count, Color color)> ContentCounts;
+    }
+
+    private static readonly Color ModifierTallyColor = Color.FromArgb(255, 230, 200, 110);
+
+    private AtlasStats? cachedAtlasStats;
+
+    #endregion
+
+    #region Import / Export
+
+    public void OnProfileApplied() {
+        refreshCache = true;
+        lastRefreshMs = long.MinValue / 2;
+    }
+
+    public void ApplyProfileSwitch(string name)
+    {
+        Settings.Profiles.SwitchProfile(name);
+        Settings.InvalidateActiveProfile();
+        RebuildWeightEditorIds();
+        RegisterHotkeys();
+        RequestSpecialMapsRefresh();
+        OnProfileApplied();
+        weightsDirty = true;
+    }
+
+    public void ResetMapWeightsToDefaults() {
+        foreach (var m in Settings.Active.Maps.Values) m.Weight = 0f;
+        weightsDirty = true;
+    }
+    public void ResetContentWeightsToDefaults() {
+        foreach (var c in Settings.Active.Content.Values) c.Weight = 0f;
+        weightsDirty = true;
+    }
+    public void ResetBiomeWeightsToDefaults() { Settings.Active.Biomes.Clear(); weightsDirty = true; }
+
+    private volatile Action pendingFileAction;
+    private volatile bool fileDialogBusy;
+
+    public void ExportSettings() => OpenFileDialogAsync("Export Settings", "exilemaps_settings.json", true, WriteSettings);
+    public void ImportSettings() => OpenFileDialogAsync("Import Settings", null, false, ReadSettings);
+    public void ExportProfile() => OpenFileDialogAsync("Export Profile", $"{Settings.Profiles.ActiveProfile}.json", true, WriteProfile);
+    public void ImportProfile() => OpenFileDialogAsync("Import Profile", null, false, ReadProfile);
+    public void ExportWeights() => OpenFileDialogAsync("Export Weights", "exilemaps_weights.json", true, WriteWeights);
+    public void ImportWeights() => OpenFileDialogAsync("Import Weights", null, false, ReadWeights);
+    public void ImportLegacySettings() => OpenFileDialogAsync("Import Previous Version Settings", null, false, ConvertLegacySettings);
+
+    public void ProcessPendingFileAction() {
+        var action = pendingFileAction;
+        if (action == null) return;
+        pendingFileAction = null;
+        action();
+    }
+
+    private void WriteSettings(string path) {
+        try {
+            var json = JsonConvert.SerializeObject(Settings, Formatting.Indented, SettingsContainer.jsonSettings);
+            File.WriteAllText(path, json);
+            LogMessage($"Exported settings to {path}");
+        } catch (Exception e) {
+            LogError("Error exporting settings: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    private void ReadSettings(string path) {
+        try {
+            if (!File.Exists(path)) {
+                LogError($"Error importing settings: file not found ({path}).");
+                return;
+            }
+
+            var json = File.ReadAllText(path);
+            var imported = string.IsNullOrWhiteSpace(json) ? null
+                : JsonConvert.DeserializeObject<ExileMapsSettings>(json, SettingsContainer.jsonSettings);
+            if (imported?.Profiles?.Profiles == null || imported.Profiles.Profiles.Count == 0) {
+                LogError("Error importing settings: no profiles in file.");
+                return;
+            }
+
+            Settings.Profiles = imported.Profiles;
+            Settings.Profiles.EnsureDefaultProfile();
+            ApplyProfileSwitch(Settings.Profiles.ActiveProfile);
+            LogMessage($"Imported settings from {path} ({Settings.Profiles.Profiles.Count} profiles)");
+        } catch (Exception e) {
+            LogError("Error importing settings: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    private void WriteProfile(string path) {
+        try {
+            if (!Settings.Profiles.Profiles.TryGetValue(Settings.Profiles.ActiveProfile, out var profile)) {
+                LogError("Error exporting profile: active profile not found.");
+                return;
+            }
+
+            var json = JsonConvert.SerializeObject(profile, Formatting.Indented, SettingsContainer.jsonSettings);
+            File.WriteAllText(path, json);
+            LogMessage($"Exported profile '{Settings.Profiles.ActiveProfile}' to {path}");
+        } catch (Exception e) {
+            LogError("Error exporting profile: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    private void ReadProfile(string path) {
+        try {
+            if (!File.Exists(path)) {
+                LogError($"Error importing profile: file not found ({path}).");
+                return;
+            }
+
+            var profile = JsonConvert.DeserializeObject<Profile>(File.ReadAllText(path), SettingsContainer.jsonSettings);
+            if (profile == null) {
+                LogError("Error importing profile: file was empty or invalid.");
+                return;
+            }
+
+            string baseName = Path.GetFileNameWithoutExtension(path);
+            if (string.IsNullOrWhiteSpace(baseName))
+                baseName = "Imported Profile";
+            string name = UniqueProfileName(Settings.Profiles, baseName);
+
+            Settings.Profiles.Profiles[name] = profile;
+            ApplyProfileSwitch(name);
+
+            LogMessage($"Imported profile '{name}' from {path} ({profile.Maps.Count} maps, {profile.Content.Count} content, {profile.Biomes.Count} biomes)");
+        } catch (Exception e) {
+            LogError("Error importing profile: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    private void WriteWeights(string path) {
+        try {
+            var active = Settings.Active;
+            var export = new WeightExport {
+                Maps = active.Maps.ToDictionary(kv => kv.Key, kv => kv.Value.Weight),
+                Content = active.Content.ToDictionary(kv => kv.Key, kv => kv.Value.Weight),
+                Biomes = new Dictionary<string, float>(active.Biomes),
+                Rumors = new Dictionary<string, float>(active.Rumors),
+            };
+            var json = JsonConvert.SerializeObject(export, Formatting.Indented);
+            File.WriteAllText(path, json);
+            LogMessage($"Exported weights to {path}");
+        } catch (Exception e) {
+            LogError("Error exporting weights: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    private void ReadWeights(string path) {
+        try {
+            if (!File.Exists(path)) {
+                LogError($"Error importing weights: file not found ({path}).");
+                return;
+            }
+
+            var json = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(json)) {
+                LogError("Error importing weights: file was empty or invalid.");
+                return;
+            }
+
+            var import = JsonConvert.DeserializeObject<WeightExport>(json);
+            if (import == null) {
+                LogError("Error importing weights: file was empty or invalid.");
+                return;
+            }
+
+            foreach (var kv in import.Maps)
+                if (Settings.GameData.Maps.ContainsKey(kv.Key))
+                    Settings.TuneMap(kv.Key).Weight = kv.Value;
+
+            foreach (var kv in import.Content)
+                if (Settings.GameData.Content.ContainsKey(kv.Key))
+                    Settings.TuneContent(kv.Key).Weight = kv.Value;
+
+            foreach (var kv in import.Biomes)
+                if (Settings.GameData.Biomes.ContainsKey(kv.Key))
+                    Settings.Active.Biomes[kv.Key] = kv.Value;
+
+            foreach (var kv in import.Rumors)
+                if (Settings.GameData.Rumors.ContainsKey(kv.Key))
+                    Settings.Active.Rumors[kv.Key] = kv.Value;
+
+            weightsDirty = true;
+            refreshCache = true;
+            LogMessage($"Imported weights from {path} ({import.Maps.Count} maps, {import.Content.Count} content, {import.Biomes.Count} biomes, {import.Rumors.Count} rumours)");
+        } catch (Exception e) {
+            LogError("Error importing weights: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    private class LegacyMapEntry
+    {
+        public float Weight { get; set; }
+        public bool Highlight { get; set; }
+        public bool Favorite { get; set; }
+        public bool ColorNodesByWeight { get; set; }
+        public Color NodeColor { get; set; }
+        public SpriteIcon Icon { get; set; }
+    }
+
+    private class LegacyContentEntry
+    {
+        public float Weight { get; set; }
+        public bool Highlight { get; set; }
+        public bool Favorite { get; set; }
+    }
+
+    private class LegacyBiomeEntry
+    {
+        public float Weight { get; set; }
+    }
+
+    private void ConvertLegacySettings(string path) {
+        try {
+            if (!File.Exists(path)) {
+                LogError($"Error importing legacy settings: file not found ({path}).");
+                return;
+            }
+
+            var text = File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(text)) {
+                LogError("Error importing legacy settings: file was empty or invalid.");
+                return;
+            }
+
+            var root = JObject.Parse(text);
+            var data = root["data"] as JObject ?? root;
+            var legacySerializer = JsonSerializer.Create(SettingsContainer.jsonSettings);
+
+            Dictionary<string, Waypoint> legacyWaypoints = null;
+            if (data["Waypoints"]?["Waypoints"] is JObject wpToken)
+                legacyWaypoints = wpToken.ToObject<Dictionary<string, Waypoint>>(legacySerializer);
+
+            Dictionary<string, Tour> legacyTours = null;
+            if (data["Tours"]?["Tours"] is JObject tourToken)
+                legacyTours = tourToken.ToObject<Dictionary<string, Tour>>(legacySerializer);
+
+            var legacyProfiles = data["Profiles"]?["Profiles"] as JObject;
+            if (legacyProfiles == null || legacyProfiles.Count == 0) {
+                LogError("Error importing legacy settings: no profiles found in file.");
+                return;
+            }
+
+            string lastImported = null;
+            bool waypointsAttached = false;
+            foreach (var prop in legacyProfiles.Properties()) {
+                var entry = prop.Value as JObject;
+                if (entry == null) continue;
+
+                var profile = new Profile();
+
+                if (entry["Maps"] is JObject mapsTok) {
+                    var legacyMaps = mapsTok.ToObject<Dictionary<string, LegacyMapEntry>>(legacySerializer) ?? new();
+                    foreach (var (id, m) in legacyMaps) {
+                        profile.Maps[id] = new MapTuning {
+                            Weight = m.Weight,
+                            Highlight = m.Highlight,
+                            Favorite = m.Favorite,
+                        };
+
+                        if (m.Icon != SpriteIcon.Circle || !m.ColorNodesByWeight)
+                            profile.Labels.Maps[id] = new LabelStyleOverride {
+                                MapIcon = m.Icon,
+                                OverrideMapIconTint = !m.ColorNodesByWeight,
+                                MapIconTint = m.NodeColor,
+                            };
+                    }
+                }
+
+                if (entry["Content"] is JObject contentTok) {
+                    var legacyContent = contentTok.ToObject<Dictionary<string, LegacyContentEntry>>(legacySerializer) ?? new();
+                    foreach (var (id, c) in legacyContent)
+                        profile.Content[id] = new ContentTuning {
+                            Weight = c.Weight,
+                            Highlight = c.Highlight,
+                            Favorite = c.Favorite,
+                        };
+                }
+
+                if (entry["Biomes"] is JObject biomesTok) {
+                    var legacyBiomes = biomesTok.ToObject<Dictionary<string, LegacyBiomeEntry>>(legacySerializer) ?? new();
+                    foreach (var (id, b) in legacyBiomes)
+                        profile.Biomes[id] = b.Weight;
+                }
+
+                if (!waypointsAttached) {
+                    if (legacyWaypoints != null)
+                        foreach (var kv in legacyWaypoints)
+                            profile.Waypoints.Waypoints[kv.Key] = kv.Value;
+                    if (legacyTours != null)
+                        foreach (var kv in legacyTours)
+                            profile.Tours.Tours[kv.Key] = kv.Value;
+                    waypointsAttached = true;
+                }
+
+                string name = UniqueProfileName(Settings.Profiles, prop.Name + " (imported)");
+                Settings.Profiles.Profiles[name] = profile;
+                lastImported = name;
+            }
+
+            if (lastImported == null) {
+                LogError("Error importing legacy settings: no usable profiles found.");
+                return;
+            }
+
+            ApplyProfileSwitch(lastImported);
+            LogMessage($"Imported legacy settings from {path} into profile '{lastImported}'" +
+                (legacyProfiles.Count > 1 ? $" (+{legacyProfiles.Count - 1} more)" : "") +
+                ". Waypoints/tours attached to the first imported profile only. Graphics/Features/" +
+                "Keybinds/Hacks/Search/appearance were not carried over - they use this plugin's defaults.");
+        } catch (Exception e) {
+            LogError("Error importing legacy settings: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    private void BackupLegacySettingsOnce() {
+        if (Settings.SettingsBackupDone)
+            return;
+
+        try {
+            string fileName = Name + "_settings.json";
+            string path = Path.Combine(ConfigDirectory, fileName);
+            if (!File.Exists(path))
+                path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "config", "global", fileName);
+
+            if (!File.Exists(path)) {
+                LogMessage($"No prior settings file found at {path} - nothing to back up.");
+                Settings.SettingsBackupDone = true;
+                return;
+            }
+
+            string json = File.ReadAllText(path);
+            string backup = Path.Combine(Path.GetDirectoryName(path), Name + "_settings.pre-rework-backup.json");
+            if (!File.Exists(backup))
+                File.WriteAllText(backup, json);
+
+            Settings.SettingsBackupDone = true;
+            LogMessage($"Backed up settings to {backup} before this version's first run.");
+
+            if (!Settings.LegacyImportHandled && LooksLikeLegacySettings(json)) {
+                legacyBackupPath = backup;
+                legacyImportPending = true;
+            }
+        } catch (Exception e) {
+            LogError("Error backing up settings: " + e.Message + "\n" + e.StackTrace);
+        }
+    }
+
+    private static bool LooksLikeLegacySettings(string json) {
+        try {
+            var root = JObject.Parse(json);
+            var data = root["data"] as JObject ?? root;
+            return data["Profiles"] != null
+                && (data["Waypoints"] != null || data["Tours"] != null || data["Graphics"] != null);
+        } catch {
+            return false;
+        }
+    }
+
+    private void OpenFileDialogAsync(string title, string defaultName, bool save, Action<string> apply) {
+        if (fileDialogBusy) return;
+        fileDialogBusy = true;
+        var thread = new System.Threading.Thread(() => {
+            try {
+                string chosen = save
+                    ? NativeFileDialog.ShowSave(title, defaultName, DirectoryFullName)
+                    : NativeFileDialog.ShowOpen(title, DirectoryFullName);
+                if (!string.IsNullOrEmpty(chosen))
+                    pendingFileAction = () => apply(chosen);
+            } catch (Exception e) {
+                LogError("Error opening file dialog: " + e.Message);
+            } finally {
+                fileDialogBusy = false;
+            }
+        });
+        thread.IsBackground = true;
+        thread.SetApartmentState(System.Threading.ApartmentState.STA);
+        thread.Start();
+    }
+
+    #endregion
+
+}
+
+#region Settings Root
+
+public class GameData
+{
+    public Dictionary<string, MapInfo> Maps { get; set; } = new();
+    public Dictionary<string, ContentInfo> Content { get; set; } = new();
+    public Dictionary<string, BiomeInfo> Biomes { get; set; } = new();
+    public Dictionary<string, RumorInfo> Rumors { get; set; } = new();
+}
+
+public class ExileMapsSettings : ISettings
+{
+    public ToggleNode Enable { get; set; } = new ToggleNode(false);
+
+    public bool SettingsBackupDone { get; set; } = false;
+    public bool LegacyImportHandled { get; set; } = false;
+
+    public class ProfileSettings
+    {
+        public string ActiveProfile { get; set; } = "Default";
+        public Dictionary<string, Profile> Profiles { get; set; } = new() { { "Default", new() } };
+
+        public void SwitchProfile(string name)
+        {
+            if (Profiles.ContainsKey(name)) ActiveProfile = name;
+        }
+
+        public void EnsureDefaultProfile()
+        {
+            if (Profiles.Count == 0)
+                Profiles["Default"] = new();
+            if (string.IsNullOrEmpty(ActiveProfile) || !Profiles.ContainsKey(ActiveProfile))
+                ActiveProfile = Profiles.Keys.First();
+        }
+    }
+
+    [JsonIgnore]
+    public GameData GameData { get; set; } = new();
+
+    private sealed record ActiveProfileMemo(string Name, Profile Profile);
+    [JsonIgnore] private ActiveProfileMemo activeMemo;
+
+    public void InvalidateActiveProfile() => activeMemo = null;
+
+    [JsonIgnore]
+    public Profile Active
+    {
+        get
+        {
+            string name = Profiles.ActiveProfile ?? "";
+            var memo = activeMemo;
+            if (memo != null && memo.Name == name)
+                return memo.Profile;
+
+            if (Profiles.Profiles.TryGetValue(name, out var p)) {
+                activeMemo = new ActiveProfileMemo(name, p);
+                return p;
+            }
+            Profiles.EnsureDefaultProfile();
+            var fallback = Profiles.Profiles[Profiles.ActiveProfile];
+            activeMemo = new ActiveProfileMemo(Profiles.ActiveProfile, fallback);
+            return fallback;
+        }
+    }
+
+    public MapTuning TuneMap(string id) => Active.Maps.GetOrAdd(id, _ => new MapTuning());
+
+    public ContentTuning TuneContent(string id) => Active.Content.GetOrAdd(id, _ => new ContentTuning());
+
+    public float BiomeWeight(string id) => id != null && Active.Biomes.TryGetValue(id, out float w) ? w : 0f;
+
+    public float RumorWeight(string id) => id != null && Active.Rumors.TryGetValue(id, out float w) ? w : 0f;
+
+    private static readonly MapTuning UntunedMap = new();
+    private static readonly ContentTuning UntunedContent = new();
+    public MapTuning ReadMap(string id) => id != null && Active.Maps.TryGetValue(id, out var t) ? t : UntunedMap;
+
+    public ContentTuning ReadContent(string id) => id != null && Active.Content.TryGetValue(id, out var t) ? t : UntunedContent;
+
+    public ProfileSettings Profiles { get; set; } = new();
+
+    [JsonIgnore] public FeatureSettings Features => Active.Features;
+    [JsonIgnore] public ExpeditionSettings Expeditions => Active.Expeditions;
+    [JsonIgnore] public ContentDisplaySettings ContentDisplay => Active.ContentDisplay;
+    [JsonIgnore] public HotkeySettings Keybinds => Active.Keybinds;
+    [JsonIgnore] public GraphicSettings Graphics => Active.Graphics;
+
+    [JsonIgnore] public LabelStyleSettings Labels => Active.Labels;
+
+    [JsonIgnore] public AtlasOverviewSettings AtlasOverview => Active.AtlasOverview;
+
+    [JsonIgnore] public TourSettings Tours => Active.Tours;
+
+    [JsonIgnore] public MapSettings Maps => Active.MapAppearance;
+    [JsonIgnore] public WaypointSettings Waypoints => Active.Waypoints;
+
+    [JsonIgnore] public HackSettings Hacks => Active.Hacks;
+
+    [JsonIgnore] public SearchSettings Search => Active.Search;
+}
+
+public class SearchSettings
+{
+    public bool HookIngameSearch = true;
+
+    public bool ShowSearchBox = false;
+
+    public System.Numerics.Vector2 BoxPos = System.Numerics.Vector2.Zero;
+
+    public System.Numerics.Vector2 ResultsOffset = System.Numerics.Vector2.Zero;
+
+    public int MaxResults = 10;
+
+    public bool HighlightMatches = true;
+
+    public ColorNode HighlightColor { get; set; } = new ColorNode(Color.FromArgb(255, 255, 210, 90));
+
+    public float HighlightSize = 0.45f;
+}
+
+public class HackSettings
+{
+    public bool EnableMemoryWrites { get; set; } = false;
+
+    public bool AtlasZoom { get; set; } = false;
+    public bool AtlasFog { get; set; } = false;
+    public bool AtlasCameraPan { get; set; } = false;
+
+    public float PanSpeed { get; set; } = 10f;
+
+    public int VerifyEveryFrames { get; set; } = 1;
+}
+
+#endregion
+
+#region Feature + Hotkey Settings
+
+public class FeatureSettings
+{
+    public bool EnableDrawing = true;
+
+    public bool DebugMode = false;
+
+    public bool ShowPerfMonitor = false;
+
+    public bool ShowAtlasButton = true;
+
+    public System.Numerics.Vector2 AtlasButtonPos = System.Numerics.Vector2.Zero;
+
+    public ExpeditionMarkers ExpeditionMarkers { get; set; } = ExpeditionMarkers.Nearest;
+
+}
+
+public enum ExpeditionMarkers { Off, Nearest, All }
+public class HotkeySettings
+{
+
+    public HotkeyNodeV2 ToggleDrawingHotkey { get; set; } = new HotkeyNodeV2(Keys.Scroll);
+
+    public HotkeyNodeV2 RefreshMapCacheHotkey { get; set; } = new HotkeyNodeV2(Keys.Home);
+
+    public HotkeyNodeV2 QuickEditNodeHotkey { get; set; } = new HotkeyNodeV2(Keys.Multiply);
+
+    public HotkeyNodeV2 ToggleAtlasOverviewHotkey { get; set; } = new HotkeyNodeV2(Keys.Pause);
+
+    public HotkeyNodeV2 ToggleWaypointPanelHotkey { get; set; } = new HotkeyNodeV2(Keys.End);
+
+    public HotkeyNodeV2 ToggleToursPanelHotkey { get; set; } = new HotkeyNodeV2(Keys.F13);
+
+    public HotkeyNodeV2 AddTourStopHotkey { get; set; } = new HotkeyNodeV2(Keys.NumPad7);
+
+    public HotkeyNodeV2 BuildModeHotkey { get; set; } = new HotkeyNodeV2(Keys.NumPad8);
+
+    public HotkeyNodeV2 AddWaypointHotkey { get; set; } = new HotkeyNodeV2(Keys.Insert);
+
+    public HotkeyNodeV2 DeleteWaypointHotkey { get; set; } = new HotkeyNodeV2(Keys.Delete);
+}
+
+[Flags]
+public enum NodeStates
+{
+    None     = 0,
+    Visited  = 1,
+    Unlocked = 2,
+    Locked   = 4,
+    Hidden   = 8,
+}
+
+#endregion
+
+#region Graphics Settings
+
+public class GraphicSettings
+{
+
+    public NodeStates DrawNodes { get; set; } = NodeStates.Visited | NodeStates.Unlocked | NodeStates.Locked | NodeStates.Hidden;
+    public NodeStates DrawNames { get; set; } = NodeStates.Visited | NodeStates.Unlocked | NodeStates.Locked | NodeStates.Hidden;
+    public NodeStates DrawLines { get; set; } = NodeStates.Visited | NodeStates.Unlocked | NodeStates.Locked | NodeStates.Hidden;
+
+    public int MapCacheRefreshRate = 1;
+
+    public float NodeRadius = 1.856f;
+
+    public bool UseNodeIcons = true;
+
+    public bool ContentIconsSkipGameDrawn = true;
+
+    public float IconSize { get; set; } = 28f;
+
+    public bool ShowContentRow = true;
+
+    public bool ShowBiomeIcon = true;
+
+    public bool DrawWeightOnMap = false;
+
+    public float MapLineWidth = 4.0f;
+
+    public bool DrawGradientLines = true;
+
+    public ColorNode VisitedLineColor { get; set; } = new ColorNode(Color.FromArgb(77, 128, 128, 128));
+
+    public ColorNode UnlockedLineColor { get; set; } = new ColorNode(Color.FromArgb(128, 18, 228, 18));
+
+    public ColorNode LockedLineColor { get; set; } = new ColorNode(Color.FromArgb(128, 149, 20, 20));
+
+    public bool ShowConnectionLines = true;
+
+    public bool UseGameConnectionCurves = true;
+
+    public bool ShowPaths = true;
+
+    public float WaypointLineWidth = 5.051f;
+
+    public float WaypointDashLength = 20.0f;
+
+    public float WaypointDashGap = 10.0f;
+
+    public float WaypointArrowMinDistance = 641.454f;
+
+    public bool ShowAtlasQuestIndicator = false;
+
+    public bool ShowSpecialMapIndicator = true;
+
+    public bool HideCompletedSpecialMaps = true;
+
+    public int MapNameOffsetY = 30;
+
+    public bool UppercaseMapNames = true;
+
+    public bool ScaleLabelsWithZoom = true;
+
+    public float MinZoomScale = 0.8f;
+
+    public float ZoomScaleStart = 0.6f;
+
+}
+
+#endregion
+
+#region Panel Settings
+
+public class AtlasOverviewSettings
+{
+    public int ReachableSteps = 5;
+}
+
+public class TourSettings
+{
+    public bool ShowTours = true;
+
+    public bool ShowNextStopTarget = true;
+
+    public string ActiveTourId { get; set; } = "";
+
+    public Dictionary<string, Tour> Tours { get; set; } = [];
+
+    public List<string> AutoTourContent { get; set; } = new();
+
+    public int AutoTourReach { get; set; } = 5;
+}
+
+#endregion
+
+#region Map, Biome + Content Settings
+
+public enum NodeColorMode { Weight, Status, Static }
+
+public class ContentDisplaySettings
+{
+    public static readonly string[] AtlasPointTypes = { "Breach", "Abyss", "Incursion", "Delirium", "Ritual", "Expedition" };
+
+    public bool ShowGenericAtlasPoint { get; set; } = true;
+
+    public bool ColorRumorsByWeight { get; set; } = true;
+
+    public Dictionary<string, bool> AtlasPointIcons { get; set; } = new();
+
+    public bool ShowAtlasPoint(string type) =>
+        string.IsNullOrEmpty(type)
+            ? ShowGenericAtlasPoint
+            : !AtlasPointIcons.TryGetValue(type, out var on) || on;
+}
+
+public class MapSettings
+{
+    public NodeColorMode NodeColorMode { get; set; } = NodeColorMode.Weight;
+
+    public Color GoodNodeColor { get; set; } = Color.FromArgb(80, 111, 207, 122);
+    public Color NeutralNodeColor { get; set; } = Color.FromArgb(80, 217, 193, 103);
+    public Color BadNodeColor { get; set; } = Color.FromArgb(80, 224, 103, 103);
+
+    public Color VisitedNodeColor { get; set; } = Color.FromArgb(80, 111, 207, 122);
+    public Color UnlockedNodeColor { get; set; } = Color.FromArgb(80, 217, 193, 103);
+    public Color LockedNodeColor { get; set; } = Color.FromArgb(80, 224, 103, 103);
+    public Color HiddenNodeColor { get; set; } = Color.FromArgb(80, 130, 130, 130);
+
+    public Color StaticNodeColor { get; set; } = Color.FromArgb(80, 200, 200, 200);
+
+    public SpecialMapSettings SpecialMaps { get; set; } = new SpecialMapSettings();
+}
+
+public class SpecialMapSettings
+{
+    public bool UseMaxWeight { get; set; } = true;
+    public float MaxWeight { get; set; } = 50f;
+}
+
+#endregion
+
+#region Waypoint Settings
+
+public class WaypointSettings
+{
+    public bool ShowWaypoints { get; set; } = true;
+    public bool ShowWaypointArrows { get; set; } = true;
+    public bool InverWaypointArrowsColors { get; set; } = true;
+    public bool AutoWaypointFavorites { get; set; } = false;
+    public bool AutoRemoveCompletedWaypoints { get; set; } = true;
+
+    public Dictionary<string, Waypoint> Waypoints { get; set; } = [];
+}
+
+#endregion
+
+#region Expedition Settings
+
+public class ExpeditionSettings
+{
+    public ColorNode HighlightColor { get; set; } = new ColorNode(Color.FromArgb(220, 90, 200, 255));
+}
+
+#endregion
