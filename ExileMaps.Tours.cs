@@ -163,7 +163,7 @@ public partial class ExileMapsCore
             if (nodes.Count == 0) { t.BuiltVersion = mapCacheVersion; return; }
 
             var first = nodes[0];
-            var (incoming, _) = FindPathToNearestCompleted(first);
+            var (incoming, _) = FindPathToNearestCompleted(first, TourExtraMapCost);
             t.Segments.Add(incoming ?? new List<Node> { first });
             t.ResolvedStops.Add(first);
 
@@ -596,6 +596,24 @@ public partial class ExileMapsCore
         catch (Exception e) { LogError("Error auto-creating tour: " + e.Message); }
     }
 
+    private void DrawTourRoutingControls()
+    {
+        bool changed = false;
+        bool weightAware = Settings.Tours.WeightAwareRouting;
+        if (ImGui.Checkbox("Weight-aware routing", ref weightAware)) { Settings.Tours.WeightAwareRouting.Value = weightAware; changed = true; }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Take a longer tour when the extra maps are worth it. Off = fewest maps, weight only breaks ties.");
+        if (weightAware)
+        {
+            ImGui.SameLine();
+            float extraCost = Settings.Tours.ExtraMapCost;
+            ImGui.SetNextItemWidth(140);
+            if (ImGui.SliderFloat("Extra map cost", ref extraCost, 0f, 100f, "%.0f")) { Settings.Tours.ExtraMapCost.Value = extraCost; changed = true; }
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Weight-aware routing: each map to run costs (this - map weight, min 0), cheapest route wins. Set it near the weight of a map you'd call fine.");
+        }
+        if (changed)
+            foreach (var t in Settings.Tours.Tours.Values) t.BuiltVersion = -1;
+    }
+
     // ---- UI ----
 
     private string StopLabel(TourStop s)
@@ -690,6 +708,8 @@ public partial class ExileMapsCore
                 if (ImGui.Button(buildModeActive ? $"Building... ({Settings.Keybinds.BuildModeExitHotkey.Value})" : "Build Mode")) buildModeActive = !buildModeActive;
                 if (buildModeActive) ImGui.PopStyleColor();
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip("Left-click atlas nodes to add stops to the active tour; right-click removes. Press the Build Mode exit key (default Tab) to exit.");
+
+                DrawTourRoutingControls();
                 ImGui.Separator();
 
                 DrawAutoTourSection();

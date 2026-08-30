@@ -13,125 +13,82 @@ namespace ExileMaps;
 
 public partial class ExileMapsCore
 {
-    // BFS from destination to nearest visited node (anchor). Among equal-length paths, picks highest
-    // summed weight. Returns [anchor, ..., destination] plus weight, or (null, 0) if unreachable.
-    private (List<Node> path, float weight) FindPathToNearestCompleted(Node destination)
+    // Per-node routing cost. Completed nodes (visited, or in `done`) are free. A fresh map costs 1, or
+    // with weight-aware routing (`extraMapCost` set: extraMapCost - weight, clamped >= 0): a map worth
+    // more than the cost of running one extra map is free to detour through, a worse one costs the difference.
+    private static float RouteCost(Node n, HashSet<Vector2i> done, float? extraMapCost, out bool fresh)
     {
-        if (destination == null)
-            return (null, 0f);
-
-        // Destination already completed: trivial one-node path.
-        if (destination.IsVisited)
-            return (new List<Node> { destination }, destination.Weight);
-
-        var dist = new Dictionary<Vector2i, int>();
-        var best = new Dictionary<Vector2i, float>();    // max accumulated weight among shortest paths
-        var parent = new Dictionary<Vector2i, Node>();
-        var queue = new Queue<Node>();
-
-        dist[destination.Coordinates] = 0;
-        best[destination.Coordinates] = destination.Weight;
-        parent[destination.Coordinates] = null;
-        queue.Enqueue(destination);
-
-        int anchorDist = int.MaxValue;
-        float anchorWeight = float.NegativeInfinity;
-        Node anchor = null;
-
-        while (queue.Count > 0)
-        {
-            var current = queue.Dequeue();
-            int cd = dist[current.Coordinates];
-
-            // All nodes at anchorDist are dequeued before farther nodes (FIFO); stop once past it.
-            if (cd > anchorDist)
-                break;
-
-            // Visited node: candidate anchor. Don't expand; route ends here. Prefer nearest, then heaviest.
-            if (current.IsVisited && current.Coordinates != destination.Coordinates)
-            {
-                float w = best[current.Coordinates];
-                if (cd < anchorDist || (cd == anchorDist && w > anchorWeight))
-                {
-                    anchorDist = cd;
-                    anchorWeight = w;
-                    anchor = current;
-                }
-                continue;
-            }
-
-            foreach (var neighbor in current.Neighbors.Values)
-            {
-                if (neighbor == null)
-                    continue;
-                int nd = cd + 1;
-                // Skip visited nodes in path weight (pinned to 500; only the anchor appears).
-                float nw = best[current.Coordinates] + (neighbor.IsVisited ? 0f : neighbor.Weight);
-                if (!dist.TryGetValue(neighbor.Coordinates, out int existing))
-                {
-                    dist[neighbor.Coordinates] = nd;
-                    best[neighbor.Coordinates] = nw;
-                    parent[neighbor.Coordinates] = current;
-                    queue.Enqueue(neighbor);
-                }
-                else if (existing == nd && nw > best[neighbor.Coordinates])
-                {
-                    // Equal-distance alternative with a higher summed weight: prefer it.
-                    best[neighbor.Coordinates] = nw;
-                    parent[neighbor.Coordinates] = current;
-                }
-            }
-        }
-
-        if (anchor == null)
-            return (null, 0f);
-
-        // Walk parent links from anchor toward destination to reconstruct the path.
-        var path = new List<Node>();
-        for (Node n = anchor; n != null; n = parent[n.Coordinates])
-            path.Add(n);
-
-        return (path, anchorWeight);
+        fresh = !(n.IsVisited || n.IsCompleted || (done != null && done.Contains(n.Coordinates)));
+        if (!fresh) return 0f;
+        if (extraMapCost == null) return 1f;
+        return Math.Max(0f, extraMapCost.Value - n.Weight);
     }
 
-    // Cheapest path from `from` to `to`. Each fresh map costs 1; nodes already completed (visited, or
-    // in `done` - corridors/stops committed earlier in the same tour) cost 0. Among equal-cost paths
-    // prefer the highest summed weight of the fresh nodes. Returns [from, ..., to] with its cost, or
-    // (null, 0) if unreachable. Dijkstra on (cost, -weight); graph is ~1000 nodes so this is cheap.
-    private (List<Node> path, int cost) FindPath(Node from, Node to, HashSet<Vector2i> done = null)
-    {
-        if (from == null || to == null) return (null, 0);
-        if (from.Coordinates == to.Coordinates) return (new List<Node> { from }, 0);
+    // Tours / Waypoints each have their own toggle + cost; null = weight-aware routing off.
+    private float? TourExtraMapCost => Settings.Tours.WeightAwareRouting ? Settings.Tours.ExtraMapCost.Value : null;
+    private float? WaypointExtraMapCost => Settings.Waypoints.WeightAwareRouting ? Settings.Waypoints.ExtraMapCost : null;
 
-        var cost = new Dictionary<Vector2i, int> { [from.Coordinates] = 0 };
-        var weight = new Dictionary<Vector2i, float> { [from.Coordinates] = 0f };
-        var parent = new Dictionary<Vector2i, Node> { [from.Coordinates] = null };
-        var pq = new PriorityQueue<Node, (int cost, float negWeight)>();
-        pq.Enqueue(from, (0, 0f));
+    // Shared Dijkstra core. Expands from `start` until a node satisfying `isGoal` is popped. Priority
+    // is (route cost, fresh-map count, -summed weight), so without weight-aware routing this is
+    // "fewest maps, then heaviest". Goal nodes are never expanded. Returns [start, ..., goal] plus the
+    // fresh-map count and summed fresh weight, or (null, 0, 0) if no goal is reachable.
+    private (List<Node> path, int steps, float weight) Route(Node start, Func<Node, bool> isGoal, HashSet<Vector2i> done, float? extraMapCost)
+    {
+        var best = new Dictionary<Vector2i, (float cost, int steps, float weight)> { [start.Coordinates] = (0f, 0, 0f) };
+        var parent = new Dictionary<Vector2i, Node> { [start.Coordinates] = null };
+        var pq = new PriorityQueue<Node, (float cost, int steps, float negWeight)>();
+        pq.Enqueue(start, (0f, 0, 0f));
+
+        static bool Better((float cost, int steps, float weight) a, (float cost, int steps, float weight) b)
+            => a.cost < b.cost || (a.cost == b.cost && (a.steps < b.steps || (a.steps == b.steps && a.weight > b.weight)));
 
         while (pq.TryDequeue(out var current, out var pri))
         {
             var c = current.Coordinates;
-            if (pri.cost > cost[c] || (pri.cost == cost[c] && -pri.negWeight < weight[c])) continue; // stale
-            if (c == to.Coordinates) break;
+            var cur = best[c];
+            if (Better(cur, (pri.cost, pri.steps, -pri.negWeight))) continue; // stale entry
+            if (isGoal(current))
+            {
+                var path = new List<Node>();
+                for (Node n = current; n != null; n = parent[n.Coordinates]) path.Add(n);
+                path.Reverse(); // start -> goal
+                return (path, cur.steps, cur.weight);
+            }
             foreach (var nb in current.Neighbors.Values)
             {
                 if (nb == null) continue;
-                bool free = nb.IsVisited || nb.IsCompleted || (done != null && done.Contains(nb.Coordinates));
-                int nc = cost[c] + (free ? 0 : 1);
-                float nw = weight[c] + (free ? 0f : nb.Weight);
-                if (cost.TryGetValue(nb.Coordinates, out int oc) && (oc < nc || (oc == nc && weight[nb.Coordinates] >= nw)))
-                    continue;
-                cost[nb.Coordinates] = nc; weight[nb.Coordinates] = nw; parent[nb.Coordinates] = current;
-                pq.Enqueue(nb, (nc, -nw));
+                float step = RouteCost(nb, done, extraMapCost, out bool fresh);
+                var cand = (cur.cost + step, cur.steps + (fresh ? 1 : 0), cur.weight + (fresh ? nb.Weight : 0f));
+                if (best.TryGetValue(nb.Coordinates, out var old) && !Better(cand, old)) continue;
+                best[nb.Coordinates] = cand; parent[nb.Coordinates] = current;
+                pq.Enqueue(nb, (cand.Item1, cand.Item2, -cand.Item3));
             }
         }
+        return (null, 0, 0f);
+    }
 
-        if (!parent.ContainsKey(to.Coordinates)) return (null, 0);
-        var path = new List<Node>();
-        for (Node n = to; n != null; n = parent[n.Coordinates]) path.Add(n);
-        path.Reverse(); // from -> to
-        return (path, cost[to.Coordinates]);
+    // Route from destination to the nearest visited node (anchor). Used for waypoint routes and a tour's
+    // lead-in; the caller passes its own extra-map cost (null = off). Returns [anchor, ..., destination]
+    // plus summed weight, or (null, 0) if unreachable.
+    private (List<Node> path, float weight) FindPathToNearestCompleted(Node destination, float? extraMapCost)
+    {
+        if (destination == null) return (null, 0f);
+        if (destination.IsVisited) return (new List<Node> { destination }, destination.Weight);
+
+        var (path, _, weight) = Route(destination, n => n.IsVisited && n.Coordinates != destination.Coordinates, null, extraMapCost);
+        if (path == null) return (null, 0f);
+        path.Reverse(); // anchor -> destination
+        return (path, weight + destination.Weight);
+    }
+
+    // Tour segment (Tours.WeightAwareRouting). `done` = nodes committed earlier in the same tour (free to reuse).
+    // Returns [from, ..., to] plus the number of fresh maps on it, or (null, 0) if unreachable.
+    private (List<Node> path, int steps) FindPath(Node from, Node to, HashSet<Vector2i> done = null)
+    {
+        if (from == null || to == null) return (null, 0);
+        if (from.Coordinates == to.Coordinates) return (new List<Node> { from }, 0);
+        var (path, steps, _) = Route(from, n => n.Coordinates == to.Coordinates, done, TourExtraMapCost);
+        return (path, steps);
     }
 
     // Multi-source BFS from all visited nodes. Returns step distances from the explored region;
@@ -253,7 +210,7 @@ public partial class ExileMapsCore
         {
             if (mapCache.TryGetValue(waypoint.Coordinates, out Node waypointNode))
             {
-                var (path, weight) = FindPathToNearestCompleted(waypointNode);
+                var (path, weight) = FindPathToNearestCompleted(waypointNode, WaypointExtraMapCost);
                 waypoint.PathFromStart = path;
                 waypoint.PathWeight = weight;
             }
