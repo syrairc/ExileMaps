@@ -1,4 +1,4 @@
-// Named tours: build, optimize, draw, Tours panel, Build Mode, panel button bar.
+﻿// Named tours: build, optimize, draw, Tours panel, Build Mode, panel button bar.
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -163,17 +163,20 @@ public partial class ExileMapsCore
             if (nodes.Count == 0) { t.BuiltVersion = mapCacheVersion; return; }
 
             var first = nodes[0];
-            var (incoming, _) = FindPathToNearestCompleted(first);
+            var (incoming, _) = FindPathToNearestCompleted(first, TourExtraMapCost);
             t.Segments.Add(incoming ?? new List<Node> { first });
             t.ResolvedStops.Add(first);
 
+            // Nodes the tour will have completed by the time each later segment is walked: free to reuse.
+            var done = new HashSet<Vector2i>(t.Segments[0].Select(n => n.Coordinates));
             Node anchor = first;
             for (int i = 1; i < nodes.Count; i++)
             {
-                var path = FindPath(anchor, nodes[i]);
+                var (path, _) = FindPath(anchor, nodes[i], done);
                 if (path == null) { t.Skipped.Add(nodes[i].Name ?? $"(stop {i + 1})"); continue; }
                 t.Segments.Add(path);
                 t.ResolvedStops.Add(nodes[i]);
+                done.UnionWith(path.Select(n => n.Coordinates));
                 anchor = nodes[i];
             }
 
@@ -217,18 +220,21 @@ public partial class ExileMapsCore
             ordered.Add(current);
             remaining.Remove(current);
 
+            var done = new HashSet<Vector2i>();
             while (remaining.Count > 0)
             {
                 List<Node> bestPath = null;
+                int bestCost = int.MaxValue;
                 Node bestNode = null;
                 foreach (var cand in remaining)
                 {
-                    var path = FindPath(current, cand);
+                    var (path, cost) = FindPath(current, cand, done);
                     if (path == null) continue;
-                    if (bestPath == null || path.Count < bestPath.Count) { bestPath = path; bestNode = cand; }
+                    if (cost < bestCost) { bestPath = path; bestCost = cost; bestNode = cand; }
                 }
                 // Unreachable from current: fall back to nearest-to-frontier among the rest.
                 if (bestNode == null) bestNode = remaining.OrderBy(Steps).First();
+                else done.UnionWith(bestPath.Select(n => n.Coordinates));
                 ordered.Add(bestNode);
                 remaining.Remove(bestNode);
                 current = bestNode;
@@ -555,19 +561,21 @@ public partial class ExileMapsCore
             var chain = new List<Node> { start };
             var remaining = candidates.Where(c => !ReferenceEquals(c, start)).ToList();
             Node current = start;
+            var done = new HashSet<Vector2i>();
             while (remaining.Count > 0)
             {
                 Node best = null;
+                List<Node> bestPath = null;
                 int bestSteps = int.MaxValue;
                 foreach (var cand in remaining)
                 {
-                    var path = FindPath(current, cand);
+                    var (path, steps) = FindPath(current, cand, done); // steps = fresh maps to run
                     if (path == null) continue;
-                    int steps = path.Count - 1;
                     if (steps > n) continue;                 // out of range
-                    if (steps < bestSteps) { bestSteps = steps; best = cand; }
+                    if (steps < bestSteps) { bestSteps = steps; best = cand; bestPath = path; }
                 }
                 if (best == null) break;                     // no valid content within N steps
+                done.UnionWith(bestPath.Select(x => x.Coordinates));
                 chain.Add(best);
                 remaining.Remove(best);
                 current = best;
@@ -586,6 +594,24 @@ public partial class ExileMapsCore
             toursPanelOpen = true;
         }
         catch (Exception e) { LogError("Error auto-creating tour: " + e.Message); }
+    }
+
+    private void DrawTourRoutingControls()
+    {
+        bool changed = false;
+        bool weightAware = Settings.Tours.WeightAwareRouting;
+        if (ImGui.Checkbox("Weight-aware routing", ref weightAware)) { Settings.Tours.WeightAwareRouting.Value = weightAware; changed = true; }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Take a longer tour when the extra maps are worth it. Off = fewest maps, weight only breaks ties.");
+        if (weightAware)
+        {
+            ImGui.SameLine();
+            float extraCost = Settings.Tours.ExtraMapCost;
+            ImGui.SetNextItemWidth(140);
+            if (ImGui.SliderFloat("Extra map cost", ref extraCost, 0f, 100f, "%.0f")) { Settings.Tours.ExtraMapCost.Value = extraCost; changed = true; }
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Weight-aware routing: each map to run costs (this - map weight, min 0), cheapest route wins. Set it near the weight of a map you'd call fine.");
+        }
+        if (changed)
+            foreach (var t in Settings.Tours.Tours.Values) t.BuiltVersion = -1;
     }
 
     // ---- UI ----
@@ -682,6 +708,8 @@ public partial class ExileMapsCore
                 if (ImGui.Button(buildModeActive ? $"Building... ({Settings.Keybinds.BuildModeExitHotkey.Value})" : "Build Mode")) buildModeActive = !buildModeActive;
                 if (buildModeActive) ImGui.PopStyleColor();
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip("Left-click atlas nodes to add stops to the active tour; right-click removes. Press the Build Mode exit key (default Tab) to exit.");
+
+                DrawTourRoutingControls();
                 ImGui.Separator();
 
                 DrawAutoTourSection();

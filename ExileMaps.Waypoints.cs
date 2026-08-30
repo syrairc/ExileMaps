@@ -151,6 +151,23 @@ public partial class ExileMapsCore
         Graphics.DrawQuad(texId, a + n, b + n, b - n, a - n, color);
     }
 
+    private void DrawWaypointRoutingControls()
+    {
+        bool changed = false;
+        bool weightAware = Settings.Waypoints.WeightAwareRouting;
+        if (ImGui.Checkbox("Weight-aware routing", ref weightAware)) { Settings.Waypoints.WeightAwareRouting = weightAware; changed = true; }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Take a longer waypoint route when the extra maps are worth it. Off = fewest maps, weight only breaks ties.");
+        if (weightAware)
+        {
+            ImGui.SameLine();
+            float extraCost = Settings.Waypoints.ExtraMapCost;
+            ImGui.SetNextItemWidth(140);
+            if (ImGui.SliderFloat("Extra map cost", ref extraCost, 0f, 100f, "%.0f")) { Settings.Waypoints.ExtraMapCost = extraCost; changed = true; }
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip("Weight-aware routing: each map to run costs (this - map weight, min 0), cheapest route wins. Set it near the weight of a map you'd call fine.");
+        }
+        if (changed) UpdateWaypointPaths();
+    }
+
     private void DrawWaypointPanel() {
         // Default footprint on first open: inset 30px from the screen's top-left, and 85% of the
         // interface height. Restored from saved rect after; the user can move/resize freely.
@@ -192,6 +209,7 @@ public partial class ExileMapsCore
         }
         ImGui.EndTable();
 
+        DrawWaypointRoutingControls();
         ImGui.Spacing();
 
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(0, 10));

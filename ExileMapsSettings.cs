@@ -866,6 +866,12 @@ public class TourSettings
     [Menu("Auto-clear Completed Stops", "When rebuilding a tour, automatically drop stops whose map you've already completed.")]
     public ToggleNode AutoClearCompleted { get; set; } = new ToggleNode(true);
 
+    [Menu("Weight-aware Routing", "Take a longer tour when the extra maps are worth it. Off = fewest maps, weight only breaks ties.")]
+    public ToggleNode WeightAwareRouting { get; set; } = new ToggleNode(false);
+
+    [Menu("Extra Map Cost", "Weight-aware routing: each map to run costs (this - map weight, min 0), cheapest route wins. Set it near the weight of a map you'd call fine.")]
+    public RangeNode<float> ExtraMapCost { get; set; } = new RangeNode<float>(25f, 0f, 100f);
+
     // Id of the tour the Add-Tour-Stop hotkey targets. Empty = none active.
     public string ActiveTourId { get; set; } = "";
 
@@ -1392,6 +1398,8 @@ public class WaypointSettings
     public bool InverWaypointArrowsColors { get; set; } = true;
     public bool AutoWaypointFavorites { get; set; } = false;
     public bool AutoRemoveCompletedWaypoints { get; set; } = true;
+    public bool WeightAwareRouting { get; set; } = false;
+    public float ExtraMapCost { get; set; } = 25f;
 
     public int WaypointPanelMaxItems { get; set; } = 160;
     public int WaypointPanelMaxSteps { get; set; } = 0; // 0 = unlimited
@@ -1475,6 +1483,27 @@ public class WaypointSettings
 
                     ImGui.TableNextColumn();
                     ImGui.Text("Auto Remove Completed Waypoints");
+
+                    // weight-aware routing
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    bool _weightAware = WeightAwareRouting;
+                    if(ImGui.Checkbox($"##waypoint_weight_aware", ref _weightAware))
+                        WeightAwareRouting = _weightAware;
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("Take a longer waypoint route when the extra maps are worth it. Off = fewest maps, weight only breaks ties.");
+
+                    ImGui.TableNextColumn();
+                    ImGui.Text("Weight-aware Routing");
+
+                    // extra map cost
+                    ImGui.TableNextRow();
+                    ImGui.TableNextColumn();
+                    ImGui.TableNextColumn();
+                    float _extraCost = ExtraMapCost;
+                    ImGui.SetNextItemWidth(160);
+                    if (ImGui.SliderFloat("Extra Map Cost##waypoint_extra_cost", ref _extraCost, 0f, 100f, "%.0f"))
+                        ExtraMapCost = _extraCost;
+                    if (ImGui.IsItemHovered()) ImGui.SetTooltip("Weight-aware routing: each map to run costs (this - map weight, min 0), cheapest route wins. Set it near the weight of a map you'd call fine.");
 
                     ImGui.TableNextRow();
 
