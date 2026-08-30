@@ -94,35 +94,44 @@ public partial class ExileMapsCore
         return (path, anchorWeight);
     }
 
-    // Plain BFS over the adjacency graph from `from` to `to`. Returns [from, ..., to], or null if
-    // unreachable. Used to build tour segments between two arbitrary cache nodes.
-    private List<Node> FindPath(Node from, Node to)
+    // Cheapest path from `from` to `to`. Each fresh map costs 1; nodes already completed (visited, or
+    // in `done` - corridors/stops committed earlier in the same tour) cost 0. Among equal-cost paths
+    // prefer the highest summed weight of the fresh nodes. Returns [from, ..., to] with its cost, or
+    // (null, 0) if unreachable. Dijkstra on (cost, -weight); graph is ~1000 nodes so this is cheap.
+    private (List<Node> path, int cost) FindPath(Node from, Node to, HashSet<Vector2i> done = null)
     {
-        if (from == null || to == null) return null;
-        if (from.Coordinates == to.Coordinates) return new List<Node> { from };
+        if (from == null || to == null) return (null, 0);
+        if (from.Coordinates == to.Coordinates) return (new List<Node> { from }, 0);
 
+        var cost = new Dictionary<Vector2i, int> { [from.Coordinates] = 0 };
+        var weight = new Dictionary<Vector2i, float> { [from.Coordinates] = 0f };
         var parent = new Dictionary<Vector2i, Node> { [from.Coordinates] = null };
-        var queue = new Queue<Node>();
-        queue.Enqueue(from);
+        var pq = new PriorityQueue<Node, (int cost, float negWeight)>();
+        pq.Enqueue(from, (0, 0f));
 
-        while (queue.Count > 0)
+        while (pq.TryDequeue(out var current, out var pri))
         {
-            var current = queue.Dequeue();
-            foreach (var neighbor in current.Neighbors.Values)
+            var c = current.Coordinates;
+            if (pri.cost > cost[c] || (pri.cost == cost[c] && -pri.negWeight < weight[c])) continue; // stale
+            if (c == to.Coordinates) break;
+            foreach (var nb in current.Neighbors.Values)
             {
-                if (neighbor == null || parent.ContainsKey(neighbor.Coordinates)) continue;
-                parent[neighbor.Coordinates] = current;
-                if (neighbor.Coordinates == to.Coordinates)
-                {
-                    var path = new List<Node>();
-                    for (Node n = neighbor; n != null; n = parent[n.Coordinates]) path.Add(n);
-                    path.Reverse(); // from -> to
-                    return path;
-                }
-                queue.Enqueue(neighbor);
+                if (nb == null) continue;
+                bool free = nb.IsVisited || nb.IsCompleted || (done != null && done.Contains(nb.Coordinates));
+                int nc = cost[c] + (free ? 0 : 1);
+                float nw = weight[c] + (free ? 0f : nb.Weight);
+                if (cost.TryGetValue(nb.Coordinates, out int oc) && (oc < nc || (oc == nc && weight[nb.Coordinates] >= nw)))
+                    continue;
+                cost[nb.Coordinates] = nc; weight[nb.Coordinates] = nw; parent[nb.Coordinates] = current;
+                pq.Enqueue(nb, (nc, -nw));
             }
         }
-        return null;
+
+        if (!parent.ContainsKey(to.Coordinates)) return (null, 0);
+        var path = new List<Node>();
+        for (Node n = to; n != null; n = parent[n.Coordinates]) path.Add(n);
+        path.Reverse(); // from -> to
+        return (path, cost[to.Coordinates]);
     }
 
     // Multi-source BFS from all visited nodes. Returns step distances from the explored region;
