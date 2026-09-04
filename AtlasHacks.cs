@@ -16,6 +16,7 @@ public partial class ExileMapsCore
     private AtlasCamera atlasCamera;
     private int hackPid;
     private int hackVerifyTick;
+    private (float, float) zoomLimitsWritten = (float.NaN, float.NaN);
 
     private bool HacksCameraPanReady
     {
@@ -48,14 +49,12 @@ public partial class ExileMapsCore
                 hackPid = process.Id;
                 hackPatcher = new Patcher();
                 atlasCamera = new AtlasCamera();
+                zoomLimitsWritten = (float.NaN, float.NaN);
 
                 if (!hackPatcher.Attach(hackPid, ResolveModuleBase(process)))
                     LogError($"ExileMaps hacks: {hackPatcher.LastError}");
             }
 
-            // crash report first, always. read back from memory rather than trusting our own flag,
-            // another plugin may have patched or reverted it since we last looked. one 15 byte
-            // ReadProcessMemory, so every frame is affordable, but it is tunable if you disagree
             var every = Math.Max(1, Settings.Hacks.VerifyEveryFrames);
             if (hackVerifyTick++ % every == 0)
                 hackPatcher.Verify(PatchId.BlockCrashLog);
@@ -64,14 +63,23 @@ public partial class ExileMapsCore
             if (!hackPatcher.IsApplied(PatchId.BlockCrashLog))
             {
                 hackPatcher.Set(PatchId.KillAtlasFog, false);
+                hackPatcher.Set(PatchId.ForceAtlasFog, false);
                 hackPatcher.Set(PatchId.UnlockAtlasZoomOut, false);
                 hackPatcher.Set(PatchId.UnlockAtlasZoomIn, false);
                 return;
             }
 
             hackPatcher.Set(PatchId.KillAtlasFog, Settings.Hacks.AtlasFog);
+            hackPatcher.Set(PatchId.ForceAtlasFog, Settings.Hacks.AtlasFogAll && !Settings.Hacks.AtlasFog);
             hackPatcher.Set(PatchId.UnlockAtlasZoomOut, Settings.Hacks.AtlasZoom);
             hackPatcher.Set(PatchId.UnlockAtlasZoomIn, Settings.Hacks.AtlasZoom);
+
+            var wantLimits = (Settings.Hacks.ZoomOutFactor, Settings.Hacks.ZoomInFactor);
+            if (Settings.Hacks.AtlasZoom && zoomLimitsWritten != wantLimits)
+            {
+                hackPatcher.SetZoomLimits(wantLimits.Item1, wantLimits.Item2);
+                zoomLimitsWritten = wantLimits;
+            }
 
             if (!Settings.Hacks.AtlasCameraPan) atlasCamera?.Cancel();
         }
@@ -146,54 +154,19 @@ public partial class ExileMapsCore
     }
 }
 
-// Pans the atlas view to a node by writing the atlas camera's position. No code runs in the client.
-//
-// Getting here cost five wrong turns. All of them are written down so nobody repeats them:
-//
-//  1. Element +0x118/+0x11C is NOT the pan state. WorldMapControl_PanBy adds into it, but ApplyPan
-//     reads (pan - lastApplied) back out, feeds that to ApplyPanZoom, then snaps the pair back.
-//     Nothing else consumes it, so an outside write just sits there and the view never moves.
-//  2. That pair is not the framework's Element.ScrollOffset either. Live it reads a real value
-//     while ScrollOffset reads 0,0. Different fields.
-//  3. AtlasPanel.Camera.WorldToScreen is not the atlas projection. Its output does not change when
-//     the atlas pans, so a loop measuring with it concludes nothing moved. Measure with the node's
-//     Element.GetClientRect(), same as everything else in this plugin.
-//  4. AtlasPanel.GetClientRect() is the whole laid-out atlas, not the viewport. Its centre sits
-//     thousands of pixels off screen, so steering at it aims nowhere near the middle of the window.
-//  5. ApplyPanZoom's own drag maths (a 45 degree rotation scaled by 4.6/scale) is NOT the inverse
-//     of the projection. Measured live the two axes implied gains of 5.42 and 1.24. No scalar
-//     converges; driven from it the view ran away to a camera of 1.2 billion.
-//
-// The camera pair is cam+0x490/+0x494, which ExileCore2 resolves as
-// CameraHelper.Address + AtlasCameraHelper.PanOffset. Nothing is hardcoded.
-//
-// So the step estimates no gain. The atlas hands us ~3600 nodes that each carry a world position
-// AND a screen rect, an over-determined sample of the world to screen map, so the map is SOLVED and
-// the camera move falls out of it. The fit is LOCAL, over the nodes nearest the screen centre: the
-// atlas draws through a perspective camera, world to screen is a homography, and no affine map
-// describes it globally - fitted over the whole atlas the median residual is 807px, near the centre
-// it is 40-60px. Re-fitting as it closes in makes this Newton, which converges.
-//
-// It steps every StepEveryFrames frames, not every frame, and that is load bearing twice over. The
-// client relays the atlas out lazily, so writing every frame measures a rect that has not caught up
-// yet and the loop winds itself up - that is the overshoot-and-rubberband. It is also most of the
-// cost: touching AtlasPanel.Descriptions rebuilds a 3600 entry frame cache, and while a pan is in
-// flight Render is skipped, so nothing else would rebuild it.
-//
-// Writeup: RE/atlas/worldmap-fog-and-zoom.md section 1d.
 internal sealed class AtlasCamera
 {
-    private const float DoneWithinPx = 10f;      // a node icon is bigger than this, do not chase px
-    private const int StepEveryFrames = 3;       // let the client relayout before measuring again
+    private const float DoneWithinPx = 10f;
+    private const int StepEveryFrames = 3;
     private const int MaxSteps = 200;
     private const int MaxTraceLines = 14;
-    private const int ReselectEvery = 4;         // steps between rebuilding the sample set
-    private const int NoProgressSteps = 12;      // steps without gaining ground before giving up
-    private const int NearestCount = 48;         // nodes closest to the screen centre to fit over
+    private const int ReselectEvery = 4;
+    private const int NoProgressSteps = 12;
+    private const int NearestCount = 48;
     private const int MinSamples = 8;
-    private const float Damping = 0.8f;          // shave the correction, dead time is never zero
-    private const float MaxStepFraction = 0.75f; // trust the local fit about this far, in half screens
-    private const float MaxDrift = 250000f;      // refuse to wander further than this from the start
+    private const float Damping = 0.8f;
+    private const float MaxStepFraction = 0.75f;
+    private const float MaxDrift = 250000f;
     private const float TrimFloorPx = 15f;
     private const float AcceptMedianPx = 150f;
     private const float CentreProofPx = 60f;
@@ -205,7 +178,6 @@ internal sealed class AtlasCamera
     private float _sign = 1f;
     private bool _flipped;
 
-    // where we started, so a failed pan puts the view back instead of leaving it in deep space
     private Vector2 _startCam;
     private bool _haveStart;
     private Patcher _restorePatcher;
@@ -214,11 +186,9 @@ internal sealed class AtlasCamera
     private float _bestErrorLen;
     private int _sinceImproved;
 
-    // the fitted sample set, held across steps. rebuilding it means walking all ~3600 descriptions
     private readonly List<AtlasNodeDescription> _samples = new();
     private int _sinceReselect;
 
-    // one line per step, dumped by the driver when DebugMode is on
     public readonly List<string> Trace = new();
 
     public bool Busy => _target != null;
@@ -249,8 +219,6 @@ internal sealed class AtlasCamera
     {
         if (_target == null) return;
 
-        // no restore here on purpose: if the atlas just closed, the camera object may already be
-        // gone and writing to it is exactly the sort of thing that takes the client down
         if (panel == null || !panel.IsVisible || patcher == null || !patcher.Attached)
         {
             _target = null;
@@ -301,8 +269,6 @@ internal sealed class AtlasCamera
         _restoreAddr = addr;
         if (!_haveStart) { _startCam = cam; _haveStart = true; }
 
-        // a node the atlas has not streamed in keeps reporting the same rect forever, so the error
-        // never shrinks and every step shoves the camera further out. this is the backstop
         var errorLen = error.Length();
         if (errorLen < _bestErrorLen - 2f) { _bestErrorLen = errorLen; _sinceImproved = 0; }
         else if (++_sinceImproved > NoProgressSteps)
@@ -324,12 +290,8 @@ internal sealed class AtlasCamera
             return;
         }
 
-        // a step that made things worse means the sign convention is the other way round. one flip
-        // is enough, it cannot be wrong twice. the 5% margin keeps rect jitter from tripping it
         if (!_flipped && errorLen > _bestErrorLen * 1.05f) { _sign = -_sign; _flipped = true; }
 
-        // own clock rather than GameController.DeltaTime, whose units are not documented anywhere
-        // we could check. clamped so an alt-tab or a stall does not fire off one enormous step
         var ticks = Stopwatch.GetTimestamp();
         var dt = _lastTicks == 0
             ? StepEveryFrames / 60f
@@ -337,19 +299,11 @@ internal sealed class AtlasCamera
         _lastTicks = ticks;
         dt = Math.Clamp(dt, 1f / 500f, 1f / 6f);
 
-        // close this fraction of what is left. exponential, so it eases out on its own and the same
-        // speed looks the same at any framerate
         var approach = (1f - MathF.Exp(-Math.Max(0.1f, speed) * dt)) * Damping;
 
-        // if the camera point itself projects onto the screen centre then it simply IS the world
-        // point the view is centred on, and the answer is the target's world position, no maths.
-        // the camera is a 2D point on the atlas plane, so project it at the target node height
         var camScreen = fit.Project(new Vector3(cam.X, cam.Y, world3.Position.Z));
         var centred = (camScreen - screenCenter).Length() <= CentreProofPx;
 
-        // otherwise: node screen = A*world + b, and moving the camera shifts b by -A*delta, so the
-        // move that buys us `error` worth of screen is -A^-1 * error, over the x and y columns.
-        // clamped, because the fit is only linear near the centre
         Vector2 next;
         if (centred)
         {
@@ -376,14 +330,11 @@ internal sealed class AtlasCamera
                       $"median {fit.Median:F1}px worst {fit.Worst:F1}px, cam projects to " +
                       $"{camScreen.X:F0},{camScreen.Y:F0} {(centred ? "CENTRED" : "not centred")}");
 
-        // re-check right before writing: the atlas can close between the read above and here, and
-        // then this address belongs to a freed object
         if (!panel.IsVisible) { _target = null; return; }
 
         Apply(patcher, addr, next);
     }
 
-    // world (3D) to screen affine map, solved from the atlas nodes
     private readonly struct Projection
     {
         private readonly float _a11, _a12, _a13, _a21, _a22, _a23;
@@ -404,7 +355,6 @@ internal sealed class AtlasCamera
             _a11 * w.X + _a12 * w.Y + _a13 * w.Z + _b.X,
             _a21 * w.X + _a22 * w.Y + _a23 * w.Z + _b.Y);
 
-        // inverse of the x/y block applied to v. the camera only moves in x and y
         public Vector2 SolveXY(Vector2 v)
         {
             var det = _a11 * _a22 - _a12 * _a21;
@@ -413,9 +363,6 @@ internal sealed class AtlasCamera
         }
     }
 
-    // picks the nodes nearest the screen centre and keeps them. this is the expensive call - it
-    // walks every description, and touching AtlasPanel.Descriptions rebuilds a 3600 entry frame
-    // cache - so it runs a few times per pan, not every frame
     private void Reselect(AtlasPanel panel, Vector2 screenCenter)
     {
         _samples.Clear();
@@ -423,7 +370,6 @@ internal sealed class AtlasCamera
         var descriptions = panel.Descriptions;
         if (descriptions == null) return;
 
-        // running nearest-N rather than sorting the lot
         var best = new List<(float Dist, AtlasNodeDescription Node)>(NearestCount + 1);
         var cutoff = float.MaxValue;
 
@@ -450,8 +396,6 @@ internal sealed class AtlasCamera
         foreach (var (_, node) in best) _samples.Add(node);
     }
 
-    // least squares over the held sample set. only the rects are re-read here, which is a few dozen
-    // GetClientRect calls - the walk over all the descriptions happens in Reselect
     private bool Fit(Vector2 screenCenter, out Projection fit, out string why)
     {
         fit = default;
@@ -478,8 +422,6 @@ internal sealed class AtlasCamera
 
         if (!Solve(worlds, screens, out fit)) { why = "the samples are degenerate. " + counts; return false; }
 
-        // one trimmed refit. a handful of rects in any frame are a frame behind the rest, and those
-        // outliers pull the solve badly if they stay in
         var cut = Math.Max(TrimFloorPx, fit.Median * 3f);
         var keptW = new List<Vector3>(worlds.Count);
         var keptS = new List<Vector2>(screens.Count);
@@ -510,7 +452,6 @@ internal sealed class AtlasCamera
         wBar /= n;
         sBar /= n;
 
-        // normal equations, M is the 3x3 covariance of the centred world positions
         var m = new float[3, 3];
         var rx = new float[3];
         var ry = new float[3];
@@ -527,8 +468,6 @@ internal sealed class AtlasCamera
             }
         }
 
-        // ridge. atlas nodes can share one height, which makes the z row rank deficient - without
-        // this the solve blows up instead of quietly giving z a zero coefficient
         var ridge = 1e-6f * (m[0, 0] + m[1, 1] + m[2, 2]) + 1e-3f;
         for (var r = 0; r < 3; r++) m[r, r] += ridge;
 
@@ -585,9 +524,6 @@ internal sealed class AtlasCamera
         m[2, 0] * v[0] + m[2, 1] * v[1] + m[2, 2] * v[2],
     };
 
-    // element rect, same as the rest of the plugin. deliberately NOT the plugin's frameRectCache:
-    // that is cleared after RenderHacks runs, and not at all when drawing is off.
-    // a zero sized rect means the atlas has not laid this node out, which is not a position
     private static bool TryNodeScreen(Node node, out Vector2 pos)
     {
         pos = default;
@@ -615,8 +551,6 @@ internal sealed class AtlasCamera
             Fail(patcher.LastError ?? "camera pan write failed");
     }
 
-    // a failed pan puts the camera back where it started. leaving the view in deep space and making
-    // the user find their way home is worse than not having panned at all
     private void Restore()
     {
         if (!_haveStart || _restorePatcher == null || _restoreAddr == 0) return;
@@ -636,6 +570,7 @@ internal sealed class AtlasCamera
 internal enum PatchId
 {
     KillAtlasFog,
+    ForceAtlasFog,
     UnlockAtlasZoomOut,
     UnlockAtlasZoomIn,
     BlockCrashLog,
@@ -653,6 +588,7 @@ internal enum PatchKind
     Nop,
     RetargetFloat,
     RetAtEntry,
+    Replace,
 }
 
 internal sealed class PatchSite
@@ -666,8 +602,10 @@ internal sealed class PatchSite
     public int SigOffset { get; init; }
     public int Length { get; init; }
 
-    public float Floor { get; init; }
+    public int Slot { get; init; } = -1;
     public byte[] Guard { get; init; }
+    public byte[] From { get; init; }
+    public byte[] To { get; init; }
 
     public long ReferenceAddress { get; init; }
 
@@ -676,12 +614,11 @@ internal sealed class PatchSite
     public IntPtr Address;
     public byte[] Original;
     public byte[] Patched;
+    public float Stock;
     public bool Usable;
     public bool IsPatched;
     public bool Preexisting;
 
-    // we wrote it, so we get to undo it. false when we found the site already patched, which is
-    // what happens when another plugin got here first
     public bool AppliedByUs;
 }
 
@@ -707,12 +644,27 @@ internal sealed class Patcher : IDisposable
 
         new()
         {
+            Id = PatchId.ForceAtlasFog,
+            Kind = PatchKind.Replace,
+            Signature = "C7 45 60 FF FF 7F FF 49 8B 5E 50 E8 ?? ?? ?? ?? 48 8B 48 08 48 8B 83 ?? ?? ?? ??",
+            SigOffset = 23,
+            Length = 4,
+            From = new byte[] { 0xF8, 0x1B, 0x00, 0x00 },
+            To = new byte[] { 0x00, 0x1C, 0x00, 0x00 },
+            ReferenceAddress = 0x140B874D6L,
+            Note = "reveal-circle branch of WorldMapFowShape_SetupMaterial, repointed from the "
+                 + "WorldMap FoW Reveal C object at page+0x1BF8 to WorldMap FoW Hide Sq at page+0x1C00, "
+                 + "so every reveal shape paints fog instead of clearing it",
+        },
+
+        new()
+        {
             Id = PatchId.UnlockAtlasZoomOut,
             Kind = PatchKind.RetargetFloat,
             Signature = "F3 0F 5C C8 F3 0F 11 4C 24 ?? 75 ?? F3 0F 10 05 ?? ?? ?? ?? 48 8D 54 24 ?? 0F 2F C8",
             SigOffset = 12,
             Length = 8,
-            Floor = 50.0f,
+            Slot = 0,
             ReferenceAddress = 0x140B96337L,
             Note = "wheel handler floor, the one that actually binds",
         },
@@ -723,7 +675,7 @@ internal sealed class Patcher : IDisposable
             Signature = "48 8B 4A 08 0F 28 C8 80 B9 ?? ?? ?? ?? 0A 75 ?? F3 0F 10 05 ?? ?? ?? ??",
             SigOffset = 16,
             Length = 8,
-            Floor = 0.5f,
+            Slot = 1,
             ReferenceAddress = 0x140BF6671L,
             Note = "ZoomStepCmd floor, a cmov not a maxss, so NOPing it would pin the scale instead",
         },
@@ -751,12 +703,13 @@ internal sealed class Patcher : IDisposable
         new()
         {
             Id = PatchId.UnlockAtlasZoomIn,
-            Kind = PatchKind.Nop,
+            Kind = PatchKind.RetargetFloat,
             Signature = "F3 0F 10 15 ?? ?? ?? ?? F3 0F 10 0A 41 B1 01 4D 8B 43 ?? F3 0F 5D CA",
-            SigOffset = 19,
-            Length = 4,
-            ReferenceAddress = 0x140B963B5L,
-            Note = "wheel handler ceiling, the one that actually binds",
+            SigOffset = 0,
+            Length = 8,
+            Slot = 2,
+            ReferenceAddress = 0x140B963A2L,
+            Note = "wheel handler ceiling load, retargeted so the clamp stays and we own its value",
         },
         new()
         {
@@ -803,8 +756,73 @@ internal sealed class Patcher : IDisposable
         },
     };
 
+    public const float MaxZoomOutFactor = 3.4f;
+    public const float MaxZoomInFactor = 10f;
+
+    private const int ScratchSlots = 4;
+    private const uint MemCommitReserve = 0x3000;
+    private const uint MemRelease = 0x8000;
+    private const uint PageReadWrite = 0x04;
+
     private readonly Dictionary<PatchId, bool> _lastAttempt = new();
     private IntPtr _handle = IntPtr.Zero;
+    private IntPtr _scratch = IntPtr.Zero;
+
+    private bool EnsureScratch(long moduleBase)
+    {
+        if (_scratch != IntPtr.Zero) return true;
+
+        for (long delta = 0x10000; delta < 0x40000000L; delta += 0x10000)
+        {
+            var up = VirtualAllocEx(_handle, new IntPtr(moduleBase + delta), new UIntPtr(4096), MemCommitReserve, PageReadWrite);
+            if (up != IntPtr.Zero) { _scratch = up; return true; }
+
+            var down = VirtualAllocEx(_handle, new IntPtr(moduleBase - delta), new UIntPtr(4096), MemCommitReserve, PageReadWrite);
+            if (down != IntPtr.Zero) { _scratch = down; return true; }
+        }
+
+        LastError = "could not reserve a scratch page within rip relative reach of the client image";
+        return false;
+    }
+
+    private long SlotAddress(PatchSite site) => _scratch.ToInt64() + site.Slot * 4;
+
+    private static bool IsSlotSite(PatchSite site) =>
+        site.Kind == PatchKind.RetargetFloat && site.Usable && site.Slot >= 0;
+
+    public bool SetZoomLimits(float zoomOutFactor, float zoomInFactor)
+    {
+        if (!Attached || _scratch == IntPtr.Zero) return false;
+
+        var outF = Math.Clamp(zoomOutFactor, 1f, MaxZoomOutFactor);
+        var inF = Math.Clamp(zoomInFactor, 1f, MaxZoomInFactor);
+
+        var ok = true;
+        foreach (var site in Table)
+        {
+            if (!IsSlotSite(site)) continue;
+            var want = site.Id == PatchId.UnlockAtlasZoomIn ? site.Stock * inF : site.Stock / outF;
+            ok &= WriteFloats(SlotAddress(site), want);
+        }
+
+        return ok;
+    }
+
+    public IEnumerable<(string Note, float Stock, float Live)> ZoomLimits()
+    {
+        foreach (var site in Table)
+        {
+            if (!IsSlotSite(site)) continue;
+            var live = ReadFloats(SlotAddress(site), 1);
+            yield return (site.Note, site.Stock, live == null ? float.NaN : live[0]);
+        }
+    }
+
+    private void SeedScratch()
+    {
+        foreach (var site in Table)
+            if (IsSlotSite(site)) WriteFloats(SlotAddress(site), site.Stock);
+    }
 
     public bool Attached { get; private set; }
     public string LastError { get; private set; }
@@ -873,6 +891,8 @@ internal sealed class Patcher : IDisposable
                      + "plugin running the same table, so they were adopted rather than rewritten. We will "
                      + "not revert them on the way out, and turning them off here may need a client restart.";
 
+        SeedScratch();
+
         if (problems.Count > 0)
         {
             LastError = $"{problems.Count} of {Table.Length} sites unusable. " + string.Join(" | ", problems);
@@ -929,17 +949,34 @@ internal sealed class Patcher : IDisposable
             case PatchKind.RetargetFloat:
             {
                 if (site.Length != 8) return "a float retarget site must be 8 bytes";
-                if (original[0] != 0xF3 || original[1] != 0x0F || original[2] != 0x10 || original[3] != 0x05)
-                    return $"expected movss xmm0,[rip+d32], got {Hex(original)}";
+                if (original[0] != 0xF3 || original[1] != 0x0F || original[2] != 0x10 || (original[3] & 0xC7) != 0x05)
+                    return $"expected movss xmm,[rip+d32], got {Hex(original)}";
+                if (site.Slot < 0 || site.Slot >= ScratchSlots) return "float retarget site has no scratch slot";
+                if (!EnsureScratch(moduleBase)) return LastError;
 
-                var constRva = image.FindFloat(site.Floor, out why);
-                if (constRva == 0) return why;
+                var next = moduleBase + rva + 8;
+                var stock = Read(new IntPtr(next + BitConverter.ToInt32(original, 4)), 4);
+                if (stock == null) return "could not read the stock constant";
+                site.Stock = BitConverter.ToSingle(stock, 0);
 
-                var disp = (int)(constRva - (rva + 8));
+                var disp = _scratch.ToInt64() + site.Slot * 4 - next;
+                if (disp > int.MaxValue || disp < int.MinValue) return "scratch page is out of rip relative range";
+
                 site.Original = original;
                 site.Patched = new byte[8];
                 Buffer.BlockCopy(original, 0, site.Patched, 0, 4);
-                Buffer.BlockCopy(BitConverter.GetBytes(disp), 0, site.Patched, 4, 4);
+                Buffer.BlockCopy(BitConverter.GetBytes((int)disp), 0, site.Patched, 4, 4);
+                return null;
+            }
+
+            case PatchKind.Replace:
+            {
+                if (site.From == null || site.To == null
+                    || site.From.Length != site.Length || site.To.Length != site.Length)
+                    return "a replace site needs From and To of exactly Length bytes";
+
+                site.Original = (byte[])site.From.Clone();
+                site.Patched = (byte[])site.To.Clone();
                 return null;
             }
 
@@ -1005,8 +1042,6 @@ internal sealed class Patcher : IDisposable
 
         foreach (var site in Table)
         {
-            // only our own writes. restoring a site another plugin patched would silently turn its
-            // crash report suppression back off
             if (site.Usable && site.IsPatched && site.AppliedByUs)
                 WriteSite(site, false);
         }
@@ -1021,8 +1056,6 @@ internal sealed class Patcher : IDisposable
         return false;
     }
 
-    // re-reads the site instead of trusting the cached flag. another plugin can patch or unpatch
-    // the same bytes underneath us and the crash report gate must never run on a stale belief
     public void Verify(PatchId id)
     {
         if (!Attached) return;
@@ -1041,7 +1074,6 @@ internal sealed class Patcher : IDisposable
 
             if (patched == site.IsPatched) continue;
 
-            // someone else moved it. drop our claim and clear the memo so Set acts again
             site.IsPatched = patched;
             site.AppliedByUs = false;
             _lastAttempt.Remove(id);
@@ -1091,6 +1123,7 @@ internal sealed class Patcher : IDisposable
     {
         (PatchId.BlockCrashLog,      "Crash report"),
         (PatchId.KillAtlasFog,       "Atlas fog"),
+        (PatchId.ForceAtlasFog,      "Atlas full fog"),
         (PatchId.UnlockAtlasZoomOut, "Atlas zoom out"),
         (PatchId.UnlockAtlasZoomIn,  "Atlas zoom in"),
     };
@@ -1127,6 +1160,16 @@ internal sealed class Patcher : IDisposable
     {
         if (_handle != IntPtr.Zero)
         {
+            if (_scratch != IntPtr.Zero)
+            {
+                var stillPointed = false;
+                foreach (var site in Table)
+                    if (site.Kind == PatchKind.RetargetFloat && site.IsPatched) stillPointed = true;
+
+                if (!stillPointed) VirtualFreeEx(_handle, _scratch, UIntPtr.Zero, MemRelease);
+                _scratch = IntPtr.Zero;
+            }
+
             CloseHandle(_handle);
             _handle = IntPtr.Zero;
         }
@@ -1150,8 +1193,6 @@ internal sealed class Patcher : IDisposable
         var live = Read(site.Address, want.Length);
         if (live == null) return false;
 
-        // already there. deliberately does not set AppliedByUs - if another plugin patched this we
-        // must not claim it, or we would revert their patch on our way out
         if (Same(live, want))
         {
             site.IsPatched = enabled;
@@ -1247,6 +1288,13 @@ internal sealed class Patcher : IDisposable
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool FlushInstructionCache(IntPtr process, IntPtr address, UIntPtr size);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr VirtualAllocEx(IntPtr process, IntPtr address, UIntPtr size, uint allocationType, uint protect);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool VirtualFreeEx(IntPtr process, IntPtr address, UIntPtr size, uint freeType);
 }
 
 internal sealed class ClientImage
@@ -1399,24 +1447,6 @@ internal sealed class ClientImage
         }
 
         why = $"no .pdata entry contains the lea at {leaRva:X}";
-        return 0;
-    }
-
-    public long FindFloat(float value, out string why)
-    {
-        why = null;
-        var want = BitConverter.GetBytes(value);
-        foreach (var s in _sections)
-        {
-            if (s.Exec || s.Write) continue;
-            var buf = Section(s.Rva);
-            if (buf == null) continue;
-            for (var i = 0; i + 4 <= buf.Length; i += 4)
-                if (buf[i] == want[0] && buf[i + 1] == want[1] && buf[i + 2] == want[2] && buf[i + 3] == want[3])
-                    return s.Rva + i;
-        }
-
-        why = $"no read only copy of {value} in the image";
         return 0;
     }
 

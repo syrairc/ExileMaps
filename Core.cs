@@ -1,7 +1,6 @@
 ﻿
 using System;
 using System.Collections.Generic;
-using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -83,7 +82,6 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private readonly HashSet<HotkeySettings> registeredKeybindSets = new();
     private long lastWeightRecalcMs = Environment.TickCount64;
     internal int TickCount { get; private set; }
-    private int edgesDrawn;
 
     private readonly System.Diagnostics.Stopwatch animClock = System.Diagnostics.Stopwatch.StartNew();
     private float AnimSeconds => (float)animClock.Elapsed.TotalSeconds;
@@ -306,9 +304,13 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         nameHalfByCoord.Clear();
         contentOverrideByCoord.Clear();
 
-        var cam = AtlasPanel?.Camera;
-        frameWorldToScreen = cam == null ? null : cam.WorldToScreen;
-        edgesDrawn = 0;
+        try {
+            var snap = AtlasPanel?.Camera?.Snapshot;
+            frameWorldToScreen = snap == null ? null : snap.WorldToScreen;
+        } catch (Exception e) {
+            frameWorldToScreen = null;
+            DebugSwallow("Render: camera snapshot", e);
+        }
 
         if (TickCount % OnScreenRecomputeInterval == 0 || lastCullVersion != mapCacheVersion) {
             t0 = Stopwatch.GetTimestamp();
@@ -343,6 +345,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         foreach (var node in selectedNodes) {
             try {
                 var rect = node.MapNode.Element.GetClientRectCache;
+                if (rect.Width <= 0)
+                    continue;
+                rect = WorldAlignedRect(node, rect);
                 frameRectCache[node.Coordinates] = rect;
                 nodePositions.Add((node, rect));
             }
@@ -435,13 +440,33 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (perf) PerfMonitor.Record("Render.Tours", Stopwatch.GetTimestamp() - t0);
 
         DrawCacheProgressBar();
+    }
 
-        if (Settings.Features.DebugMode && TickCount % 300 == 0)
-            LogMessage($"edges drawn {edgesDrawn}, unique curves {frameCurveCache.Count}");
+    private RectangleF WorldAlignedRect(AtlasNodeDescription desc, RectangleF rect)
+    {
+        if (frameWorldToScreen == null || rect.Width <= 0)
+            return rect;
+        var d3d = desc?.Description3D;
+        if (d3d != null)
+            rect.Location = frameWorldToScreen(d3d.Position) - rect.Size / 2f;
+        return rect;
+    }
+
+    private RectangleF WorldAlignedRect(Node node, RectangleF rect)
+    {
+        if (node == null || !node.HasWorldPos)
+            return WorldAlignedRect(node?.MapNode, rect);
+        if (frameWorldToScreen == null || rect.Width <= 0)
+            return rect;
+        rect.Location = frameWorldToScreen(node.WorldPos) - rect.Size / 2f;
+        return rect;
     }
 
     private bool OnScreenSafe(Node x)
     {
+        var project = frameWorldToScreen;
+        if (project != null && x.HasWorldPos)
+            return IsOnScreen(project(x.WorldPos));
         try { return IsOnScreen(x.MapNode.Element.GetClientRectCache.Center); }
         catch { return false; }
     }
@@ -451,10 +476,15 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         selectedNodes.Clear();
         specialNodes.Clear();
         lastOnScreen.Clear();
+        var project = frameWorldToScreen;
         foreach (var x in candidates) {
             Vector2 center;
-            try { center = x.MapNode.Element.GetClientRectCache.Center; }
-            catch { continue; }
+            if (project != null && x.HasWorldPos)
+                center = project(x.WorldPos);
+            else {
+                try { center = x.MapNode.Element.GetClientRectCache.Center; }
+                catch { continue; }
+            }
             if (!IsOnScreen(center))
                 continue;
 
@@ -650,7 +680,6 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (element == null || depth > 8 || !element.IsVisible)
             return;
 
-        chromeScanVisits++;
         if (element.TextureName != null)
         {
             if (ExcludeTextureSubtrees.Contains(element.TextureName))
@@ -672,7 +701,6 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (element == null || depth > 12 || !element.IsVisible)
             return;
 
-        chromeScanVisits++;
         RectangleF rect = element.GetClientRect();
         if (rect.Width > 0 && rect.Height > 0)
             target.Add(rect);
@@ -682,7 +710,6 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     }
 
     private const int ChromeScanInterval = 10;
-    private int chromeScanVisits;
     private readonly List<RectangleF> cachedChromeRects = [];
 
     #region Screen Bounds
@@ -705,10 +732,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
             if (TickCount % ChromeScanInterval == 0 || cachedChromeRects.Count == 0) {
                 cachedChromeRects.Clear();
-                chromeScanVisits = 0;
                 AddExcludeRectsByTexture(UI.WorldMap, 0, cachedChromeRects);
-                if (Settings.Features.DebugMode && TickCount % 300 == 0)
-                    LogMessage($"chrome scan visited {chromeScanVisits} elements, {cachedChromeRects.Count} rects");
             }
 
             cachedExcludeRects.Clear();

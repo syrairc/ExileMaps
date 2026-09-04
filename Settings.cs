@@ -1,19 +1,13 @@
-﻿
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using System.Linq;
-using System.Numerics;
-using ExileCore2.Shared.Attributes;
 using ExileCore2.Shared.Interfaces;
 using ExileCore2.Shared.Nodes;
 using ExileMaps.Classes;
-using ImGuiNET;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using GameOffsets2.Native;
-using static ExileMaps.ExileMapsCore;
 using System.IO;
 using ExileCore2;
 
@@ -542,11 +536,15 @@ public class HackSettings
 
     public bool AtlasZoom { get; set; } = false;
     public bool AtlasFog { get; set; } = false;
+    public bool AtlasFogAll { get; set; } = false;
     public bool AtlasCameraPan { get; set; } = false;
+
+    public float ZoomOutFactor { get; set; } = 1.7f;
+    public float ZoomInFactor { get; set; } = 2f;
 
     public float PanSpeed { get; set; } = 10f;
 
-    public int VerifyEveryFrames { get; set; } = 1;
+    public int VerifyEveryFrames { get; set; } = 60;
 }
 
 #endregion
@@ -765,6 +763,160 @@ public class WaypointSettings
 public class ExpeditionSettings
 {
     public ColorNode HighlightColor { get; set; } = new ColorNode(Color.FromArgb(220, 90, 200, 255));
+}
+
+#endregion
+
+#region Graphics Presets
+
+public enum GraphicsPreset { Minimal, Normal, Maximum }
+
+public static class GraphicsPresets
+{
+    public const int IconAlpha = 215;
+
+    public static readonly string[] Names = { "Minimal", "Normal", "Maximum" };
+
+    public static string Describe(GraphicsPreset p) => p switch {
+        GraphicsPreset.Minimal => "Thin flat lines, no gradients or curves, no extra icons, no style overrides.",
+        GraphicsPreset.Maximum => "Everything on. Curves, gradients, every icon, stroked labels.",
+        _ => "Defaults minus the heaviest effects.",
+    };
+
+    public static void Apply(Profile p, GraphicsPreset preset)
+    {
+        var g = p.Graphics;
+        var t = p.Labels.Base.Text;
+        var c = p.ContentDisplay;
+        var f = p.Features;
+        var s = p.Search;
+
+        g.ShowConnectionLines = true;
+        g.ShowPaths = true;
+        g.ScaleLabelsWithZoom = true;
+        g.ShowSpecialMapIndicator = true;
+
+        switch (preset)
+        {
+            case GraphicsPreset.Minimal:
+                g.MapCacheRefreshRate = 3;
+                g.UseNodeIcons = false;
+                g.ShowContentRow = false;
+                g.ShowBiomeIcon = false;
+                g.DrawWeightOnMap = false;
+                g.ShowAtlasQuestIndicator = false;
+                g.UppercaseMapNames = false;
+                g.MapLineWidth = 2f;
+                g.DrawGradientLines = false;
+                g.UseGameConnectionCurves = false;
+                g.IconSize = 22f;
+                p.MapAppearance.NodeColorMode = NodeColorMode.Status;
+                t.Scale = 1f;
+                t.Color = Color.FromArgb(255, 255, 255, 255);
+                t.StrokeEnabled = false;
+                t.BgEnabled = true;
+                t.BgColor = Color.FromArgb(255, 0, 0, 0);
+                t.BorderEnabled = false;
+                p.Labels.Base.TextColorByWeight = false;
+                p.Labels.Base.BoxColorByWeight = false;
+                p.Labels.Base.BorderColorByWeight = false;
+                SetOverridesEnabled(p.Labels, false);
+                SetAtlasPointIcons(c, false);
+                c.ShowGenericAtlasPoint = false;
+                c.ColorRumorsByWeight = false;
+                f.ExpeditionMarkers = ExpeditionMarkers.Nearest;
+                s.HighlightMatches = false;
+                break;
+
+            case GraphicsPreset.Normal:
+                g.MapCacheRefreshRate = 1;
+                g.UseNodeIcons = true;
+                g.ShowContentRow = true;
+                g.ContentIconsSkipGameDrawn = true;
+                g.ShowBiomeIcon = false;
+                g.DrawWeightOnMap = false;
+                g.ShowAtlasQuestIndicator = true;
+                g.UppercaseMapNames = true;
+                g.MapLineWidth = 3f;
+                g.DrawGradientLines = false;
+                g.UseGameConnectionCurves = true;
+                g.IconSize = 28f;
+                t.StrokeEnabled = false;
+                t.BgEnabled = true;
+                t.BorderEnabled = false;
+                SetOverridesEnabled(p.Labels, true);
+                SetAtlasPointIcons(c, true);
+                c.ShowGenericAtlasPoint = true;
+                c.ColorRumorsByWeight = true;
+                f.ExpeditionMarkers = ExpeditionMarkers.Nearest;
+                s.HighlightMatches = true;
+                break;
+
+            case GraphicsPreset.Maximum:
+                g.MapCacheRefreshRate = 1;
+                g.UseNodeIcons = true;
+                g.ShowContentRow = true;
+                g.ContentIconsSkipGameDrawn = true;
+                g.ShowBiomeIcon = true;
+                g.DrawWeightOnMap = true;
+                g.ShowAtlasQuestIndicator = true;
+                g.UppercaseMapNames = true;
+                g.MapLineWidth = 3f;
+                g.DrawGradientLines = true;
+                g.UseGameConnectionCurves = true;
+                g.IconSize = 32f;
+                t.StrokeEnabled = true;
+                t.BgEnabled = true;
+                t.BorderEnabled = true;
+                SetOverridesEnabled(p.Labels, true);
+                SetAtlasPointIcons(c, true);
+                c.ShowGenericAtlasPoint = true;
+                c.ColorRumorsByWeight = true;
+                f.ExpeditionMarkers = ExpeditionMarkers.Nearest;
+                s.HighlightMatches = true;
+                break;
+        }
+
+        ApplyIconAlpha(p);
+    }
+
+    private static void SetOverridesEnabled(LabelStyleSettings labels, bool on)
+    {
+        foreach (var ov in labels.Content.Values) ov.Enabled = on;
+        foreach (var ov in labels.Maps.Values) ov.Enabled = on;
+    }
+
+    private static void SetAtlasPointIcons(ContentDisplaySettings c, bool on)
+    {
+        foreach (var type in ContentDisplaySettings.AtlasPointTypes)
+            c.AtlasPointIcons[type] = on;
+    }
+
+    private static Color Alpha(Color c) => Color.FromArgb(IconAlpha, c.R, c.G, c.B);
+
+    private static void ApplyIconAlpha(Profile p)
+    {
+        var m = p.MapAppearance;
+        m.GoodNodeColor = Alpha(m.GoodNodeColor);
+        m.NeutralNodeColor = Alpha(m.NeutralNodeColor);
+        m.BadNodeColor = Alpha(m.BadNodeColor);
+        m.VisitedNodeColor = Alpha(m.VisitedNodeColor);
+        m.UnlockedNodeColor = Alpha(m.UnlockedNodeColor);
+        m.LockedNodeColor = Alpha(m.LockedNodeColor);
+        m.HiddenNodeColor = Alpha(m.HiddenNodeColor);
+        m.StaticNodeColor = Alpha(m.StaticNodeColor);
+
+        AlphaIcons(p.Labels.Favorite);
+        AlphaIcons(p.Labels.Special);
+        foreach (var ov in p.Labels.Content.Values) AlphaIcons(ov);
+        foreach (var ov in p.Labels.Maps.Values) AlphaIcons(ov);
+    }
+
+    private static void AlphaIcons(LabelStyleOverride ov)
+    {
+        ov.IconTint = Alpha(ov.IconTint);
+        ov.MapIconTint = Alpha(ov.MapIconTint);
+    }
 }
 
 #endregion

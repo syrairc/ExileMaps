@@ -2,7 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Linq;
 using System.Numerics;
 using ExileCore2;
 using GameOffsets2.Native;
@@ -22,7 +21,7 @@ public partial class ExileMapsCore
         if (frameRectCache.TryGetValue(node.Coordinates, out var cached))
             return cached;
         try {
-            var rect = node.MapNode.Element.GetClientRect();
+            var rect = WorldAlignedRect(node, node.MapNode.Element.GetClientRect());
             frameRectCache[node.Coordinates] = rect;
             return rect;
         } catch (Exception e) {
@@ -62,7 +61,7 @@ public partial class ExileMapsCore
             if (node == null)
                 return;
 
-            var rect = node.MapNode.Element.GetClientRect();
+            var rect = WorldAlignedRect(node, node.MapNode.Element.GetClientRect());
             if (Settings.Graphics.DrawNodes.HasFlag(StateOf(node)))
                 DrawMapNode(node, rect);
             DrawContentRow(node, rect);
@@ -77,7 +76,7 @@ public partial class ExileMapsCore
     }
 
     private void DrawDebugging(Node cachedNode) {
-        var rect = cachedNode.MapNode.Element.GetClientRect();
+        var rect = WorldAlignedRect(cachedNode, cachedNode.MapNode.Element.GetClientRect());
         string debugText = cachedNode.DebugText() + $"Size: {rect.Width:0} x {rect.Height:0}\n";
         using (Graphics.SetTextScale(1.0f))
             DrawCenteredTextWithBackground(debugText, rect.Center, OverlayText, OverlayBg, true, 10, 4);
@@ -144,8 +143,6 @@ public partial class ExileMapsCore
 
     private void DrawPolylineRuns(Vector2[] pts, int n, Color from, Color to, float width)
     {
-        edgesDrawn++;
-
         float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
         for (int i = 0; i < n; i++) {
             if (pts[i].X < minX) minX = pts[i].X;
@@ -236,7 +233,7 @@ public partial class ExileMapsCore
     private LabelStyleOverride MapOverride(Node n)
     {
         var id = n?.MapType?.ShortestId;
-        return id != null && Settings.Labels.Maps.TryGetValue(id, out var ov) ? ov : null;
+        return id != null && Settings.Labels.Maps.TryGetValue(id, out var ov) && ov.Enabled ? ov : null;
     }
 
     private void DrawMapNode(Node cachedNode, RectangleF nodeCurrentPosition)
@@ -470,7 +467,7 @@ public partial class ExileMapsCore
         if (overrides.Count > 0 && node.Content.Count > 0) {
             float bestW = float.NegativeInfinity;
             foreach (var c in node.Content.Values) {
-                if (c?.Id == null || !overrides.TryGetValue(c.Id, out var ov))
+                if (c?.Id == null || !overrides.TryGetValue(c.Id, out var ov) || !ov.Enabled)
                     continue;
                 float w = Settings.ReadContent(c.Id).Weight;
                 if (w > bestW) { bestW = w; best = ov; }
@@ -875,8 +872,6 @@ public partial class ExileMapsCore
 
             Vector2 pos = cursor + new Vector2(16, 16);
             using (Graphics.SetTextScale(1.0f)) {
-                // fixed look, not Labels.Base - this is a hover tip, not a map-name label, and
-                // borrowing the label style meant editing it also reskinned this unrelated tip
                 DrawCenteredTextWithBorder(title, pos + new Vector2(Graphics.MeasureText(title).X / 2f, 0),
                     Color.White, IconTooltipBg, IconTooltipBorder, 10, 6);
             }

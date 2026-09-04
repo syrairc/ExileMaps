@@ -1,5 +1,4 @@
-﻿
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -22,10 +21,10 @@ public partial class ExileMapsCore
     #region Map Cache
 
     private static NodeStates StateOf(Node n) =>
-        n.IsDone ? NodeStates.Visited  :
-        n.IsUnlocked                 ? NodeStates.Unlocked :
-        n.IsVisible                  ? NodeStates.Locked   :
-                                        NodeStates.Hidden;
+        n.IsDone ? NodeStates.Visited :
+        n.IsUnlocked ? NodeStates.Unlocked :
+        n.IsVisible ? NodeStates.Locked :
+        NodeStates.Hidden;
 
     public void RefreshMapCache(bool clearCache = false)
     {
@@ -147,6 +146,7 @@ public partial class ExileMapsCore
         };
 
         newNode.ResolveSpecial();
+        CacheWorldPos(node, newNode);
 
         if (!newNode.IsDone) {
             try {
@@ -187,6 +187,8 @@ public partial class ExileMapsCore
         cachedNode.ParentAddress = node.Address;
         cachedNode.MapNode = node;
         cachedNode.ArtWidth = el.Width;
+
+        CacheWorldPos(node, cachedNode);
 
         bool wasSpecial = cachedNode.IsSpecial;
         cachedNode.ResolveSpecial();
@@ -241,6 +243,22 @@ public partial class ExileMapsCore
 
         mapIdIndex = idx;
         mapIdIndexCount = Settings.GameData.Maps.Count;
+    }
+
+    private static void CacheWorldPos(AtlasNodeDescription node, Node cachedNode)
+    {
+        if (cachedNode.HasWorldPos)
+            return;
+        try {
+            var d3d = node?.Description3D;
+            if (d3d == null)
+                return;
+            var pos = d3d.Position;
+            if (pos == System.Numerics.Vector3.Zero)
+                return;
+            cachedNode.WorldPos = pos;
+            cachedNode.HasWorldPos = true;
+        } catch { }
     }
 
     private bool CacheMapConnections(Node cachedNode,
@@ -773,7 +791,7 @@ public partial class ExileMapsCore
         AtlasNodeDescription closestNode = null;
         float bestDistSq = float.MaxValue;
         foreach (var d in AtlasPanel.Descriptions) {
-            float distSq = Vector2.DistanceSquared(cursor, d.Element.GetClientRectCache.Center);
+            float distSq = Vector2.DistanceSquared(cursor, WorldAlignedRect(d, d.Element.GetClientRectCache).Center);
             if (distSq < bestDistSq) { bestDistSq = distSq; closestNode = d; }
         }
 

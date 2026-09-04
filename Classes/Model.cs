@@ -8,12 +8,7 @@ using System.Text;
 using GameOffsets2.Native;
 using System.Linq;
 using System.Drawing;
-using ExileCore2;
-using ExileCore2.Shared.Enums;
-using ExileCore2.Shared.Attributes;
 using ExileImGui2;
-using ExileCore2.Shared.Nodes;
-using System.Threading.Tasks;
 using static ExileMaps.ExileMapsCore;
 
 namespace ExileMaps.Classes;
@@ -56,6 +51,10 @@ public class Node
     public bool IsAttempted => !IsUnlocked && IsVisited;
     [JsonIgnore]
     public bool IsDone => IsVisited || IsCompleted;
+    [JsonIgnore]
+    public System.Numerics.Vector3 WorldPos;
+    [JsonIgnore]
+    public bool HasWorldPos;
     private int favFrame = -1;
     private bool favCached;
 
@@ -308,6 +307,8 @@ public enum IconPosition
 
 public class LabelStyleOverride
 {
+    public bool Enabled { get; set; } = true;
+
     public TextStyleOverride Text { get; set; } = new();
 
     public bool TextColorByWeight { get; set; }

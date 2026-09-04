@@ -185,6 +185,8 @@ public partial class ExileMapsCore
         var g = Settings.Graphics;
         var m = Settings.Maps;
 
+        d |= DrawGraphicsPresetRow();
+
         if (Controls.Category("Nodes"))
         {
             d |= Controls.SliderFloat("Node Radius", () => g.NodeRadius, v => g.NodeRadius = v, 0f, 10f, null, "%.2f");
@@ -342,6 +344,39 @@ public partial class ExileMapsCore
         return d;
     }
 
+    private GraphicsPreset pendingPreset = GraphicsPreset.Normal;
+
+    private bool DrawGraphicsPresetRow()
+    {
+        bool applied = false;
+
+        ImGui.TextDisabled("Preset");
+        Controls.Tip("Overwrites this profile's visual toggles. Weights are untouched.");
+        ImGui.SameLine();
+
+        for (int i = 0; i < GraphicsPresets.Names.Length; i++)
+        {
+            if (i > 0) ImGui.SameLine();
+            if (ImGui.Button(GraphicsPresets.Names[i]))
+            {
+                pendingPreset = (GraphicsPreset)i;
+                ImGui.OpenPopup("apply_gfx_preset");
+            }
+            Controls.Tip(GraphicsPresets.Describe((GraphicsPreset)i));
+        }
+
+        if (ExileImGui2.Windows.ConfirmModal("apply_gfx_preset",
+            "Apply the " + GraphicsPresets.Names[(int)pendingPreset] + " preset to this profile?", out bool ok) && ok)
+        {
+            GraphicsPresets.Apply(Settings.Active, pendingPreset);
+            refreshCache = true;
+            applied = true;
+        }
+
+        ImGui.Separator();
+        return applied;
+    }
+
     #endregion
 
     #region Styles
@@ -403,6 +438,14 @@ public partial class ExileMapsCore
         bool removeIsMap = false;
 
         var cols = new[] {
+            new TableColumn<LabelRow> {
+                Header = "", Width = 22f, SortKey = null,
+                Draw = (r, _) => {
+                    if (r.Key is null or "__favorite" or "__special") return;
+                    d |= Check("##ovon", () => r.Ov.Enabled, v => r.Ov.Enabled = v);
+                    Controls.Tip("Apply this override.");
+                },
+            },
             new TableColumn<LabelRow> {
                 Header = "Layer", Width = 0f, SortKey = null,
                 Draw = (r, _) => { ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted(r.Name); },
@@ -1179,12 +1222,20 @@ public partial class ExileMapsCore
         {
             d |= Controls.ToggleGrid("hack_togs", new[] {
                 Tog("Atlas zoom", () => h.AtlasZoom, v => h.AtlasZoom = v,
-                    "Removes the 0.85/1.25 atlas zoom clamps. Out to 0.5."),
+                    "Rewrites the atlas zoom clamps with the limits below."),
                 Tog("Atlas fog", () => h.AtlasFog, v => h.AtlasFog = v,
                     "Stops fog-of-war creation. Reopen the atlas to apply."),
+                Tog("Fuck your atlas, Jonathan.", () => h.AtlasFogAll, v => h.AtlasFogAll = v,
+                    "Fogs the whole atlas. hello darkness my old friend."),
                 Tog("Atlas camera pan", () => h.AtlasCameraPan, v => h.AtlasCameraPan = v,
                     "Goto buttons on panels that pan the atlas to a node."),
             }, 0);
+
+            if (h.AtlasFogAll && h.AtlasFog)
+                ImGui.TextColored(HackGrey, "Full fog does nothing while Atlas fog is killing the material.");
+
+            if (h.AtlasZoom)
+                d |= DrawZoomLimits(h, patcher);
 
             if (h.AtlasCameraPan)
             {
@@ -1224,6 +1275,26 @@ public partial class ExileMapsCore
             ImGui.TextWrapped("Camera pan: " + atlasCamera.LastError);
             ImGui.PopStyleColor();
         }
+
+        return d;
+    }
+
+    private bool DrawZoomLimits(HackSettings h, Patcher patcher)
+    {
+        bool d = false;
+
+        var outF = h.ZoomOutFactor;
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.SliderFloat("Zoom out limit", ref outF, 1f, Patcher.MaxZoomOutFactor, "%.2fx further")) { h.ZoomOutFactor = outF; d = true; }
+        Controls.Tip("How much further out than stock. Capped, a near-zero scale breaks fog.");
+
+        var inF = h.ZoomInFactor;
+        ImGui.SetNextItemWidth(220);
+        if (ImGui.SliderFloat("Zoom in limit", ref inF, 1f, Patcher.MaxZoomInFactor, "%.2fx closer")) { h.ZoomInFactor = inF; d = true; }
+        Controls.Tip("Multiplies how far in the atlas goes. 1x is the stock ceiling.");
+
+        foreach (var (note, stock, live) in patcher.ZoomLimits())
+            ImGui.TextColored(HackGrey, $"{stock:0.###} -> {live:0.###}   {note}");
 
         return d;
     }

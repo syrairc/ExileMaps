@@ -1,5 +1,4 @@
-﻿
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
@@ -10,8 +9,6 @@ using Newtonsoft.Json;
 using System.Windows.Forms;
 using ExileCore2;
 using ExileCore2.PoEMemory.Elements.AtlasElements;
-using ExileCore2.PoEMemory.MemoryObjects;
-using ExileCore2.Shared.Nodes;
 using GameOffsets2.Native;
 using ImGuiNET;
 using RectangleF = ExileCore2.Shared.RectangleF;
@@ -632,9 +629,6 @@ public partial class ExileMapsCore
         var atlas = Art("atlas");
         var exped = Art("expeditions");
 
-        // not a rail glyph - these are the on-atlas expedition markers, still drawn straight
-        // off the old panel-button art. loading them here since nothing else registers them
-        // now that the bottom sprite bar is gone.
         LoadPanelTexture(ExpeditionMarkerNormal, required: false);
         LoadPanelTexture(ExpeditionMarkerHover, required: false);
 
@@ -841,7 +835,7 @@ public partial class ExileMapsCore
             foreach (var d in AtlasPanel.Descriptions)
             {
                 ExileCore2.Shared.RectangleF r;
-                try { r = d.Element.GetClientRectCache; } catch { continue; }
+                try { r = WorldAlignedRect(d, d.Element.GetClientRectCache); } catch { continue; }
                 float distSq = Vector2.DistanceSquared(cursor, r.Center);
                 if (distSq < bestDistSq) { bestDistSq = distSq; bestCoord = d.Coordinate; bestRect = r; hasBest = true; }
             }

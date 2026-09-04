@@ -4,13 +4,10 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Numerics;
-using ExileCore2;
 using ExileCore2.PoEMemory;
-using ExileCore2.Shared.Interfaces;
 using ImGuiNET;
 using ExileImGui2;
 using ExileMaps.Classes;
-using GameOffsets2.Native;
 
 namespace ExileMaps;
 

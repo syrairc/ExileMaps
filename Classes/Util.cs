@@ -4,8 +4,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Drawing;
-using ExileCore2.PoEMemory.Components;
-using System.Threading.Tasks;
 using Newtonsoft.Json;
 using GameOffsets2.Native;
 using System.Diagnostics;
