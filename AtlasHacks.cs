@@ -808,16 +808,6 @@ internal sealed class Patcher : IDisposable
         return ok;
     }
 
-    public IEnumerable<(string Note, float Stock, float Live)> ZoomLimits()
-    {
-        foreach (var site in Table)
-        {
-            if (!IsSlotSite(site)) continue;
-            var live = ReadFloats(SlotAddress(site), 1);
-            yield return (site.Note, site.Stock, live == null ? float.NaN : live[0]);
-        }
-    }
-
     private void SeedScratch()
     {
         foreach (var site in Table)

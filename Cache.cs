@@ -787,9 +787,25 @@ public partial class ExileMapsCore
 
     private Node GetClosestNodeToCursor() {
         var cursor = ImGui.GetMousePos();
+        var project = frameWorldToScreen;
+
+        Node best = null;
+        float bestDistSq = float.MaxValue;
+
+        if (project != null) {
+            var pool = selectedNodes.Count > 0 ? (IEnumerable<Node>)selectedNodes : mapCache.Values;
+            foreach (var n in pool) {
+                if (n == null || !n.HasWorldPos)
+                    continue;
+                float distSq = Vector2.DistanceSquared(cursor, project(n.WorldPos));
+                if (distSq < bestDistSq) { bestDistSq = distSq; best = n; }
+            }
+            if (best != null)
+                return best;
+        }
 
         AtlasNodeDescription closestNode = null;
-        float bestDistSq = float.MaxValue;
+        bestDistSq = float.MaxValue;
         foreach (var d in AtlasPanel.Descriptions) {
             float distSq = Vector2.DistanceSquared(cursor, WorldAlignedRect(d, d.Element.GetClientRectCache).Center);
             if (distSq < bestDistSq) { bestDistSq = distSq; closestNode = d; }

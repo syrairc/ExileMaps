@@ -58,6 +58,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private readonly Dictionary<(Vector2i, Vector2i), Vector2[]> frameCurveCache = [];
     private readonly Dictionary<Vector2i, float> nameHalfByCoord = [];
     private readonly Dictionary<Vector2i, LabelStyleOverride> contentOverrideByCoord = [];
+    private readonly HashSet<Vector2i> drawnCoords = [];
+    private readonly Dictionary<(string, float), Vector2> textSizeCache = new(256);
     private Func<Vector3, Vector2> frameWorldToScreen;
     private readonly List<RectangleF> excludeScratch = [];
     private readonly Vector2[] polyScratch = new Vector2[520];
@@ -285,6 +287,14 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         if (!AtlasPanel.IsVisible) return;
 
+        try {
+            var snap = AtlasPanel?.Camera?.Snapshot;
+            frameWorldToScreen = snap == null ? null : snap.WorldToScreen;
+        } catch (Exception e) {
+            frameWorldToScreen = null;
+            DebugSwallow("Render: camera snapshot", e);
+        }
+
         DrawExileMapsButton();
 
         if (atlasCamera is { Busy: true }) return;
@@ -303,14 +313,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         frameCurveCache.Clear();
         nameHalfByCoord.Clear();
         contentOverrideByCoord.Clear();
-
-        try {
-            var snap = AtlasPanel?.Camera?.Snapshot;
-            frameWorldToScreen = snap == null ? null : snap.WorldToScreen;
-        } catch (Exception e) {
-            frameWorldToScreen = null;
-            DebugSwallow("Render: camera snapshot", e);
-        }
+        drawnCoords.Clear();
 
         if (TickCount % OnScreenRecomputeInterval == 0 || lastCullVersion != mapCacheVersion) {
             t0 = Stopwatch.GetTimestamp();
@@ -349,6 +352,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     continue;
                 rect = WorldAlignedRect(node, rect);
                 frameRectCache[node.Coordinates] = rect;
+                drawnCoords.Add(node.Coordinates);
                 nodePositions.Add((node, rect));
             }
             catch (Exception e) { DebugSwallow("Render: node rect read", e); }
@@ -403,9 +407,13 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             }
             if (perf) PerfMonitor.Record("Render.Labels", Stopwatch.GetTimestamp() - t0);
 
+            t0 = Stopwatch.GetTimestamp();
             DrawHoveredNodeOverTooltip();
+            if (perf) PerfMonitor.Record("Render.HoveredOverTooltip", Stopwatch.GetTimestamp() - t0);
 
+            t0 = Stopwatch.GetTimestamp();
             DrawIconTooltips();
+            if (perf) PerfMonitor.Record("Render.IconTooltips", Stopwatch.GetTimestamp() - t0);
         }
 
         if (waypointSyncPending) {

@@ -1235,7 +1235,7 @@ public partial class ExileMapsCore
                 ImGui.TextColored(HackGrey, "Full fog does nothing while Atlas fog is killing the material.");
 
             if (h.AtlasZoom)
-                d |= DrawZoomLimits(h, patcher);
+                d |= DrawZoomLimits(h);
 
             if (h.AtlasCameraPan)
             {
@@ -1279,7 +1279,7 @@ public partial class ExileMapsCore
         return d;
     }
 
-    private bool DrawZoomLimits(HackSettings h, Patcher patcher)
+    private bool DrawZoomLimits(HackSettings h)
     {
         bool d = false;
 
@@ -1292,9 +1292,6 @@ public partial class ExileMapsCore
         ImGui.SetNextItemWidth(220);
         if (ImGui.SliderFloat("Zoom in limit", ref inF, 1f, Patcher.MaxZoomInFactor, "%.2fx closer")) { h.ZoomInFactor = inF; d = true; }
         Controls.Tip("Multiplies how far in the atlas goes. 1x is the stock ceiling.");
-
-        foreach (var (note, stock, live) in patcher.ZoomLimits())
-            ImGui.TextColored(HackGrey, $"{stock:0.###} -> {live:0.###}   {note}");
 
         return d;
     }
