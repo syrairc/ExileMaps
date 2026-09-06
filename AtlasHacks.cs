@@ -638,7 +638,7 @@ internal sealed class Patcher : IDisposable
             Signature = "83 B8 ?? ?? ?? ?? 23 75 08 48 8B CB E8 ?? ?? ?? ??",
             SigOffset = 12,
             Length = 5,
-            ReferenceAddress = 0x140B86531L,
+            ReferenceAddress = 0x140B99891L,
             Note = "call that builds the fog material, in WorldMapEndgamePage_FrameMove",
         },
 
@@ -649,11 +649,11 @@ internal sealed class Patcher : IDisposable
             Signature = "C7 45 60 FF FF 7F FF 49 8B 5E 50 E8 ?? ?? ?? ?? 48 8B 48 08 48 8B 83 ?? ?? ?? ??",
             SigOffset = 23,
             Length = 4,
-            From = new byte[] { 0xF8, 0x1B, 0x00, 0x00 },
-            To = new byte[] { 0x00, 0x1C, 0x00, 0x00 },
-            ReferenceAddress = 0x140B874D6L,
+            From = new byte[] { 0x18, 0x1C, 0x00, 0x00 },
+            To = new byte[] { 0x20, 0x1C, 0x00, 0x00 },
+            ReferenceAddress = 0x140B9A836L,
             Note = "reveal-circle branch of WorldMapFowShape_SetupMaterial, repointed from the "
-                 + "WorldMap FoW Reveal C object at page+0x1BF8 to WorldMap FoW Hide Sq at page+0x1C00, "
+                 + "WorldMap FoW Reveal C object at page+0x1C18 to WorldMap FoW Hide Sq at page+0x1C20, "
                  + "so every reveal shape paints fog instead of clearing it",
         },
 
@@ -665,7 +665,7 @@ internal sealed class Patcher : IDisposable
             SigOffset = 12,
             Length = 8,
             Slot = 0,
-            ReferenceAddress = 0x140B96337L,
+            ReferenceAddress = 0x140BA9467L,
             Note = "wheel handler floor, the one that actually binds",
         },
         new()
@@ -676,7 +676,7 @@ internal sealed class Patcher : IDisposable
             SigOffset = 16,
             Length = 8,
             Slot = 1,
-            ReferenceAddress = 0x140BF6671L,
+            ReferenceAddress = 0x140BEE321L,
             Note = "ZoomStepCmd floor, a cmov not a maxss, so NOPing it would pin the scale instead",
         },
         new()
@@ -686,7 +686,7 @@ internal sealed class Patcher : IDisposable
             Signature = "0F 28 C8 F3 0F 5F F1 F3 0F 5D F0 48 89 AC 24",
             SigOffset = 3,
             Length = 4,
-            ReferenceAddress = 0x140BA04F9L,
+            ReferenceAddress = 0x140BB374CL,
             Note = "ZoomAtCursor maxss, redundant re-clamp",
         },
         new()
@@ -696,7 +696,7 @@ internal sealed class Patcher : IDisposable
             Signature = "0F 28 C8 F3 0F 5F F1 F3 0F 5D F0 0F 28 DE",
             SigOffset = 3,
             Length = 4,
-            ReferenceAddress = 0x140B96D25L,
+            ReferenceAddress = 0x140BA9E55L,
             Note = "TravelToNode maxss, redundant re-clamp",
         },
 
@@ -708,7 +708,7 @@ internal sealed class Patcher : IDisposable
             SigOffset = 0,
             Length = 8,
             Slot = 2,
-            ReferenceAddress = 0x140B963A2L,
+            ReferenceAddress = 0x140BA94D2L,
             Note = "wheel handler ceiling load, retargeted so the clamp stays and we own its value",
         },
         new()
@@ -718,7 +718,7 @@ internal sealed class Patcher : IDisposable
             Signature = "0F 28 C8 F3 0F 5F F1 F3 0F 5D F0 48 89 AC 24",
             SigOffset = 7,
             Length = 4,
-            ReferenceAddress = 0x140BA04FDL,
+            ReferenceAddress = 0x140BB3750L,
             Note = "ZoomAtCursor minss, redundant re-clamp",
         },
         new()
@@ -728,7 +728,7 @@ internal sealed class Patcher : IDisposable
             Signature = "0F 28 C8 F3 0F 5F F1 F3 0F 5D F0 0F 28 DE",
             SigOffset = 7,
             Length = 4,
-            ReferenceAddress = 0x140B96D29L,
+            ReferenceAddress = 0x140BA9E59L,
             Note = "TravelToNode minss, redundant re-clamp",
         },
         new()
@@ -738,7 +738,7 @@ internal sealed class Patcher : IDisposable
             Signature = "41 0F 2F 00 48 8D 44 24 ?? F3 0F 11 44 24 ?? 49 0F 46 C0 F3 0F 10 18 F3 0F 5D D9",
             SigOffset = 23,
             Length = 4,
-            ReferenceAddress = 0x140BF66B7L,
+            ReferenceAddress = 0x140BEE367L,
             Note = "ZoomStepCmd ceiling",
         },
 
