@@ -135,39 +135,9 @@ public partial class ExileMapsCore
     private int wpMaxSteps = 0;
     private string wpFilter = "";
 
-    private void DrawTourRoutingControls()
+    private void RebuildTours()
     {
-        bool changed = false;
-        bool weightAware = Settings.Tours.WeightAwareRouting;
-        if (ImGui.Checkbox("Weight-aware routing", ref weightAware)) { Settings.Tours.WeightAwareRouting = weightAware; changed = true; }
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Longer tour when the extra maps are worth it.");
-        if (weightAware)
-        {
-            ImGui.SameLine();
-            float extraCost = Settings.Tours.ExtraMapCost;
-            ImGui.SetNextItemWidth(140);
-            if (ImGui.SliderFloat("Extra map cost", ref extraCost, 0f, 100f, "%.0f")) { Settings.Tours.ExtraMapCost = extraCost; changed = true; }
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("A map costs this minus its weight, min 0.");
-        }
-        if (changed)
-            foreach (var t in Settings.Tours.Tours.Values) t.BuiltVersion = -1;
-    }
-
-    private void DrawWaypointRoutingControls()
-    {
-        bool changed = false;
-        bool weightAware = Settings.Waypoints.WeightAwareRouting;
-        if (ImGui.Checkbox("Weight-aware routing", ref weightAware)) { Settings.Waypoints.WeightAwareRouting = weightAware; changed = true; }
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip("Longer route when the extra maps are worth it.");
-        if (weightAware)
-        {
-            ImGui.SameLine();
-            float extraCost = Settings.Waypoints.ExtraMapCost;
-            ImGui.SetNextItemWidth(140);
-            if (ImGui.SliderFloat("Extra map cost", ref extraCost, 0f, 100f, "%.0f")) { Settings.Waypoints.ExtraMapCost = extraCost; changed = true; }
-            if (ImGui.IsItemHovered()) ImGui.SetTooltip("A map costs this minus its weight, min 0.");
-        }
-        if (changed) UpdateWaypointPaths();
+        foreach (var t in Settings.Tours.Tours.Values) t.BuiltVersion = -1;
     }
 
     private void DrawWaypointBody() {
@@ -199,7 +169,6 @@ public partial class ExileMapsCore
         }
         ImGui.EndTable();
 
-        DrawWaypointRoutingControls();
         ImGui.Spacing();
 
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(0, 10));
@@ -1192,7 +1161,6 @@ public partial class ExileMapsCore
                 if (buildModeActive) ImGui.PopStyleColor();
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip("Left-click atlas nodes to add stops to the active tour; right-click removes. Press the Build Mode exit key (default Tab) to exit.");
 
-                DrawTourRoutingControls();
                 ImGui.Separator();
 
                 DrawAutoTourSection();

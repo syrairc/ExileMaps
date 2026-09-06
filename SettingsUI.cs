@@ -849,6 +849,18 @@ public partial class ExileMapsCore
                 d |= Check("Only the nearest of each favorited map", () => w.AutoWaypointNearestOnly, v => w.AutoWaypointNearestOnly = v);
                 Controls.Tip("Favoriting a map favorites every copy. Keep the closest one.");
             }
+
+            if (Check("Weight-aware routing", () => w.WeightAwareRouting, v => w.WeightAwareRouting = v)) {
+                d = true;
+                UpdateWaypointPaths();
+            }
+            Controls.Tip("Longer route when the extra maps are worth running.");
+
+            if (w.WeightAwareRouting) {
+                d |= Controls.SliderFloat("Extra Map Cost", () => w.ExtraMapCost, v => w.ExtraMapCost = v, 0f, 100f, fmt: "%.0f");
+                Controls.Tip("A map costs this minus its weight, min 0.");
+                if (ImGui.IsItemDeactivatedAfterEdit()) UpdateWaypointPaths();
+            }
         }
 
         if (Controls.Category("Paths"))
@@ -883,6 +895,18 @@ public partial class ExileMapsCore
 
             d |= Controls.SliderInt("Auto Tour Reach", () => t.AutoTourReach, v => t.AutoTourReach = v, 1, 10);
             Controls.Tip("Max steps between stops when auto-tour chains a route.");
+
+            if (Check("Weight-aware routing", () => t.WeightAwareRouting, v => t.WeightAwareRouting = v)) {
+                d = true;
+                RebuildTours();
+            }
+            Controls.Tip("Longer tour when the extra maps are worth running.");
+
+            if (t.WeightAwareRouting) {
+                d |= Controls.SliderFloat("Extra Map Cost", () => t.ExtraMapCost, v => t.ExtraMapCost = v, 0f, 100f, id: "tour", fmt: "%.0f");
+                Controls.Tip("A map costs this minus its weight, min 0.");
+                if (ImGui.IsItemDeactivatedAfterEdit()) RebuildTours();
+            }
         }
         return d;
     }
