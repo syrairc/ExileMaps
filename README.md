@@ -1,6 +1,8 @@
 # ExileMaps
 
-Readme is outdated, will update later.
+An ExileCore2 overlay plugin for the endgame Atlas. It scores every map on the Atlas from weights
+you set, styles the nodes and labels to match, draws the connections between them, and manages
+waypoints and multi-stop tours with real routing behind them.
 
 ## Donations
 
@@ -10,6 +12,9 @@ ExileAPI: https://github.com/exApiTools/ExileApi-Compiled
 
 ExileCore2: https://github.com/exCore2/ExileCore2
 
+## Credits
+
+Weight-aware routing for tours and waypoints (the `Weight-aware routing` / `Extra map cost` controls, and the Dijkstra route cost that backs them) is sTafnio's work, from pull request #33. The refactor moved the code into `Cache.cs` / `Features.cs`, but the routing model is theirs.
 
 ## Forks
 

@@ -618,7 +618,55 @@ public partial class ExileMapsCore
 
     #region Pathfinding
 
-    private (List<Node> path, float weight) FindPathToNearestCompleted(Node destination)
+    private static float RouteCost(Node n, HashSet<Vector2i> done, float? extraMapCost, out bool fresh)
+    {
+        fresh = !(n.IsDone || (done != null && done.Contains(n.Coordinates)));
+        if (!fresh) return 0f;
+        if (extraMapCost == null) return 1f;
+        return Math.Max(0f, extraMapCost.Value - n.Weight);
+    }
+
+    private float? TourExtraMapCost => Settings.Tours.WeightAwareRouting ? Settings.Tours.ExtraMapCost : null;
+
+    private float? WaypointExtraMapCost => Settings.Waypoints.WeightAwareRouting ? Settings.Waypoints.ExtraMapCost : null;
+
+    private (List<Node> path, int steps, float weight) Route(Node start, Func<Node, bool> isGoal, HashSet<Vector2i> done, float? extraMapCost)
+    {
+        var best = new Dictionary<Vector2i, (float cost, int steps, float weight)> { [start.Coordinates] = (0f, 0, 0f) };
+        var parent = new Dictionary<Vector2i, Node> { [start.Coordinates] = null };
+        var pq = new PriorityQueue<Node, (float cost, int steps, float negWeight)>();
+        pq.Enqueue(start, (0f, 0, 0f));
+
+        static bool Better((float cost, int steps, float weight) a, (float cost, int steps, float weight) b)
+            => a.cost < b.cost || (a.cost == b.cost && (a.steps < b.steps || (a.steps == b.steps && a.weight > b.weight)));
+
+        while (pq.TryDequeue(out var current, out var pri))
+        {
+            var c = current.Coordinates;
+            var cur = best[c];
+            if (Better(cur, (pri.cost, pri.steps, -pri.negWeight))) continue;
+            if (isGoal(current))
+            {
+                var found = new List<Node>();
+                for (Node n = current; n != null; n = parent[n.Coordinates]) found.Add(n);
+                found.Reverse();
+                return (found, cur.steps, cur.weight);
+            }
+            foreach (var nb in current.Neighbors.Values)
+            {
+                if (nb == null) continue;
+                float step = RouteCost(nb, done, extraMapCost, out bool fresh);
+                var cand = (cur.cost + step, cur.steps + (fresh ? 1 : 0), cur.weight + (fresh ? nb.Weight : 0f));
+                if (best.TryGetValue(nb.Coordinates, out var old) && !Better(cand, old)) continue;
+                best[nb.Coordinates] = cand;
+                parent[nb.Coordinates] = current;
+                pq.Enqueue(nb, (cand.Item1, cand.Item2, -cand.Item3));
+            }
+        }
+        return (null, 0, 0f);
+    }
+
+    private (List<Node> path, float weight) FindPathToNearestCompleted(Node destination, float? extraMapCost)
     {
         if (destination == null)
             return (null, 0f);
@@ -626,98 +674,21 @@ public partial class ExileMapsCore
         if (destination.IsDone)
             return (new List<Node> { destination }, destination.Weight);
 
-        var dist = new Dictionary<Vector2i, int>();
-        var best = new Dictionary<Vector2i, float>();
-        var parent = new Dictionary<Vector2i, Node>();
-        var queue = new Queue<Node>();
-
-        dist[destination.Coordinates] = 0;
-        best[destination.Coordinates] = destination.Weight;
-        parent[destination.Coordinates] = null;
-        queue.Enqueue(destination);
-
-        int anchorDist = int.MaxValue;
-        float anchorWeight = float.NegativeInfinity;
-        Node anchor = null;
-
-        while (queue.Count > 0)
-        {
-            var current = queue.Dequeue();
-            int cd = dist[current.Coordinates];
-
-            if (cd > anchorDist)
-                break;
-
-            if (current.IsDone && current.Coordinates != destination.Coordinates)
-            {
-                float w = best[current.Coordinates];
-                if (cd < anchorDist || (cd == anchorDist && w > anchorWeight))
-                {
-                    anchorDist = cd;
-                    anchorWeight = w;
-                    anchor = current;
-                }
-                continue;
-            }
-
-            foreach (var neighbor in current.Neighbors.Values)
-            {
-                if (neighbor == null)
-                    continue;
-                int nd = cd + 1;
-                float nw = best[current.Coordinates] + (neighbor.IsDone ? 0f : neighbor.Weight);
-                if (!dist.TryGetValue(neighbor.Coordinates, out int existing))
-                {
-                    dist[neighbor.Coordinates] = nd;
-                    best[neighbor.Coordinates] = nw;
-                    parent[neighbor.Coordinates] = current;
-                    queue.Enqueue(neighbor);
-                }
-                else if (existing == nd && nw > best[neighbor.Coordinates])
-                {
-                    best[neighbor.Coordinates] = nw;
-                    parent[neighbor.Coordinates] = current;
-                }
-            }
-        }
-
-        if (anchor == null)
+        var (path, _, weight) = Route(destination, n => n.IsDone && n.Coordinates != destination.Coordinates, null, extraMapCost);
+        if (path == null)
             return (null, 0f);
 
-        var path = new List<Node>();
-        for (Node n = anchor; n != null; n = parent[n.Coordinates])
-            path.Add(n);
-
-        return (path, anchorWeight);
+        path.Reverse();
+        return (path, weight + destination.Weight);
     }
 
-    private List<Node> FindPath(Node from, Node to)
+    private (List<Node> path, int steps) FindPath(Node from, Node to, HashSet<Vector2i> done = null)
     {
-        if (from == null || to == null) return null;
-        if (from.Coordinates == to.Coordinates) return new List<Node> { from };
+        if (from == null || to == null) return (null, 0);
+        if (from.Coordinates == to.Coordinates) return (new List<Node> { from }, 0);
 
-        var parent = new Dictionary<Vector2i, Node> { [from.Coordinates] = null };
-        var queue = new Queue<Node>();
-        queue.Enqueue(from);
-
-        while (queue.Count > 0)
-        {
-            var current = queue.Dequeue();
-            foreach (var neighbor in current.Neighbors.Values)
-            {
-                if (neighbor == null || parent.ContainsKey(neighbor.Coordinates)) continue;
-                parent[neighbor.Coordinates] = current;
-                if (neighbor.Coordinates == to.Coordinates)
-                {
-                    var path = new List<Node>();
-                    for (Node n = neighbor; n != null; n = parent[n.Coordinates]) path.Add(n);
-                    path.Reverse();
-                    return path;
-                }
-                queue.Enqueue(neighbor);
-            }
-        }
-        return null;
+        var (path, steps, _) = Route(from, n => n.Coordinates == to.Coordinates, done, TourExtraMapCost);
+        return (path, steps);
     }
 
     private Dictionary<Vector2i, int> ComputeStepCounts()
@@ -823,7 +794,7 @@ public partial class ExileMapsCore
         {
             if (mapCache.TryGetValue(waypoint.Coordinates, out Node waypointNode))
             {
-                var (path, weight) = FindPathToNearestCompleted(waypointNode);
+                var (path, weight) = FindPathToNearestCompleted(waypointNode, WaypointExtraMapCost);
                 waypoint.PathFromStart = path;
                 waypoint.PathWeight = weight;
             }

@@ -664,6 +664,10 @@ public class TourSettings
     public List<string> AutoTourContent { get; set; } = new();
 
     public int AutoTourReach { get; set; } = 5;
+
+    public bool WeightAwareRouting { get; set; } = false;
+
+    public float ExtraMapCost { get; set; } = 25f;
 }
 
 #endregion
@@ -724,6 +728,8 @@ public class WaypointSettings
     public bool AutoWaypointFavorites { get; set; } = false;
     public bool AutoWaypointNearestOnly { get; set; } = true;
     public bool AutoRemoveCompletedWaypoints { get; set; } = true;
+    public bool WeightAwareRouting { get; set; } = false;
+    public float ExtraMapCost { get; set; } = 25f;
 
     public Dictionary<string, Waypoint> Waypoints { get; set; } = [];
 }
