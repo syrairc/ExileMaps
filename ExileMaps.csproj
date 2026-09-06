@@ -5,6 +5,8 @@
     <UseWindowsForms>true</UseWindowsForms>
     <PlatformTarget>x64</PlatformTarget>
     <LangVersion>latest</LangVersion>
+    <!--ImGuiNative hands back raw pointers; the atlas list's ImGuiListClipper needs them-->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <DebugType>embedded</DebugType>
     <PathMap>$(MSBuildProjectDirectory)=$(MSBuildProjectName)</PathMap>
     <EmbedAllSources>true</EmbedAllSources>
