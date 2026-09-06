@@ -28,7 +28,6 @@ public partial class ExileMapsCore
 
     public void RefreshMapCache(bool clearCache = false)
     {
-        refreshingCache = true;
         cacheRefreshProgress = 0f;
 
         if (clearCache) {
@@ -106,8 +105,6 @@ public partial class ExileMapsCore
         if (dirty) mapCacheVersion++;
 
         cacheRefreshProgress = 1f;
-        refreshingCache = false;
-        refreshCache = false;
         lastRefreshMs = Environment.TickCount64;
     }
 

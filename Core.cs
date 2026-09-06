@@ -72,7 +72,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private readonly HashSet<Vector2i> frameVisibleExpeditionButtonCoords = new();
     private readonly HashSet<Vector2i> highlightedExpeditionCoords = new();
     public bool refreshCache = false;
-    private bool refreshingCache = false;
+    private volatile bool refreshingCache = false;
     private bool clearCacheOnRefresh = false;
     private volatile float cacheRefreshProgress = 0f;
     private const float maxMapWeight = 50.0f;
@@ -242,6 +242,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         {
             bool clearCache = clearCacheOnRefresh;
             clearCacheOnRefresh = false;
+            refreshCache = false;
+            refreshingCache = true;
             Task.Run(() =>
             {
                 try {
@@ -251,7 +253,6 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                     lastRefreshMs = Environment.TickCount64;
                 } finally {
                     refreshingCache = false;
-                    refreshCache = false;
                 }
             });
         }
