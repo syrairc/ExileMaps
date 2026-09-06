@@ -475,12 +475,23 @@ public partial class ExileMapsCore
 
     private void SyncFavoriteWaypoints() {
         try {
-            Dictionary<string, Node> favorites;
+            List<Node> favorited;
             lock (mapCacheLock)
-                favorites = mapCache.Values
-                    .Where(x => x.IsFavorited && !x.IsDone)
-                    .GroupBy(x => x.Coordinates.ToString())
-                    .ToDictionary(g => g.Key, g => g.First());
+                favorited = mapCache.Values.Where(x => x.IsFavorited && !x.IsDone).ToList();
+
+            if (Settings.Waypoints.AutoWaypointNearestOnly && favorited.Count > 1) {
+                var steps = ComputeStepCounts();
+                int Steps(Node n) => steps.TryGetValue(n.Coordinates, out var s) ? s : int.MaxValue;
+                favorited = favorited
+                    .GroupBy(FavoriteTypeKey)
+                    .Select(g => g.OrderBy(Steps)
+                                  .ThenBy(n => n.Coordinates.X)
+                                  .ThenBy(n => n.Coordinates.Y)
+                                  .First())
+                    .ToList();
+            }
+
+            var favorites = favorited.ToDictionary(n => n.Coordinates.ToString(), n => n);
 
             if (!Settings.Waypoints.AutoWaypointFavorites) {
                 foreach (var key in Settings.Waypoints.Waypoints.Where(x => x.Value.AutoCreated).Select(x => x.Key).ToList())
@@ -505,6 +516,13 @@ public partial class ExileMapsCore
         } catch (Exception e) {
             LogError("Error syncing favorite waypoints: " + e.Message);
         }
+    }
+
+    private static string FavoriteTypeKey(Node node) {
+        var id = node.MapType?.ShortestId;
+        if (!string.IsNullOrEmpty(id))
+            return id;
+        return string.IsNullOrEmpty(node.Name) ? "@" + node.Coordinates : node.Name;
     }
 
     private void RemoveCompletedWaypoints() {

@@ -1031,6 +1031,11 @@ public partial class ExileMapsCore
                 Tog("Auto Create Waypoints for Favorite Maps", () => w.AutoWaypointFavorites, v => w.AutoWaypointFavorites = v),
                 Tog("Auto Remove Completed Waypoints", () => w.AutoRemoveCompletedWaypoints, v => w.AutoRemoveCompletedWaypoints = v),
             }, 0);
+
+            if (w.AutoWaypointFavorites) {
+                d |= Check("Only the nearest of each favorited map", () => w.AutoWaypointNearestOnly, v => w.AutoWaypointNearestOnly = v);
+                Controls.Tip("Favoriting a map favorites every copy. Keep the closest one.");
+            }
         }
 
         if (Controls.Category("Paths"))

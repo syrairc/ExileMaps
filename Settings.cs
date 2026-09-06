@@ -751,6 +751,7 @@ public class WaypointSettings
     public bool ShowWaypointArrows { get; set; } = true;
     public bool InverWaypointArrowsColors { get; set; } = true;
     public bool AutoWaypointFavorites { get; set; } = false;
+    public bool AutoWaypointNearestOnly { get; set; } = true;
     public bool AutoRemoveCompletedWaypoints { get; set; } = true;
 
     public Dictionary<string, Waypoint> Waypoints { get; set; } = [];
