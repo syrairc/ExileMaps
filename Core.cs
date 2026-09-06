@@ -122,7 +122,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         BackupLegacySettingsOnce();
         RegisterHotkeys();
 
-        Settings.Profiles.EnsureDefaultProfile();
+        WireProfiles();
 
         UpdateRumorData();
 
@@ -216,7 +216,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             UpdateContentData(false);
             UpdateBiomeData(false);
             gameFilesScraped = true;
-            Settings.Profiles.EnsureDefaultProfile();
+            Settings.Profiles.Ensure();
             RebuildWeightEditorIds();
         }
 
@@ -663,6 +663,36 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
     }
 
+    private const int ElementTextureRef = 0x240;
+
+    private string TextureOf(ExileCore2.PoEMemory.Element element)
+    {
+        try {
+            long addr = element?.Address ?? 0;
+            if (addr == 0)
+                return null;
+
+            var mem = GameController.Memory;
+            long slot = mem.Read<long>(addr + ElementTextureRef);
+            if (slot == 0)
+                return null;
+
+            long str = mem.Read<long>(slot + 8);
+            if (str == 0)
+                return null;
+
+            string raw = mem.ReadStringU(str, 512);
+            if (string.IsNullOrEmpty(raw))
+                return null;
+
+            int bar = raw.IndexOf('|');
+            return bar > 0 ? raw[..bar] : raw;
+        } catch (Exception e) {
+            DebugSwallow("TextureOf", e);
+            return null;
+        }
+    }
+
     private const string TooltipTexturePrefix = "Art/Textures/Interface/2D/2DArt/UIImages/InGame/AtlasScreen/";
     private static bool IsTooltipTexture(string textureName) =>
         textureName != null && textureName.StartsWith(TooltipTexturePrefix) && textureName.Contains("Popup");
@@ -688,15 +718,16 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (element == null || depth > 8 || !element.IsVisible)
             return;
 
-        if (element.TextureName != null)
+        string texture = TextureOf(element);
+        if (texture != null)
         {
-            if (ExcludeTextureSubtrees.Contains(element.TextureName))
+            if (ExcludeTextureSubtrees.Contains(texture))
             {
                 AddSubtreeRects(element, 0, target);
                 return;
             }
 
-            if (ExcludeTextureNames.Contains(element.TextureName))
+            if (ExcludeTextureNames.Contains(texture))
                 target.Add(element.GetClientRect());
         }
 
@@ -749,7 +780,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             foreach (var tooltip in UI.WorldMap.Children) {
                 if (tooltip == null || !tooltip.IsVisible)
                     continue;
-                if (!IsTooltipTexture(tooltip.TextureName))
+                if (!IsTooltipTexture(TextureOf(tooltip)))
                     continue;
 
                 RectangleF mapTooltip = tooltip.GetClientRect();

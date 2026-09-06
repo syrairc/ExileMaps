@@ -36,20 +36,31 @@ public partial class ExileMapsCore
 
     #region Import / Export
 
+    // everything that has to re-run when the active profile's VALUES change. hung off the store's
+    // OnSwitch, so the profile bar's own switch/delete/copy-into gets it too.
     public void OnProfileApplied() {
-        refreshCache = true;
-        lastRefreshMs = long.MinValue / 2;
-    }
-
-    public void ApplyProfileSwitch(string name)
-    {
-        Settings.Profiles.SwitchProfile(name);
-        Settings.InvalidateActiveProfile();
         RebuildWeightEditorIds();
         RegisterHotkeys();
         RequestSpecialMapsRefresh();
-        OnProfileApplied();
+        refreshCache = true;
+        lastRefreshMs = long.MinValue / 2;
         weightsDirty = true;
+    }
+
+    // the store's seams. none of them serialize, so this runs again after an import swaps the
+    // whole store out from under us.
+    public void WireProfiles() {
+        Settings.Profiles.Json = SettingsContainer.jsonSettings;
+        Settings.Profiles.NameStem = () => GameController?.Game?.IngameState?.ServerData?.League;
+        Settings.Profiles.OnSwitch = _ => OnProfileApplied();
+        Settings.Profiles.Ensure();
+    }
+
+    // switch by name from an import path. Switch is a no-op when that name is already active, so
+    // run the side effects here in that case - the values moved even though the name didn't.
+    public void ApplyProfileSwitch(string name)
+    {
+        if (!Settings.Profiles.Switch(name)) OnProfileApplied();
     }
 
     public void ResetMapWeightsToDefaults() {
@@ -67,7 +78,7 @@ public partial class ExileMapsCore
 
     public void ExportSettings() => OpenFileDialogAsync("Export Settings", "exilemaps_settings.json", true, WriteSettings);
     public void ImportSettings() => OpenFileDialogAsync("Import Settings", null, false, ReadSettings);
-    public void ExportProfile() => OpenFileDialogAsync("Export Profile", $"{Settings.Profiles.ActiveProfile}.json", true, WriteProfile);
+    public void ExportProfile() => OpenFileDialogAsync("Export Profile", $"{Settings.Profiles.Active}.json", true, WriteProfile);
     public void ImportProfile() => OpenFileDialogAsync("Import Profile", null, false, ReadProfile);
     public void ExportWeights() => OpenFileDialogAsync("Export Weights", "exilemaps_weights.json", true, WriteWeights);
     public void ImportWeights() => OpenFileDialogAsync("Import Weights", null, false, ReadWeights);
@@ -100,15 +111,15 @@ public partial class ExileMapsCore
             var json = File.ReadAllText(path);
             var imported = string.IsNullOrWhiteSpace(json) ? null
                 : JsonConvert.DeserializeObject<ExileMapsSettings>(json, SettingsContainer.jsonSettings);
-            if (imported?.Profiles?.Profiles == null || imported.Profiles.Profiles.Count == 0) {
+            if (imported?.Profiles?.Items == null || imported.Profiles.Items.Count == 0) {
                 LogError("Error importing settings: no profiles in file.");
                 return;
             }
 
             Settings.Profiles = imported.Profiles;
-            Settings.Profiles.EnsureDefaultProfile();
-            ApplyProfileSwitch(Settings.Profiles.ActiveProfile);
-            LogMessage($"Imported settings from {path} ({Settings.Profiles.Profiles.Count} profiles)");
+            WireProfiles();   // the imported store has no seams, they don't serialize
+            ApplyProfileSwitch(Settings.Profiles.Active);
+            LogMessage($"Imported settings from {path} ({Settings.Profiles.Items.Count} profiles)");
         } catch (Exception e) {
             LogError("Error importing settings: " + e.Message + "\n" + e.StackTrace);
         }
@@ -116,14 +127,14 @@ public partial class ExileMapsCore
 
     private void WriteProfile(string path) {
         try {
-            if (!Settings.Profiles.Profiles.TryGetValue(Settings.Profiles.ActiveProfile, out var profile)) {
+            if (!Settings.Profiles.Items.TryGetValue(Settings.Profiles.Active, out var profile)) {
                 LogError("Error exporting profile: active profile not found.");
                 return;
             }
 
             var json = JsonConvert.SerializeObject(profile, Formatting.Indented, SettingsContainer.jsonSettings);
             File.WriteAllText(path, json);
-            LogMessage($"Exported profile '{Settings.Profiles.ActiveProfile}' to {path}");
+            LogMessage($"Exported profile '{Settings.Profiles.Active}' to {path}");
         } catch (Exception e) {
             LogError("Error exporting profile: " + e.Message + "\n" + e.StackTrace);
         }
@@ -145,9 +156,9 @@ public partial class ExileMapsCore
             string baseName = Path.GetFileNameWithoutExtension(path);
             if (string.IsNullOrWhiteSpace(baseName))
                 baseName = "Imported Profile";
-            string name = UniqueProfileName(Settings.Profiles, baseName);
+            string name = Settings.Profiles.Unique(baseName);
 
-            Settings.Profiles.Profiles[name] = profile;
+            Settings.Profiles.Items[name] = profile;
             ApplyProfileSwitch(name);
 
             LogMessage($"Imported profile '{name}' from {path} ({profile.Maps.Count} maps, {profile.Content.Count} content, {profile.Biomes.Count} biomes)");
@@ -321,8 +332,8 @@ public partial class ExileMapsCore
                     waypointsAttached = true;
                 }
 
-                string name = UniqueProfileName(Settings.Profiles, prop.Name + " (imported)");
-                Settings.Profiles.Profiles[name] = profile;
+                string name = Settings.Profiles.Unique(prop.Name + " (imported)");
+                Settings.Profiles.Items[name] = profile;
                 lastImported = name;
             }
 
@@ -427,53 +438,11 @@ public class ExileMapsSettings : ISettings
     public bool SettingsBackupDone { get; set; } = false;
     public bool LegacyImportHandled { get; set; } = false;
 
-    public class ProfileSettings
-    {
-        public string ActiveProfile { get; set; } = "Default";
-        public Dictionary<string, Profile> Profiles { get; set; } = new() { { "Default", new() } };
-
-        public void SwitchProfile(string name)
-        {
-            if (Profiles.ContainsKey(name)) ActiveProfile = name;
-        }
-
-        public void EnsureDefaultProfile()
-        {
-            if (Profiles.Count == 0)
-                Profiles["Default"] = new();
-            if (string.IsNullOrEmpty(ActiveProfile) || !Profiles.ContainsKey(ActiveProfile))
-                ActiveProfile = Profiles.Keys.First();
-        }
-    }
-
     [JsonIgnore]
     public GameData GameData { get; set; } = new();
 
-    private sealed record ActiveProfileMemo(string Name, Profile Profile);
-    [JsonIgnore] private ActiveProfileMemo activeMemo;
-
-    public void InvalidateActiveProfile() => activeMemo = null;
-
-    [JsonIgnore]
-    public Profile Active
-    {
-        get
-        {
-            string name = Profiles.ActiveProfile ?? "";
-            var memo = activeMemo;
-            if (memo != null && memo.Name == name)
-                return memo.Profile;
-
-            if (Profiles.Profiles.TryGetValue(name, out var p)) {
-                activeMemo = new ActiveProfileMemo(name, p);
-                return p;
-            }
-            Profiles.EnsureDefaultProfile();
-            var fallback = Profiles.Profiles[Profiles.ActiveProfile];
-            activeMemo = new ActiveProfileMemo(Profiles.ActiveProfile, fallback);
-            return fallback;
-        }
-    }
+    // the store memoizes this, so it's a dictionary hit only when the active profile moves
+    [JsonIgnore] public Profile Active => Profiles.Current;
 
     public MapTuning TuneMap(string id) => Active.Maps.GetOrAdd(id, _ => new MapTuning());
 
@@ -489,7 +458,9 @@ public class ExileMapsSettings : ISettings
 
     public ContentTuning ReadContent(string id) => id != null && Active.Content.TryGetValue(id, out var t) ? t : UntunedContent;
 
-    public ProfileSettings Profiles { get; set; } = new();
+    // wire names are pinned to ActiveProfile/Profiles inside the store, so this is the same json
+    // shape the old hand-rolled ProfileSettings wrote - existing profiles load untouched.
+    public ExileImGui2.Profiles<Profile> Profiles { get; set; } = new();
 
     [JsonIgnore] public FeatureSettings Features => Active.Features;
     [JsonIgnore] public ExpeditionSettings Expeditions => Active.Expeditions;

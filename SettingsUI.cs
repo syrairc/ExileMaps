@@ -579,212 +579,25 @@ public partial class ExileMapsCore
         return [m.BadNodeColor, m.NeutralNodeColor, m.GoodNodeColor];
     }
 
-    private string profileNewName = "";
-    private bool profileRenaming = false;
-    private string profileFilter = "";
-    private string profileCopySource;
-    private string profileCopyFilter = "";
-
-    private static readonly (string Key, string Label)[] CopyGroups =
+    // the slices "Copy from..." offers, and which start ticked. same seven groups and the same two
+    // defaults-off as the hand-rolled popup had. first argument is already a private clone of the
+    // source profile, so assigning its nested objects straight across is safe.
+    private static readonly CopyGroup<Profile>[] ProfileCopyGroups =
     {
-        ("weights",    "Tuning"),
-        ("appearance", "Appearance"),
-        ("keybinds",   "Keybinds"),
-        ("hacks",      "Hacks"),
-        ("behaviour",  "Other behaviour"),
-        ("waypoints",  "Waypoints"),
-        ("tours",      "Tours"),
+        new("Tuning", (a, b) => { b.Maps = a.Maps; b.Content = a.Content; b.Biomes = a.Biomes; b.Rumors = a.Rumors; }),
+        new("Appearance", (a, b) => { b.Labels = a.Labels; b.MapAppearance = a.MapAppearance; b.Graphics = a.Graphics; }),
+        new("Keybinds", (a, b) => b.Keybinds = a.Keybinds),
+        new("Hacks", (a, b) => b.Hacks = a.Hacks),
+        new("Other behaviour", (a, b) => { b.Features = a.Features; b.Search = a.Search; b.AtlasOverview = a.AtlasOverview; b.Expeditions = a.Expeditions; }),
+        new("Waypoints", (a, b) => b.Waypoints = a.Waypoints, false),
+        new("Tours", (a, b) => b.Tours = a.Tours, false),
     };
-
-    private readonly bool[] profileCopyGroups = { true, true, true, true, true, false, false };
-
-    private bool DrawProfileBar()
-    {
-        bool d = false;
-        var P = Settings.Profiles;
-
-        bool picked = Combo.SearchCombo("profile", P.ActiveProfile,
-            P.Profiles.Keys.OrderBy(k => k, StringComparer.Ordinal).Select(k => (k, k)),
-            ref profileFilter, out string pick, 200f);
-        if (picked)
-        {
-            ApplyProfileSwitch(pick);
-            d = true;
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("New"))
-        {
-            CreateProfile(NewProfileName(), null);
-            d = true;
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Duplicate"))
-        {
-            CreateProfile(UniqueProfileName(P, P.ActiveProfile + " Copy"), P.ActiveProfile);
-            d = true;
-        }
-
-        ImGui.SameLine();
-        if (ImGui.Button("Copy from..."))
-        {
-            profileCopySource = null;
-            profileCopyFilter = "";
-            ImGui.OpenPopup("copy_from");
-        }
-        d |= DrawCopyFromPopup();
-
-        ImGui.SameLine();
-        if (ImGui.Button("Rename")) { profileRenaming = true; profileNewName = P.ActiveProfile; }
-        if (profileRenaming)
-        {
-            ImGui.SetNextItemWidth(200f);
-            if (ImGui.InputText("##rename", ref profileNewName, 64, ImGuiInputTextFlags.EnterReturnsTrue))
-            {
-                if (!string.IsNullOrWhiteSpace(profileNewName) && !P.Profiles.ContainsKey(profileNewName))
-                {
-                    P.Profiles[profileNewName] = P.Profiles[P.ActiveProfile];
-                    P.Profiles.Remove(P.ActiveProfile);
-                    P.ActiveProfile = profileNewName;
-                    d = true;
-                }
-                profileRenaming = false;
-            }
-        }
-
-        if (P.Profiles.Count > 1)
-        {
-            ImGui.SameLine();
-            if (ImGui.Button("Delete")) ImGui.OpenPopup("del_profile");
-        }
-        if (ExileImGui2.Windows.ConfirmModal("del_profile", "Delete profile \"" + P.ActiveProfile + "\"?", out bool ok) && ok)
-        {
-            string next = P.Profiles.Keys.First(k => k != P.ActiveProfile);
-            P.Profiles.Remove(P.ActiveProfile);
-            ApplyProfileSwitch(next);
-            d = true;
-        }
-        return d;
-    }
-
-    private bool DrawCopyFromPopup()
-    {
-        if (!ImGui.BeginPopup("copy_from")) return false;
-
-        bool copied = false;
-        var P = Settings.Profiles;
-
-        ImGui.TextDisabled("Copy into \"" + P.ActiveProfile + "\" from:");
-
-        var options = P.Profiles.Keys.Where(k => k != P.ActiveProfile)
-            .OrderBy(k => k, StringComparer.Ordinal).Select(k => (k, k)).ToList();
-
-        if (options.Count == 0)
-            ImGui.TextDisabled("No other profile to copy from.");
-        else if (Combo.SearchCombo("copy_src", profileCopySource ?? "", options, ref profileCopyFilter, out string pick, 220f))
-            profileCopySource = pick;
-
-        ImGui.Separator();
-        for (int i = 0; i < CopyGroups.Length; i++)
-            ImGui.Checkbox(CopyGroups[i].Label, ref profileCopyGroups[i]);
-        Controls.Tip("Ticked groups replace the same group in this profile.");
-
-        ImGui.Separator();
-        ImGui.BeginDisabled(profileCopySource == null);
-        if (ImGui.Button("Copy"))
-        {
-            CopyIntoActive(profileCopySource);
-            copied = true;
-            ImGui.CloseCurrentPopup();
-        }
-        ImGui.EndDisabled();
-
-        ImGui.SameLine();
-        if (ImGui.Button("Cancel")) ImGui.CloseCurrentPopup();
-
-        ImGui.EndPopup();
-        return copied;
-    }
-
-    private void CopyIntoActive(string sourceName)
-    {
-        if (!Settings.Profiles.Profiles.TryGetValue(sourceName, out var source)) return;
-
-        var copy = CloneProfile(source);
-        var target = Settings.Active;
-
-        for (int i = 0; i < CopyGroups.Length; i++)
-        {
-            if (!profileCopyGroups[i]) continue;
-            switch (CopyGroups[i].Key)
-            {
-                case "weights":
-                    target.Maps = copy.Maps;
-                    target.Content = copy.Content;
-                    target.Biomes = copy.Biomes;
-                    target.Rumors = copy.Rumors;
-                    break;
-                case "appearance":
-                    target.Labels = copy.Labels;
-                    target.MapAppearance = copy.MapAppearance;
-                    target.Graphics = copy.Graphics;
-                    break;
-                case "keybinds":
-                    target.Keybinds = copy.Keybinds;
-                    break;
-                case "hacks":
-                    target.Hacks = copy.Hacks;
-                    break;
-                case "behaviour":
-                    target.Features = copy.Features;
-                    target.Search = copy.Search;
-                    target.AtlasOverview = copy.AtlasOverview;
-                    target.Expeditions = copy.Expeditions;
-                    break;
-                case "waypoints":
-                    target.Waypoints = copy.Waypoints;
-                    break;
-                case "tours":
-                    target.Tours = copy.Tours;
-                    break;
-            }
-        }
-
-        ApplyProfileSwitch(Settings.Profiles.ActiveProfile);
-    }
-
-    private void CreateProfile(string name, string sourceName)
-    {
-        var profile = sourceName != null && Settings.Profiles.Profiles.TryGetValue(sourceName, out var source)
-            ? CloneProfile(source)
-            : new Profile();
-
-        Settings.Profiles.Profiles[name] = profile;
-        ApplyProfileSwitch(name);
-    }
-
-    private static Profile CloneProfile(Profile p) =>
-        JsonConvert.DeserializeObject<Profile>(JsonConvert.SerializeObject(p, SettingsContainer.jsonSettings), SettingsContainer.jsonSettings);
-
-    private string NewProfileName()
-    {
-        string league = null;
-        try { league = GameController?.Game?.IngameState?.ServerData?.League; } catch { }
-
-        return UniqueProfileName(Settings.Profiles, string.IsNullOrWhiteSpace(league) ? "Profile" : league);
-    }
-
-    private static string UniqueProfileName(ExileMapsSettings.ProfileSettings p, string stem)
-    {
-        if (!p.Profiles.ContainsKey(stem)) return stem;
-        for (int i = 2; ; i++)
-            if (!p.Profiles.ContainsKey(stem + " " + i)) return stem + " " + i;
-    }
 
     private bool DrawProfilesTab()
     {
-        bool d = DrawProfileBar();
+        // picker, New, Duplicate, Copy from..., Rename, Delete, plus the delete confirm and the
+        // inline rename box. OnSwitch (wired in WireProfiles) runs the recache for every one of them.
+        bool d = Settings.Profiles.Bar("profile", 200f, ProfileCopyGroups);
 
         ImGui.Separator();
         DrawImportExportRow();

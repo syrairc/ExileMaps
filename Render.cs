@@ -1003,8 +1003,8 @@ public partial class ExileMapsCore
         Graphics.DrawQuad(textureId, topLeft, topRight, bottomRight, bottomLeft, color);
         }
 
-    private const int PageOwner = 0x328;
-    private const int OwnerConnections = 0x17C8;
+    private const int PageOwner = 0x310;
+    private const int OwnerConnections = 0x17E8;
     private const int ConnRecords = 984;
     private const int ConnCount = 1000;
     private const int RecordStride = 184;
@@ -1050,7 +1050,11 @@ public partial class ExileMapsCore
             long count = mem.Read<long>(wmc + ConnCount);
 
             if (records == 0 || count <= 0 || count > 200000)
+            {
+                if (Settings.Features.DebugMode)
+                    LogMessage($"ConnectionCurves: bad read (records={records:X} count={count}), offsets likely stale after a patch");
                 return;
+            }
 
             if (count == lastCurveRecordCount && !connectionCurves.IsEmpty)
                 return;
