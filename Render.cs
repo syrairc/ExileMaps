@@ -446,12 +446,13 @@ public partial class ExileMapsCore
         Color wc = ColorUtils.WithAlphaOf(ramp, OverlayText);
 
         float zoom = LabelZoom(cachedNode);
-        using var weightScale = Graphics.SetTextScale(zoom);
         float offsetX = Settings.Graphics.DrawNames.HasFlag(StateOf(cachedNode)) ? (MeasureCached(MapLabelText(cachedNode), zoom).X / 2) + 20 : 40;
         var text = cachedNode.WeightText;
+        float textHalf = MeasureCached(text, zoom).X / 2f;
         Vector2 pos = new(nodeCurrentPosition.Center.X + offsetX + MapNameOffsetX,
                           nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY);
-        DrawCenteredTextWithBackground(text, new Vector2(pos.X + MeasureCached(text, zoom).X / 2f, pos.Y),
+        using var weightScale = Graphics.SetTextScale(zoom);
+        DrawCenteredTextWithBackground(text, new Vector2(pos.X + textHalf, pos.Y),
             wc, OverlayBg, true, 8, 3);
     }
     private static readonly Vector2[] StrokeOffsets = { new(-1, -1), new(1, -1), new(-1, 1), new(1, 1) };
@@ -956,11 +957,11 @@ public partial class ExileMapsCore
             return;
 
         var t = style.Text;
-        using (Graphics.SetTextScale(t.Scale)) {
-            var boxSize = MeasureCached(text, t.Scale) + new Vector2(10, 4);
-            var topLeft = position - new Vector2(boxSize.X / 2, boxSize.Y / 2);
-            topLeft = new Vector2(MathF.Round(topLeft.X), MathF.Round(topLeft.Y));
+        var boxSize = MeasureCached(text, t.Scale) + new Vector2(10, 4);
+        var topLeft = position - new Vector2(boxSize.X / 2, boxSize.Y / 2);
+        topLeft = new Vector2(MathF.Round(topLeft.X), MathF.Round(topLeft.Y));
 
+        using (Graphics.SetTextScale(t.Scale)) {
             if (t.BgEnabled) {
                 Graphics.DrawBox(topLeft, topLeft + boxSize, t.BgColor, t.BorderRounding);
             }
