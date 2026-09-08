@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -9,6 +10,7 @@ using Newtonsoft.Json;
 using System.Windows.Forms;
 using ExileCore2;
 using ExileCore2.PoEMemory.Elements.AtlasElements;
+using ExileCore2.PoEMemory.Models;
 using GameOffsets2.Native;
 using ImGuiNET;
 using RectangleF = ExileCore2.Shared.RectangleF;
@@ -399,9 +401,22 @@ public partial class ExileMapsCore
 
     private static string MapSearchText(Node n)
     {
-        string content = ContentSummary(n);
-        string mods = n.SpecialModifiers.Count == 0 ? "" : string.Join(" ", n.SpecialModifiers);
-        return $"{n.Name} {content} {mods}";
+        var sb = new StringBuilder(160);
+        void Tag(string prefix, string value) {
+            if (string.IsNullOrWhiteSpace(value)) return;
+            sb.Append(' ').Append(value).Append(' ').Append(prefix).Append(':').Append(value);
+        }
+
+        Tag("map", n.Name);
+        foreach (var c in n.Content.Values)
+            Tag("content", c?.Name);
+        foreach (var b in n.Biomes.Values)
+            Tag("biome", b?.Name);
+        foreach (var m in n.SpecialModifiers)
+            Tag("mod", m);
+        foreach (var d in n.ModifierDetails)
+            Tag("mod", d);
+        return sb.ToString();
     }
 
     #endregion
@@ -652,8 +667,11 @@ public partial class ExileMapsCore
         var atlas = Art("atlas");
         var exped = Art("expeditions");
 
-        LoadPanelTexture(ExpeditionMarkerNormal, required: false);
-        LoadPanelTexture(ExpeditionMarkerHover, required: false);
+        foreach (var k in MarkerArtKinds)
+        {
+            LoadPanelTexture(MarkerArt(k, false), required: false);
+            LoadPanelTexture(MarkerArt(k, true), required: false);
+        }
 
         navItems =
         [
@@ -677,6 +695,11 @@ public partial class ExileMapsCore
                 Key = "atlas", Label = "Atlas Overview",
                 Icon = atlas,
                 Body = () => { DrawAtlasOverviewBody(); return false; },
+            },
+            new ExileImGui2.NavItem {
+                Key = "rite", Label = "Rite of the Nameless",
+                Icon = LoadPanelTexture("rail-rite.png", required: false),
+                Body = () => { DrawRitualBody(); return false; },
             },
             new ExileImGui2.NavItem {
                 Key = "expeditions", Label = "Expeditions",
@@ -1274,7 +1297,7 @@ public partial class ExileMapsCore
     private void SnapshotExpeditions()
     {
         var built = new List<Classes.Expedition>();
-        var byRegion = new Dictionary<Vector2i, Classes.Expedition>();
+        var byRegion = new Dictionary<(Vector2i, string), Classes.Expedition>();
         try
         {
             var buttons = AtlasPanel?.Buttons;
@@ -1282,21 +1305,25 @@ public partial class ExileMapsCore
             {
                 foreach (var b in buttons)
                 {
-                    if (b?.ButtonType?.Id != "Ocean") continue;
+                    var kind = b?.ButtonType?.Id;
+                    if (kind != ExpeditionKind && kind != RitualKind) continue;
 
                     var region = b.RegionCoordinate;
-                    if (!byRegion.TryGetValue(region, out var exp))
+                    if (!byRegion.TryGetValue((region, kind), out var exp))
                     {
-                        exp = new Classes.Expedition { RegionCoord = region, SpawnCoord = b.Coordinate };
+                        exp = new Classes.Expedition { Kind = kind, RegionCoord = region, SpawnCoord = b.Coordinate };
                         var nodes = b.RegionNodes;
                         if (nodes != null)
                             foreach (var n in nodes)
                                 exp.MapCoords.Add(n.Coordinate);
-                        var rumors = b.Rumors;
-                        if (rumors != null)
-                            foreach (var (k, v) in rumors)
-                                exp.Rumors[k] = v;
-                        byRegion[region] = exp;
+                        if (kind == ExpeditionKind)
+                        {
+                            var rumors = b.Rumors;
+                            if (rumors != null)
+                                foreach (var (k, v) in rumors)
+                                    exp.Rumors[k] = v;
+                        }
+                        byRegion[(region, kind)] = exp;
                         built.Add(exp);
                     }
 
@@ -1309,7 +1336,7 @@ public partial class ExileMapsCore
         }
         catch (Exception e) { LogError($"SnapshotExpeditions failed: {e.Message}"); }
 
-        built = built.OrderBy(x => x.RegionCoord.X).ThenBy(x => x.RegionCoord.Y).ToList();
+        built = built.OrderBy(x => x.Kind).ThenBy(x => x.RegionCoord.X).ThenBy(x => x.RegionCoord.Y).ToList();
         for (int i = 0; i < built.Count; i++) built[i].Id = i + 1;
 
         lock (mapCacheLock)
@@ -1318,7 +1345,12 @@ public partial class ExileMapsCore
 
     private bool ExpeditionsLoaded()
     {
-        lock (mapCacheLock) return expeditions.Count > 0;
+        lock (mapCacheLock)
+        {
+            foreach (var e in expeditions)
+                if (e.Kind == ExpeditionKind) return true;
+            return false;
+        }
     }
 
     private float ExpeditionScore(Classes.Expedition e)
@@ -1386,6 +1418,7 @@ public partial class ExileMapsCore
     {
         public Vector2 TopLeft;
         public float Width, Height, Pad, LineH;
+        public System.Drawing.Color Bg;
         public List<(string text, System.Drawing.Color color)> Lines;
     }
     private sealed class RumorPanelMemo
@@ -1397,19 +1430,32 @@ public partial class ExileMapsCore
         public float BoxW, BoxH, LineH;
     }
     private readonly Dictionary<Vector2i, RumorPanelMemo> rumorPanelMemo = [];
-    private const string ExpeditionMarkerNormal = "expeditions-normal.png";
-    private const string ExpeditionMarkerHover = "expeditions-hover.png";
-    private const float ExpeditionMarkerScale = 1.3f;
+    private const string ExpeditionKind = "Ocean";
+    private const string RitualKind = "Forest";
+    private const string BreachKind = "Breach";
+    private const string TowerKind = "Tower";
+    private const float MarkerScale = 3f;
+
+    private static readonly string[] MarkerArtKinds = { ExpeditionKind, RitualKind, BreachKind, TowerKind };
+
+    private static string MarkerArt(string kind, bool hover) => kind switch
+    {
+        ExpeditionKind => hover ? "btn-ocean-hover.png" : "btn-ocean-normal.png",
+        RitualKind => hover ? "btn-forest-hover.png" : "btn-forest-normal.png",
+        BreachKind => hover ? "btn-breach-hover.png" : "btn-breach-normal.png",
+        TowerKind => hover ? "btn-tower-hover.png" : "btn-tower-normal.png",
+        _ => hover ? "btn-ocean-hover.png" : "btn-ocean-normal.png",
+    };
 
     private readonly List<(RectangleF rect, string tex, System.Drawing.Color tint)> frameExpeditionIcons = new();
     private readonly List<ExpeditionPanel> frameExpeditionPanels = new();
     private readonly HashSet<Vector2i> frameHoverExpeditionMaps = new();
     private System.Drawing.Color frameHoverExpeditionTint;
-    private Vector2i? frameHoverButtonRegion;
+    private (Vector2i region, string kind)? frameHoverButtonRegion;
 
     private static System.Drawing.Color ExpeditionTint(Classes.Expedition e)
     {
-        int seed = unchecked(e.RegionCoord.X * 73856093 ^ e.RegionCoord.Y * 19349663) & 0x7fffffff;
+        int seed = unchecked(e.RegionCoord.X * 73856093 ^ e.RegionCoord.Y * 19349663 ^ e.Kind.GetHashCode()) & 0x7fffffff;
         float h = (seed % 1000) * 0.61803398875f;
         h -= MathF.Floor(h);
         return ColorUtils.ColorFromHSV(h * 360f, 0.55f, 1f);
@@ -1421,13 +1467,16 @@ public partial class ExileMapsCore
         frameExpeditionPanels.Clear();
         frameHoverExpeditionMaps.Clear();
 
+        LayoutAtlasButtonDebug();
+        LayoutRitualForetellings();
+
         var snapshot = expeditions;
 
-        if (frameHoverButtonRegion is Vector2i hoverRegion)
+        if (frameHoverButtonRegion is (Vector2i hoverRegion, string hoverKind))
         {
             Classes.Expedition he = null;
             foreach (var x in snapshot)
-                if (x.RegionCoord.Equals(hoverRegion)) { he = x; break; }
+                if (x.Kind == hoverKind && x.RegionCoord.Equals(hoverRegion)) { he = x; break; }
             if (he != null)
             {
                 frameHoverExpeditionMaps.UnionWith(he.MapCoords);
@@ -1439,20 +1488,23 @@ public partial class ExileMapsCore
             LayoutPopupOverlay();
 
         var markerMode = Settings.Features.ExpeditionMarkers;
-        if (markerMode == ExpeditionMarkers.Off) return;
+        bool ritualMarkers = Settings.ContentDisplay.ShowRitualMarkers;
+        if (markerMode == ExpeditionMarkers.Off && !ritualMarkers) return;
 
         var screen = GameController.Window.GetWindowRectangleTimeCache.Size;
         var mouse = ImGuiNET.ImGui.GetMousePos();
 
-        bool drawAll = markerMode == ExpeditionMarkers.All;
-        var steps = drawAll ? null : ComputeStepCounts();
+        var steps = markerMode == ExpeditionMarkers.Nearest ? ComputeStepCounts() : null;
 
         foreach (var e in snapshot)
         {
+            bool ritual = e.Kind == RitualKind;
+            if (ritual ? !ritualMarkers : markerMode == ExpeditionMarkers.Off) continue;
+
             var tint = ExpeditionTint(e);
 
             IEnumerable<Vector2i> coords = e.ButtonCoords;
-            if (!drawAll)
+            if (!ritual && markerMode == ExpeditionMarkers.Nearest)
             {
                 bool found = false; Vector2i best = default; int bestSteps = int.MaxValue;
                 foreach (var c in e.ButtonCoords)
@@ -1476,12 +1528,12 @@ public partial class ExileMapsCore
                 var rect = GetNodeRect(node);
                 if (rect.IsEmpty || rect.Width <= 0) continue;
 
-                float size = MathF.Max(rect.Width, rect.Height) * ExpeditionMarkerScale;
+                float size = MathF.Max(rect.Width, rect.Height) * MarkerScale;
                 var iconRect = new RectangleF(rect.Center.X - size / 2f, rect.Top - size, size, size);
                 if (!IsOnScreen(iconRect.Center)) continue;
 
                 bool hover = iconRect.Contains(mouse);
-                frameExpeditionIcons.Add((iconRect, hover ? ExpeditionMarkerHover : ExpeditionMarkerNormal, tint));
+                frameExpeditionIcons.Add((iconRect, MarkerArt(e.Kind, hover), System.Drawing.Color.White));
                 cachedExcludeRects.Add(iconRect);
 
                 if (hover)
@@ -1491,7 +1543,7 @@ public partial class ExileMapsCore
                     frameHoverExpeditionTint = tint;
                 }
 
-                LayoutPossibleRumors(e, iconRect, screen, hover, tint);
+                if (!ritual) LayoutPossibleRumors(e, iconRect, screen, hover, tint);
             }
         }
     }
@@ -1553,9 +1605,11 @@ public partial class ExileMapsCore
         return (maxW + pad * 2f, lines.Count * lineH + pad * 2f, lineH);
     }
 
-    private void RegisterPanel(Vector2 tl, float w, float h, float pad, float lineH, List<(string text, System.Drawing.Color color)> lines)
+    private void RegisterPanel(Vector2 tl, float w, float h, float pad, float lineH, List<(string text, System.Drawing.Color color)> lines,
+        System.Drawing.Color? bg = null)
     {
-        frameExpeditionPanels.Add(new ExpeditionPanel { TopLeft = tl, Width = w, Height = h, Pad = pad, LineH = lineH, Lines = lines });
+        frameExpeditionPanels.Add(new ExpeditionPanel { TopLeft = tl, Width = w, Height = h, Pad = pad, LineH = lineH, Lines = lines,
+            Bg = bg ?? OverlayBg });
         cachedExcludeRects.Add(new RectangleF(tl.X, tl.Y, w, h));
     }
 
@@ -1568,10 +1622,9 @@ public partial class ExileMapsCore
             foreach (var (rect, tex, tint) in frameExpeditionIcons)
                 Graphics.DrawImage(tex, rect, fullUV, tint);
 
-            System.Drawing.Color bg = OverlayBg;
             foreach (var p in frameExpeditionPanels)
             {
-                Graphics.DrawBox(p.TopLeft, new Vector2(p.TopLeft.X + p.Width, p.TopLeft.Y + p.Height), bg, 5f);
+                Graphics.DrawBox(p.TopLeft, new Vector2(p.TopLeft.X + p.Width, p.TopLeft.Y + p.Height), p.Bg, 5f);
                 float cy = p.TopLeft.Y + p.Pad;
                 foreach (var (text, color) in p.Lines)
                 {
@@ -1632,6 +1685,1048 @@ public partial class ExileMapsCore
 
     #endregion
 
+    #region Atlas Button Debug
+
+    private readonly List<(Vector2i coord, List<(string text, System.Drawing.Color color)> lines)> frameButtonDebug = new();
+
+    private const int RegionSize = 16;
+
+    private static Vector2i RegionOf(Vector2i coord) => new(
+        (int)MathF.Floor(coord.X / (float)RegionSize),
+        (int)MathF.Floor(coord.Y / (float)RegionSize));
+
+    private static System.Drawing.Color ButtonKindColor(string kind) => kind switch
+    {
+        ExpeditionKind => System.Drawing.Color.FromArgb(255, 120, 200, 255),
+        RitualKind => System.Drawing.Color.FromArgb(255, 255, 152, 105),
+        "Breach" => System.Drawing.Color.FromArgb(255, 200, 145, 255),
+        "Tower" => System.Drawing.Color.FromArgb(255, 255, 210, 120),
+        _ => OverlayText,
+    };
+
+    private string ButtonTooltipText(ExileCore2.PoEMemory.Elements.AtlasElements.AtlasButtonNode b)
+    {
+        try
+        {
+            var children = b.Children;
+            var visual = children != null && children.Count > 0 ? children[0] : null;
+            var tip = visual?.Tooltip;
+            if (tip == null || !tip.IsVisible) return null;
+            var texts = new List<string>();
+            ReadPopupRumors(tip, texts);
+            return texts.Count == 0 ? null : string.Join("\n", texts);
+        }
+        catch { return null; }
+    }
+
+    private void ScanAtlasButtonDebug(IList<ExileCore2.PoEMemory.Elements.AtlasElements.AtlasButtonNode> buttons)
+    {
+        frameButtonDebug.Clear();
+        if (!Settings.Features.DebugAtlasButtons || buttons == null) return;
+        try
+        {
+            int i = -1;
+            foreach (var b in buttons)
+            {
+                i++;
+                if (b == null) continue;
+
+                var kind = b.ButtonType?.Id ?? "(null)";
+                var c = b.Coordinate;
+                var r = b.RegionCoordinate;
+
+                int bx0 = r.X * RegionSize, bx1 = bx0 + RegionSize - 1;
+                int by0 = r.Y * RegionSize, by1 = by0 + RegionSize - 1;
+
+                var nodes = b.RegionNodes;
+                int n = nodes?.Count ?? 0;
+                string ext = "-";
+                int outside = 0;
+                if (n > 0)
+                {
+                    int x0 = int.MaxValue, x1 = int.MinValue, y0 = int.MaxValue, y1 = int.MinValue;
+                    foreach (var nd in nodes)
+                    {
+                        var q = nd.Coordinate;
+                        if (q.X < x0) x0 = q.X;
+                        if (q.X > x1) x1 = q.X;
+                        if (q.Y < y0) y0 = q.Y;
+                        if (q.Y > y1) y1 = q.Y;
+                        if (q.X < bx0 || q.X > bx1 || q.Y < by0 || q.Y > by1) outside++;
+                    }
+                    ext = $"x {x0}..{x1}  y {y0}..{y1}";
+                }
+
+                bool formulaOk = RegionOf(c).Equals(r);
+                string verdict = n == 0 ? "no nodes"
+                    : outside == 0 ? "FITS region block"
+                    : $"OUTSIDE block: {outside}/{n} nodes";
+                if (!formulaOk) verdict += "  (region formula mismatch!)";
+                var verdictColor = n == 0 ? OverlayText
+                    : outside == 0 ? System.Drawing.Color.FromArgb(255, 130, 230, 130)
+                    : System.Drawing.Color.FromArgb(255, 255, 140, 140);
+
+                int rum = 0;
+                try { rum = b.Rumors?.Count ?? 0; } catch { }
+
+                var col = ButtonKindColor(kind);
+                var lines = new List<(string, System.Drawing.Color)>
+                {
+                    ($"#{i} {kind}{(b.IsVisible ? "  VISIBLE" : "")}", col),
+                    ($"at {c.X},{c.Y}   region {r.X},{r.Y}", OverlayText),
+                    ($"nodes {n}   rumors {rum}", OverlayText),
+                    ($"extent {ext}", OverlayText),
+                    ($"block  x {bx0}..{bx1}  y {by0}..{by1}", OverlayText),
+                    (verdict, verdictColor),
+                };
+
+                if (b.IsVisible)
+                {
+                    var kids = b.Children;
+                    var vis0 = kids != null && kids.Count > 0 ? kids[0] : null;
+                    var tt = vis0?.Tooltip;
+                    var tr = tt?.GetClientRect() ?? default;
+                    lines.Add(($"shiny {(vis0?.HasShinyHighlight ?? false)}   tipVis {(tt?.IsVisible ?? false)}   tipRect {tr.Width:0}x{tr.Height:0}", OverlayText));
+
+                    var tip = ButtonTooltipText(b);
+                    if (!string.IsNullOrWhiteSpace(tip))
+                        foreach (var ln in tip.Split('\n'))
+                            if (!string.IsNullOrWhiteSpace(ln)) lines.Add(("  " + ln.Trim(), col));
+                }
+
+                frameButtonDebug.Add((c, lines));
+            }
+        }
+        catch (Exception e) { LogError($"ScanAtlasButtonDebug failed: {e.Message}"); }
+    }
+
+    private void LayoutAtlasButtonDebug()
+    {
+        if (frameButtonDebug.Count == 0) return;
+        try
+        {
+            const float pad = 5f;
+            var screen = GameController.Window.GetWindowRectangleTimeCache.Size;
+            foreach (var (coord, lines) in frameButtonDebug)
+            {
+                Node node;
+                lock (mapCacheLock)
+                    if (!mapCache.TryGetValue(coord, out node)) node = null;
+                if (node == null) continue;
+
+                var rect = GetNodeRect(node);
+                if (rect.IsEmpty || rect.Width <= 0) continue;
+                if (!IsOnScreen(rect.Center)) continue;
+
+                var (boxW, boxH, lineH) = MeasurePanel(lines, pad);
+                float x = Math.Clamp(rect.Center.X - boxW / 2f, 0f, MathF.Max(0f, screen.X - boxW));
+                float y = rect.Bottom + 4f;
+                if (y + boxH > screen.Y) y = MathF.Max(0f, rect.Top - boxH - 4f);
+
+                RegisterPanel(new Vector2(x, y), boxW, boxH, pad, lineH, lines);
+            }
+        }
+        catch (Exception e) { LogError($"LayoutAtlasButtonDebug failed: {e.Message}"); }
+    }
+
+    #endregion
+
+    #region Ritual Foretelling
+
+    private const int RitualGateOffset = 0x61F;
+
+    private class RitualModDef { public string id { get; set; } public string text { get; set; } public string item { get; set; } public int count { get; set; } }
+
+    private static List<RitualModDef> ritualMods;
+    private static Dictionary<string, RitualModDef> ritualModsByKey;
+
+    public void UpdateRitualModData()
+    {
+        try
+        {
+            var path = Path.Combine(DirectoryFullName, "json", "ritualmods.json");
+            if (!File.Exists(path)) { LogError($"ritualmods.json missing: {path}"); return; }
+            ritualMods = JsonConvert.DeserializeObject<List<RitualModDef>>(File.ReadAllText(path));
+            if (ritualMods == null) return;
+            foreach (var r in ritualMods)
+                if (!string.IsNullOrEmpty(r.id))
+                    Settings.GameData.Foretellings[r.id] = string.IsNullOrWhiteSpace(r.text) ? r.id : r.text;
+            ritualModsByKey = new Dictionary<string, RitualModDef>(StringComparer.Ordinal);
+            foreach (var r in ritualMods)
+                if (!string.IsNullOrEmpty(r.id)) ritualModsByKey[r.id] = r;
+            RebuildWeightEditorIds();
+        }
+        catch (Exception e) { LogError($"UpdateRitualModData failed: {e.Message}"); }
+    }
+
+    private Func<BaseItemType, double> ninjaPrice;
+
+    private Func<BaseItemType, double> NinjaBridge()
+    {
+        if (ninjaPrice != null) return ninjaPrice;
+        try { ninjaPrice = GameController.PluginBridge.GetMethod<Func<BaseItemType, double>>("NinjaPrice.GetBaseItemTypeValue"); }
+        catch (Exception e) { LogError($"NinjaPricer bridge lookup failed: {e.Message}"); }
+        return ninjaPrice;
+    }
+
+    private Dictionary<string, BaseItemType> BaseItemsByName()
+    {
+        var index = new Dictionary<string, BaseItemType>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var b in GameController.Files.BaseItemTypes.Contents.Values)
+                if (!string.IsNullOrEmpty(b?.BaseName)) index.TryAdd(b.BaseName, b);
+        }
+        catch (Exception e) { LogError($"BaseItemsByName failed: {e.Message}"); }
+        return index;
+    }
+
+    private readonly Dictionary<string, double> foretellPrices = new();
+
+    public double ForetellPrice(string id) =>
+        id != null && foretellPrices.TryGetValue(id, out double v) ? v : 0d;
+
+    public int RefreshForetellPrices(out string note)
+    {
+        note = null;
+        foretellPrices.Clear();
+        try
+        {
+            var rows = ritualMods;
+            if (rows == null || rows.Count == 0) { note = "ritualmods.json not loaded"; return 0; }
+
+            var bridge = NinjaBridge();
+            if (bridge == null) { note = "NinjaPricer not loaded"; return 0; }
+
+            var bases = BaseItemsByName();
+            int unpriced = 0;
+            foreach (var r in rows)
+            {
+                if (string.IsNullOrEmpty(r.id) || string.IsNullOrEmpty(r.item)) continue;
+                if (!bases.TryGetValue(r.item, out var bit)) { unpriced++; continue; }
+                double unit = bridge(bit);
+                if (unit <= 0) { unpriced++; continue; }
+                foretellPrices[r.id] = unit * Math.Max(1, r.count);
+            }
+            note = unpriced > 0 ? $"{foretellPrices.Count} priced, {unpriced} unpriced" : $"{foretellPrices.Count} priced";
+            return foretellPrices.Count;
+        }
+        catch (Exception e) { note = e.Message; LogError($"RefreshForetellPrices failed: {e.Message}"); return 0; }
+    }
+
+    public int AutoAssignForetellWeights(bool logScale, out string note)
+    {
+        note = null;
+        try
+        {
+            var rows = ritualMods;
+            if (rows == null || rows.Count == 0) { note = "ritualmods.json not loaded"; return 0; }
+
+
+            RefreshForetellPrices(out _);
+            var values = foretellPrices;
+            if (values.Count == 0) { note = "no prices available"; return 0; }
+
+            double max = 0;
+            foreach (var v in values.Values) if (v > max) max = v;
+            if (max <= 0) { note = "no prices available"; return 0; }
+
+            foreach (var (id, v) in values)
+            {
+                double frac = logScale ? Math.Log(1 + v) / Math.Log(1 + max) : v / max;
+                Settings.Active.Foretellings[id] = (float)Math.Round(frac * maxForetellWeight, 1);
+            }
+
+            weightsDirty = true;
+            note = $"{values.Count} weighted";
+            return values.Count;
+        }
+        catch (Exception e) { note = e.Message; LogError($"AutoAssignForetellWeights failed: {e.Message}"); return 0; }
+    }
+
+    private readonly Dictionary<(int depth, int index), List<RitualModDef>> foretellRollMemo = new();
+    private int foretellRollSeed = int.MinValue;
+
+    private List<RitualModDef> ForetellRoll(int depth, int index)
+    {
+        var empty = new List<RitualModDef>();
+        var panel = AtlasPanel;
+        if (panel == null) return empty;
+
+        int seed = panel.RitualForetoldSeed;
+        if (seed != foretellRollSeed) { foretellRollMemo.Clear(); foretellRollSeed = seed; }
+        if (foretellRollMemo.TryGetValue((depth, index), out var cached)) return cached;
+
+        var result = new List<RitualModDef>(2);
+        try
+        {
+            var mods = panel.GetForetoldRitualMods(depth, index);
+            if (mods != null)
+                foreach (var m in mods)
+                {
+                    var key = m?.Mod1?.Key;
+                    if (string.IsNullOrEmpty(key)) continue;
+                    result.Add(ritualModsByKey != null && ritualModsByKey.TryGetValue(key, out var def)
+                        ? def
+                        : new RitualModDef { id = key, text = key });
+                }
+        }
+        catch (Exception e) { LogError($"GetForetoldRitualMods failed: {e.Message}"); }
+
+        foretellRollMemo[(depth, index)] = result;
+        return result;
+    }
+
+    private float ForetellValueOf(List<RitualModDef> picks)
+    {
+        float v = 0f;
+        if (picks != null)
+            foreach (var p in picks) v += (float)ForetellPrice(p.id);
+        return v;
+    }
+
+    private float ForetellWeightOf(List<RitualModDef> picks)
+    {
+        float w = 0f;
+        if (picks != null)
+            foreach (var p in picks) w += Settings.ForetellingWeight(p.id);
+        return w;
+    }
+
+    private const int RitualAdjBeginOffset = 0x578;
+    private const int RitualAdjEndOffset = 0x580;
+    private const int RitualAdjStride = 68;
+
+    private static bool SameCoord(Vector2i a, Vector2i b) => a.X == b.X && a.Y == b.Y;
+
+    private List<Vector2i> RitualSelected()
+    {
+        try { return new List<Vector2i>(AtlasPanel?.SelectedForetoldRitualMaps ?? new List<Vector2i>()); }
+        catch { return new List<Vector2i>(); }
+    }
+
+    private bool RitualNeighbours(Vector2i coord, List<Vector2i> into)
+    {
+        into.Clear();
+        try
+        {
+            long page = AtlasPanel?.Address ?? 0;
+            if (page == 0) return false;
+            var mem = GameController.Memory;
+            long b = mem.Read<long>(page + RitualAdjBeginOffset);
+            long e = mem.Read<long>(page + RitualAdjEndOffset);
+            if (b == 0 || e < b) return false;
+            long n = (e - b) / RitualAdjStride;
+            if (n <= 0 || n > 200000) return false;
+
+            int want = (coord.X << 16) + coord.Y;
+            long lo = 0, cnt = n;
+            while (cnt > 0)
+            {
+                long half = cnt / 2;
+                long rec = b + (lo + half) * RitualAdjStride;
+                int key = (mem.Read<int>(rec) << 16) + mem.Read<int>(rec + 4);
+                if (key >= want) cnt = half;
+                else { lo += half + 1; cnt -= half + 1; }
+            }
+            if (lo >= n) return false;
+
+            long found = b + lo * RitualAdjStride;
+            if (mem.Read<int>(found) != coord.X || mem.Read<int>(found + 4) != coord.Y) return false;
+            for (int i = 0; i < 5; i++)
+            {
+                long p = found + 8 + i * 12;
+                var c = new Vector2i(mem.Read<int>(p), mem.Read<int>(p + 4));
+                if (c.X == 0 && c.Y == 0) continue;
+                into.Add(c);
+            }
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private const int RitualSessionOffset = 0x308;
+    private const int RitualAccountOffset = 0x1B0;
+    private const int RitualStatsOffset = 0x3A20;
+    private const int RitualStatsBegin = 1032;
+    private const int RitualStatsEnd = 1040;
+    private const int RitualStatStride = 40;
+    private const int RitualMaxLineStat = 26381;
+    private const int RitualBaseLineLength = 5;
+
+    private int RitualStat(int statId)
+    {
+        try
+        {
+            long page = AtlasPanel?.Address ?? 0;
+            if (page == 0) return 0;
+            var mem = GameController.Memory;
+            long a = mem.Read<long>(page + RitualSessionOffset);
+            if (a == 0) return 0;
+            long b = mem.Read<long>(a + RitualAccountOffset);
+            if (b == 0) return 0;
+            long stats = mem.Read<long>(b + RitualStatsOffset);
+            if (stats == 0) return 0;
+
+            long begin = mem.Read<long>(stats + RitualStatsBegin);
+            long end = mem.Read<long>(stats + RitualStatsEnd);
+            if (begin == 0 || end < begin || end - begin > RitualStatStride * 8192) return 0;
+
+            for (long p = begin; p < end; p += RitualStatStride)
+                if (mem.Read<int>(p) == statId) return mem.Read<int>(p + 8);
+        }
+        catch { }
+        return 0;
+    }
+
+    private const long RitualMaxLineCacheMs = 500;
+    private long ritualMaxLineAt;
+    private int ritualMaxLineCached = RitualBaseLineLength;
+
+    private int RitualMaxLine()
+    {
+        long now = Environment.TickCount64;
+        if (now - ritualMaxLineAt < RitualMaxLineCacheMs) return ritualMaxLineCached;
+        ritualMaxLineAt = now;
+        ritualMaxLineCached = RitualBaseLineLength + RitualStat(RitualMaxLineStat);
+        return ritualMaxLineCached;
+    }
+
+    private const int RitualValidBeginOffset = 0x630;
+    private const int RitualValidEndOffset = 0x638;
+
+    private List<Vector2i> RitualValidTargets()
+    {
+        var list = new List<Vector2i>();
+        try
+        {
+            long page = AtlasPanel?.Address ?? 0;
+            if (page == 0) return list;
+            var mem = GameController.Memory;
+            long b = mem.Read<long>(page + RitualValidBeginOffset);
+            long e = mem.Read<long>(page + RitualValidEndOffset);
+            if (b == 0 || e < b || e - b > 8 * 4096) return list;
+            for (long p = b; p < e; p += 8)
+                list.Add(new Vector2i(mem.Read<int>(p), mem.Read<int>(p + 4)));
+        }
+        catch { }
+        list.Sort((p, q) => p.X != q.X ? p.X.CompareTo(q.X) : p.Y.CompareTo(q.Y));
+        return list;
+    }
+
+    private bool RitualSelectable(Vector2i coord)
+    {
+        lock (mapCacheLock)
+            return !mapCache.TryGetValue(coord, out var n) || n == null || !n.IsDone;
+    }
+
+    private List<Vector2i> RitualCandidates(Vector2i tip, List<Vector2i> selected)
+    {
+        var raw = new List<Vector2i>();
+        var result = new List<Vector2i>();
+        if (!RitualNeighbours(tip, raw)) return result;
+        foreach (var c in raw)
+        {
+            bool taken = false;
+            foreach (var s in selected) if (SameCoord(s, c)) { taken = true; break; }
+            if (!taken) result.Add(c);
+        }
+        result.Sort((p, q) => p.X != q.X ? p.X.CompareTo(q.X) : p.Y.CompareTo(q.Y));
+        return result;
+    }
+
+    private string PlanLabel(Vector2i coord) => $"{NodeNameAt(coord)} [{coord.X},{coord.Y}]";
+
+    private string NodeNameAt(Vector2i coord)
+    {
+        lock (mapCacheLock)
+            return mapCache.TryGetValue(coord, out var n) && !string.IsNullOrWhiteSpace(n?.Name) ? n.Name : coord.ToString();
+    }
+
+    private bool ReadRitualLineState(out int seed, out int depth, out bool selecting)
+    {
+        seed = 0; depth = 0; selecting = false;
+        try
+        {
+            var panel = AtlasPanel;
+            if (panel == null) return false;
+            seed = panel.RitualForetoldSeed;
+            depth = panel.SelectedForetoldRitualMaps?.Count ?? 0;
+
+            long page = panel.Address;
+            if (page != 0) selecting = GameController.Memory.Read<byte>(page + RitualGateOffset) != 0;
+            return true;
+        }
+        catch { return false; }
+    }
+
+    private static readonly string[] ForetellPrefixes = { "Foretold Proliferation: ", "Foretold Bounty: " };
+
+    private static string ForetellText(RitualModDef d)
+    {
+        if (d == null) return "-";
+        var t = string.IsNullOrWhiteSpace(d.text) ? d.id : d.text;
+        foreach (var pre in ForetellPrefixes)
+            if (t.StartsWith(pre, StringComparison.Ordinal)) return t.Substring(pre.Length);
+        return t;
+    }
+
+    private System.Drawing.Color ForetellColor(RitualModDef d)
+    {
+        if (d == null) return OverlayText;
+        float w = Settings.ForetellingWeight(d.id);
+        if (MathF.Abs(w) < 0.5f) return OverlayText;
+        return ColorUtils.WithAlphaOf(WeightRampColor(w, minForetellWeight, maxForetellWeight), OverlayText);
+    }
+
+    private readonly Dictionary<Vector2i, List<Vector2i>> ritualAdjMemo = new();
+    private List<Vector2i> ritualPlan = new();
+    private readonly Dictionary<Vector2i, int> ritualPlanSteps = new();
+    public bool ritualStartSearchPending;
+    private List<Vector2i> ritualBestStartPlan = new();
+    private (int seed, int wver, int steps, bool uniques) ritualBestStartKey;
+    private string ritualStartSearchNote;
+    private string ritualPlanActionNote;
+    private bool ritualUiActive;
+    private Vector2 ritualUiPos;
+    private Vector2 ritualPanelSize;
+    private bool ritualPanelDragging;
+    private Vector2 ritualPanelGrab;
+    private static readonly System.Drawing.Color RitualPanelBg = System.Drawing.Color.FromArgb(228, 0, 0, 0);
+    private bool ritualUiAtStart;
+    private List<Vector2i> ritualShownPlan = new();
+    private const float RitualHoverSlack = 0.6f;
+    public List<Vector2i> RitualPlanCoords => ritualPlan;
+    private (int seed, int depth, Vector2i tip, int wver, int steps, bool uniques) ritualPlanKey;
+
+    private List<Vector2i> RitualCandidatesMemo(Vector2i tip, List<Vector2i> selected)
+    {
+        if (!ritualAdjMemo.TryGetValue(tip, out var raw))
+        {
+            raw = new List<Vector2i>();
+            RitualNeighbours(tip, raw);
+            ritualAdjMemo[tip] = raw;
+        }
+        var result = new List<Vector2i>();
+        foreach (var c in raw)
+        {
+            bool taken = false;
+            foreach (var sel in selected) if (SameCoord(sel, c)) { taken = true; break; }
+            if (!taken) result.Add(c);
+        }
+        result.Sort((p, q) => p.X != q.X ? p.X.CompareTo(q.X) : p.Y.CompareTo(q.Y));
+        return result;
+    }
+
+    private float RitualBestPath(int depth, Vector2i tip, List<Vector2i> selected, int steps, List<Vector2i> into)
+    {
+        into.Clear();
+        if (steps <= 0) return 0f;
+        var candidates = RitualCandidatesMemo(tip, selected);
+        if (candidates.Count == 0) return 0f;
+
+        float best = float.NegativeInfinity;
+        var scratch = new List<Vector2i>();
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            if (!RitualSelectable(candidates[i])) continue;
+            float here = ForetellWeightOf(ForetellRoll(depth, i));
+            selected.Add(candidates[i]);
+            float rest = RitualBestPath(depth + 1, candidates[i], selected, steps - 1, scratch);
+            selected.RemoveAt(selected.Count - 1);
+            if (here + rest > best)
+            {
+                best = here + rest;
+                into.Clear();
+                into.Add(candidates[i]);
+                into.AddRange(scratch);
+            }
+        }
+        return best == float.NegativeInfinity ? 0f : best;
+    }
+
+    private float RitualEvaluateStart(Vector2i start, int steps, List<Vector2i> into)
+    {
+        into.Clear();
+        into.Add(start);
+        if (steps <= 1) return 0f;
+        var tail = new List<Vector2i>();
+        float score = RitualBestPath(1, start, new List<Vector2i> { start }, steps - 1, tail);
+        into.AddRange(tail);
+        return score;
+    }
+
+    private int RitualStartSteps()
+    {
+        int steps = Math.Clamp(Settings.Features.RitualPlanSteps, 1, 8);
+        int cap = RitualMaxLine();
+        return cap > 0 ? Math.Min(steps, cap) : steps;
+    }
+
+    private List<Vector2i> RitualPlanFromStart(int seed, Vector2i start)
+    {
+        var key = (seed, -1, start, weightsRecalcVersion, RitualStartSteps(), false);
+        if (key.Equals(ritualPlanKey)) return ritualPlan;
+        ritualPlanKey = key;
+        ritualAdjMemo.Clear();
+        var plan = new List<Vector2i>();
+        RitualEvaluateStart(start, RitualStartSteps(), plan);
+        ritualPlan = plan;
+        return plan;
+    }
+
+    private void SearchBestRitualStart(int seed, List<Vector2i> starts)
+    {
+        int steps = RitualStartSteps();
+        ritualAdjMemo.Clear();
+
+        var best = new List<Vector2i>();
+        float bestScore = float.NegativeInfinity;
+        var scratch = new List<Vector2i>();
+        int looked = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var start in starts)
+        {
+            if (!RitualSelectable(start)) continue;
+            looked++;
+            float score = RitualEvaluateStart(start, steps, scratch);
+            if (score > bestScore) { bestScore = score; best = new List<Vector2i>(scratch); }
+        }
+        sw.Stop();
+
+        ritualBestStartPlan = best;
+        ritualBestStartKey = (seed, weightsRecalcVersion, steps, false);
+        ritualStartSearchNote = $"searched {looked} starts in {sw.ElapsedMilliseconds} ms";
+        ritualPlanKey = default;
+    }
+
+    private void RefreshRitualPlan(int seed, int depth, Vector2i tip, List<Vector2i> selected)
+    {
+        int remaining = RitualMaxLine() - depth;
+        int steps = Math.Clamp(Settings.Features.RitualPlanSteps, 1, 8);
+        if (remaining > 0) steps = Math.Min(steps, remaining);
+        else steps = 0;
+        var key = (seed, depth, tip, weightsRecalcVersion, steps, false);
+        if (key.Equals(ritualPlanKey)) return;
+        ritualPlanKey = key;
+        ritualAdjMemo.Clear();
+        var plan = new List<Vector2i>();
+        if (steps > 0)
+            RitualBestPath(depth, tip, new List<Vector2i>(selected), steps, plan);
+        ritualPlan = plan;
+    }
+
+    private bool RitualNodeRect(Vector2i coord, out RectangleF rect)
+    {
+        rect = default;
+        Node node;
+        lock (mapCacheLock)
+            if (!mapCache.TryGetValue(coord, out node)) node = null;
+        if (node == null) return false;
+        rect = GetNodeRect(node);
+        return !rect.IsEmpty && rect.Width > 0 && IsOnScreen(rect.Center);
+    }
+
+    private readonly HashSet<Vector2i> ritualPaneled = new();
+
+    private void RitualNodePanel(Vector2i coord, RectangleF rect, Vector2 screen, List<(string text, System.Drawing.Color color)> lines)
+    {
+        if (!ritualPaneled.Add(coord)) return;
+        const float pad = 6f;
+        var (boxW, boxH, lineH) = MeasurePanel(lines, pad);
+        float x = Math.Clamp(rect.Center.X - boxW / 2f, 0f, MathF.Max(0f, screen.X - boxW));
+        float y = rect.Top - boxH - 2f;
+        if (y < 0f) y = rect.Bottom + 2f;
+        RegisterPanel(new Vector2(x, y), boxW, boxH, pad, lineH, lines);
+    }
+
+    private class RitualStartRow
+    {
+        public Vector2i Start;
+        public string Name = "";
+        public float Weight;
+        public float Value;
+        public int Maps;
+        public List<Vector2i> Plan = new();
+    }
+
+    private List<RitualStartRow> ritualStartRows = new();
+    private string ritualStartRowsNote;
+    private string ritualStartFilter = "";
+
+    private void BuildRitualStartRows()
+    {
+        var rows = new List<RitualStartRow>();
+        ritualStartRowsNote = null;
+        try
+        {
+            if (!ReadRitualLineState(out _, out int depth, out bool selecting) || !selecting)
+            { ritualStartRowsNote = "Open Invoke Rite on the atlas."; ritualStartRows = rows; return; }
+            if (depth > 0)
+            { ritualStartRowsNote = "The Rite has already started."; ritualStartRows = rows; return; }
+
+            var starts = RitualValidTargets();
+            int steps = RitualStartSteps();
+            ritualAdjMemo.Clear();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
+            var scratch = new List<Vector2i>();
+            foreach (var start in starts)
+            {
+                if (!RitualSelectable(start)) continue;
+                float weight = RitualEvaluateStart(start, steps, scratch);
+                var plan = new List<Vector2i>(scratch);
+
+                float value = 0f;
+                var walk = new List<Vector2i>();
+                Vector2i? at = null;
+                for (int step = 0; step < plan.Count; step++)
+                {
+                    if (at.HasValue)
+                    {
+                        var cand = RitualCandidatesMemo(at.Value, walk);
+                        int idx = cand.FindIndex(v => SameCoord(v, plan[step]));
+                        if (idx >= 0) value += ForetellValueOf(ForetellRoll(step, idx));
+                    }
+                    walk.Add(plan[step]);
+                    at = plan[step];
+                }
+
+                rows.Add(new RitualStartRow {
+                    Start = start, Name = NodeNameAt(start),
+                    Weight = weight, Value = value, Maps = plan.Count, Plan = plan,
+                });
+            }
+            sw.Stop();
+            rows.Sort((a, b) => b.Weight.CompareTo(a.Weight));
+            ritualStartRowsNote = $"{rows.Count} starts scored in {sw.ElapsedMilliseconds} ms";
+        }
+        catch (Exception e) { ritualStartRowsNote = e.Message; LogError($"BuildRitualStartRows failed: {e.Message}"); }
+        ritualStartRows = rows;
+    }
+
+    private void DrawRitualBody()
+    {
+        if (ImGui.Button("Score all starts")) BuildRitualStartRows();
+        Controls.Tip("Plans from every valid starting map.");
+        if (!string.IsNullOrEmpty(ritualStartRowsNote))
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled(ritualStartRowsNote);
+        }
+
+        if (ritualStartRows.Count == 0) return;
+
+        var cols = new List<TableColumn<RitualStartRow>>
+        {
+            new() {
+                Header = "WP", Width = 34f,
+                Draw = (r, _) => {
+                    var n = NodeAtCoords(r.Start);
+                    bool wp = n != null && HasWaypoint(n);
+                    if (ImGui.Checkbox("##wp", ref wp) && n != null) {
+                        if (wp) AddWaypoint(n); else RemoveWaypoint(n);
+                    }
+                    Controls.Tip(wp ? "Remove waypoint" : "Add waypoint");
+                },
+            },
+            new() {
+                Header = "Map", Width = 0f, SortKey = r => r.Name,
+                Draw = (r, _) => { ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted($"{r.Name} [{r.Start.X},{r.Start.Y}]"); },
+            },
+            new() {
+                Header = "Maps", Width = 50f, SortKey = r => r.Maps,
+                Draw = (r, _) => { ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted(r.Maps.ToString()); },
+            },
+            new() {
+                Header = "Weight", Width = 70f, SortKey = r => r.Weight,
+                Draw = (r, _) => { ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted($"{r.Weight:0.#}"); },
+            },
+            new() {
+                Header = "Value", Width = 80f, SortKey = r => r.Value,
+                Draw = (r, _) => { ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted($"{r.Value:0.##} div"); },
+            },
+            new() {
+                Header = "Tour", Width = 46f,
+                Draw = (r, _) => {
+                    if (ImGui.SmallButton("Tour")) { ritualShownPlan = r.Plan; RitualPlanToTour(); }
+                    Controls.Tip("Build a tour of this whole route.");
+                },
+            },
+        };
+
+        if (HacksCameraPanReady)
+            cols.Add(new TableColumn<RitualStartRow> {
+                Header = "Goto", Width = 50f,
+                Draw = (r, _) => {
+                    if (ImGui.SmallButton("Goto")) GotoNode(NodeAtCoords(r.Start));
+                    Controls.Tip("Pan the atlas to this map.");
+                },
+            });
+
+        SortableTable.Draw("rite_starts", ritualStartRows, cols.ToArray(), ref ritualStartFilter,
+            r => r.Name, Math.Max(120f, ImGui.GetContentRegionAvail().Y));
+    }
+
+    private Vector2 RitualPanelPos()
+    {
+        var p = Settings.Features.RitualPanelPos;
+        if (p == Vector2.Zero) p = new Vector2(20f, 180f);
+        return p;
+    }
+
+    private void HandleRitualPanelDrag()
+    {
+        var io = ImGui.GetIO();
+        var pos = RitualPanelPos();
+        if (!ritualPanelDragging)
+        {
+            if (io.WantCaptureMouse) return;
+            if (!io.KeyShift || !ImGui.IsMouseClicked(ImGuiMouseButton.Left)) return;
+            var rect = new RectangleF(pos.X, pos.Y, ritualPanelSize.X, ritualPanelSize.Y);
+            if (!rect.Contains(io.MousePos.X, io.MousePos.Y)) return;
+            ritualPanelDragging = true;
+            ritualPanelGrab = io.MousePos - pos;
+        }
+        if (!ImGui.IsMouseDown(ImGuiMouseButton.Left)) { ritualPanelDragging = false; return; }
+
+        var next = io.MousePos - ritualPanelGrab;
+        var vp = ImGui.GetMainViewport();
+        next.X = Math.Clamp(next.X, vp.Pos.X, vp.Pos.X + Math.Max(0f, vp.Size.X - ritualPanelSize.X));
+        next.Y = Math.Clamp(next.Y, vp.Pos.Y, vp.Pos.Y + Math.Max(0f, vp.Size.Y - ritualPanelSize.Y));
+        Settings.Features.RitualPanelPos = next;
+    }
+
+    public void DrawRitualOverlayButtons()
+    {
+        if (!ritualUiActive) { ritualPanelDragging = false; return; }
+        try
+        {
+            HandleRitualPanelDrag();
+
+            ImGui.SetNextWindowPos(ritualUiPos, ImGuiCond.Always);
+            var flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove
+                      | ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoScrollbar
+                      | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing;
+
+            if (ImGui.Begin("##rite_actions", flags))
+            {
+                ImGui.BeginDisabled(!ritualUiAtStart);
+                if (ImGui.Button("Find best start")) ritualStartSearchPending = true;
+                ImGui.EndDisabled();
+
+                bool hasPlan = ritualShownPlan is { Count: > 0 };
+                ImGui.SameLine();
+                ImGui.BeginDisabled(!hasPlan);
+                if (ImGui.Button("Waypoint to first map")) ritualPlanActionNote = RitualPlanToWaypoint();
+                ImGui.SameLine();
+                if (ImGui.Button("Tour whole Rite")) ritualPlanActionNote = RitualPlanToTour();
+                ImGui.EndDisabled();
+
+                if (!string.IsNullOrEmpty(ritualPlanActionNote))
+                    ImGui.TextDisabled(ritualPlanActionNote);
+            }
+            ImGui.End();
+        }
+        catch (Exception e) { LogError($"DrawRitualOverlayButtons failed: {e.Message}"); }
+    }
+
+    public string RitualPlanToWaypoint()
+    {
+        var plan = ritualShownPlan;
+        if (plan == null || plan.Count == 0) return "no plan";
+        var node = NodeAtCoords(plan[0]);
+        if (node == null) return "first map not cached";
+        AddWaypoint(node);
+        OpenPanelSection("waypoints");
+        return $"waypoint on {PlanLabel(plan[0])}";
+    }
+
+    public string RitualPlanToTour()
+    {
+        var plan = ritualShownPlan;
+        if (plan == null || plan.Count == 0) return "no plan";
+
+        var tour = new Tour
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Name = $"Rite {NodeNameAt(plan[0])} [{plan[0].X},{plan[0].Y}]",
+            Color = GetNextTourColor(),
+            Stops = plan.Select(c => new TourStop { X = c.X, Y = c.Y }).ToList(),
+        };
+        Settings.Tours.Tours.Add(tour.Id, tour);
+        Settings.Tours.ActiveTourId = tour.Id;
+        BuildTour(tour);
+        OpenPanelSection("tours");
+        return $"tour of {plan.Count} maps";
+    }
+
+    private void LayoutRitualForetellings()
+    {
+        long tRitual = Stopwatch.GetTimestamp();
+        try { LayoutRitualForetellingsInner(); }
+        finally { PerfMonitor.Record("Render.RitualForetell", Stopwatch.GetTimestamp() - tRitual); }
+    }
+
+    private void LayoutRitualForetellingsInner()
+    {
+        ritualPlanSteps.Clear();
+        ritualPaneled.Clear();
+        ritualUiActive = false;
+        if (!Settings.Features.ShowRitualForetellings) return;
+        try
+        {
+            if (!ReadRitualLineState(out int seed, out int depth, out bool selecting)) return;
+            if (ritualMods == null || ritualMods.Count == 0) return;
+
+            if (!selecting) return;
+
+            var selected = RitualSelected();
+            bool atStart = selected.Count == 0;
+            var tip = atStart ? default : selected[selected.Count - 1];
+
+            var options = atStart ? RitualValidTargets() : RitualCandidates(tip, selected);
+            if (options.Count == 0) return;
+
+            var tint = ButtonKindColor(RitualKind);
+            var sub = System.Drawing.Color.FromArgb(180, 180, 180, 180);
+            var mouse = ImGuiNET.ImGui.GetMousePos();
+            var screen = GameController.Window.GetWindowRectangleTimeCache.Size;
+
+            Vector2i? hovered = null;
+            float bestDist = float.MaxValue;
+            foreach (var c in options)
+            {
+                if (!RitualNodeRect(c, out var hr)) continue;
+                float pad2 = MathF.Max(hr.Width, hr.Height) * RitualHoverSlack;
+                var grown = new RectangleF(hr.X - pad2, hr.Y - pad2, hr.Width + pad2 * 2f, hr.Height + pad2 * 2f);
+                if (!grown.Contains(mouse)) continue;
+                float dist = Vector2.Distance(hr.Center, mouse);
+                if (dist < bestDist) { bestDist = dist; hovered = c; }
+            }
+
+            var pendingHover = new List<(Vector2i coord, RectangleF rect, List<(string, System.Drawing.Color)> lines)>();
+            if (hovered.HasValue)
+            {
+                var next = new List<Vector2i>(selected) { hovered.Value };
+                var onward = RitualCandidates(hovered.Value, next);
+                for (int j = 0; j < onward.Count; j++)
+                {
+                    if (!RitualSelectable(onward[j])) continue;
+                    if (!RitualNodeRect(onward[j], out var orect)) continue;
+                    var lines = new List<(string, System.Drawing.Color)>();
+                    foreach (var p2 in ForetellRoll(depth + 1, j))
+                        lines.Add((ForetellText(p2), ForetellColor(p2)));
+                    if (lines.Count == 0) continue;
+                    pendingHover.Add((onward[j], orect, lines));
+                }
+            }
+
+            void FlushHover()
+            {
+                foreach (var (c, r, l) in pendingHover) RitualNodePanel(c, r, screen, l);
+            }
+
+            if (!Settings.Features.RitualPlanner) { FlushHover(); return; }
+            if (foretellPricesStale) { RefreshForetellPrices(out foretellPriceNote); foretellPricesStale = false; }
+
+            List<Vector2i> plan;
+            if (atStart)
+            {
+                if (ritualStartSearchPending)
+                {
+                    SearchBestRitualStart(seed, options);
+                    ritualStartSearchPending = false;
+                }
+
+                if (hovered.HasValue) plan = RitualPlanFromStart(seed, hovered.Value);
+                else if (ritualBestStartKey.Equals((seed, weightsRecalcVersion, RitualStartSteps(), false)))
+                    plan = ritualBestStartPlan;
+                else plan = null;
+
+                if (plan == null || plan.Count == 0)
+                {
+                    var hint = new List<(string, System.Drawing.Color)>
+                    {
+                        ("Rite not started", tint),
+                        ("hover any glowing map to plan from it, or use Find best start", sub),
+                    };
+                    var (hw2, hh2, hl2) = MeasurePanel(hint, 6f);
+                    var hpos = RitualPanelPos();
+                    RegisterPanel(hpos, hw2, hh2, 6f, hl2, hint, RitualPanelBg);
+                    ritualPanelSize = new Vector2(hw2, hh2);
+                    ritualUiActive = true; ritualUiAtStart = true;
+                    ritualUiPos = new Vector2(hpos.X, hpos.Y + hh2 + 4f);
+                    FlushHover();
+                    return;
+                }
+            }
+            else
+            {
+                RefreshRitualPlan(seed, depth, tip, selected);
+                plan = ritualPlan;
+            }
+
+            if (plan == null || plan.Count == 0) return;
+            ritualShownPlan = plan;
+            for (int i = 0; i < plan.Count; i++) ritualPlanSteps[plan[i]] = i;
+
+            int cap = RitualMaxLine();
+            string head = atStart
+                ? (hovered.HasValue ? $"Rite plan from {PlanLabel(plan[0])}" : $"Best start: {PlanLabel(plan[0])}   {ritualStartSearchNote}")
+                : $"Rite plan   {plan.Count} of {Math.Max(0, cap - depth)} left";
+            var route = new List<(string text, System.Drawing.Color color)> { ($"{head}   (line {depth}/{cap})", tint) };
+
+            float total = 0f, totalWeight = 0f;
+            var walk = new List<Vector2i>(selected);
+            Vector2i? at = atStart ? null : tip;
+            for (int step = 0; step < plan.Count; step++)
+            {
+                var picks = new List<RitualModDef>();
+                if (at.HasValue)
+                {
+                    var cand = RitualCandidatesMemo(at.Value, walk);
+                    int idx = cand.FindIndex(v => SameCoord(v, plan[step]));
+                    if (idx >= 0) picks = ForetellRoll(depth + step, idx);
+                }
+                total += ForetellValueOf(picks);
+                totalWeight += ForetellWeightOf(picks);
+
+                float stepWeight = ForetellWeightOf(picks);
+                route.Add(picks.Count == 0
+                    ? ($"{step + 1}. {PlanLabel(plan[step])}", sub)
+                    : ($"{step + 1}. {PlanLabel(plan[step])} ({stepWeight:0.#})", sub));
+                foreach (var pk in picks) route.Add(("     " + ForetellText(pk), ForetellColor(pk)));
+                if (picks.Count == 0) route.Add(("     -", sub));
+
+                if (step > 0 && RitualNodeRect(plan[step], out var prect))
+                {
+                    var stamp = new List<(string, System.Drawing.Color)>();
+                    for (int k = 0; k < picks.Count; k++)
+                        stamp.Add((k == 0 ? $"{step + 1}. " + ForetellText(picks[k]) : "    " + ForetellText(picks[k]), ForetellColor(picks[k])));
+                    if (stamp.Count > 0) RitualNodePanel(plan[step], prect, screen, stamp);
+                }
+
+                walk.Add(plan[step]);
+                at = plan[step];
+            }
+            route.Add(($"total value {total:0.##} div   weight {totalWeight:0.#}", tint));
+
+            FlushHover();
+
+            const float pad = 6f;
+            var (rw, rh, rl) = MeasurePanel(route, pad);
+            var rpos = RitualPanelPos();
+            RegisterPanel(rpos, rw, rh, pad, rl, route, RitualPanelBg);
+            ritualPanelSize = new Vector2(rw, rh);
+            ritualUiActive = true; ritualUiAtStart = atStart;
+            ritualUiPos = new Vector2(rpos.X, rpos.Y + rh + 4f);
+        }
+        catch (Exception e) { LogError($"LayoutRitualForetellings failed: {e.Message}"); }
+    }
+
+    #endregion
+
     #region Rumour Popup Decode
 
     private void ScanExpeditionButtons()
@@ -1642,22 +2737,25 @@ public partial class ExileMapsCore
         try
         {
             var buttons = AtlasPanel?.Buttons;
+            ScanAtlasButtonDebug(buttons);
             if (buttons == null) return;
             foreach (var b in buttons)
             {
                 if (b == null || !b.IsVisible) continue;
-                if (b.ButtonType?.Id != "Ocean") continue;
+                var kind = b.ButtonType?.Id;
+                if (kind != ExpeditionKind && kind != RitualKind) continue;
                 frameVisibleExpeditionButtonCoords.Add(b.Coordinate);
 
-                if (frameLogbookPopup != null) continue;
                 var children = b.Children;
                 var visual = children != null && children.Count > 0 ? children[0] : null;
                 if (visual == null || !visual.HasShinyHighlight) continue;
-                frameHoverButtonRegion = b.RegionCoordinate;
                 var tip = visual.Tooltip;
                 if (tip == null || !tip.IsVisible) continue;
                 var r = tip.GetClientRect();
-                if (r.Width > 0 && r.Height > 0) frameLogbookPopup = tip;
+                if (r.Width <= 0 || r.Height <= 0) continue;
+
+                frameHoverButtonRegion = (b.RegionCoordinate, kind);
+                if (kind == ExpeditionKind && frameLogbookPopup == null) frameLogbookPopup = tip;
             }
         }
         catch (Exception e) { LogError($"ScanExpeditionButtons failed: {e.Message}"); }
@@ -1749,6 +2847,7 @@ public partial class ExileMapsCore
 
                 foreach (var e in snapshot.OrderByDescending(ExpeditionScore))
                 {
+                    if (e.Kind != ExpeditionKind) continue;
                     if (!ExpeditionMatchesSearch(e, expSearchText)) continue;
 
                     ImGui.PushID($"exp_{e.RegionCoord.X}_{e.RegionCoord.Y}");

@@ -553,7 +553,10 @@ public partial class ExileMapsCore
 
     #region Weights Tab
 
-    private List<string> mapIds, contentIds, biomeIds, rumorIds;
+    private List<string> mapIds, contentIds, biomeIds, rumorIds, foretellIds;
+    private bool foretellLogScale = true;
+    private bool foretellPricesStale = true;
+    private string foretellPriceNote;
 
     private void RebuildWeightEditorIds()
     {
@@ -561,7 +564,18 @@ public partial class ExileMapsCore
         contentIds = [.. Settings.GameData.Content.Keys.OrderBy(k => Settings.GameData.Content[k].Name)];
         biomeIds   = [.. Settings.GameData.Biomes.Keys.OrderBy(k => Settings.GameData.Biomes[k].Name)];
         rumorIds   = [.. Settings.GameData.Rumors.Keys.OrderBy(k => k)];
+        foretellIds = [.. Settings.GameData.Foretellings.Keys.OrderBy(k => Settings.GameData.Foretellings[k])];
     }
+
+    private WeightListOpts ForetellWeightLook => new()
+    {
+        Min = minForetellWeight, Max = maxForetellWeight, Decimals = 1,
+        Scale = WeightRamp(),
+        Rail = true,
+        Search = true, Sortable = true, MultiSelect = true, Resizable = false,
+        NameHeader = "Name", ValueHeader = "Weight",
+        MaxHeight = 420f,
+    };
 
     private WeightListOpts WeightLook => new()
     {
@@ -666,6 +680,30 @@ public partial class ExileMapsCore
             Controls.Tip("Tints rumour names in the marker and popup lists. 0 stays plain.");
         }
 
+        if (Controls.Category("Ritual"))
+        {
+            d |= Check("Ritual markers", () => c.ShowRitualMarkers, v => c.ShowRitualMarkers = v);
+            Controls.Tip("Mark Rite of the Nameless spawns. Hover rings the region's maps.");
+
+            var rf = Settings.Features;
+            d |= Check("Foretelling predictions", () => rf.ShowRitualForetellings, v => rf.ShowRitualForetellings = v);
+            Controls.Tip("Predict Rite foretellings. Hover a map to see one step ahead.");
+
+            if (rf.ShowRitualForetellings)
+            {
+                d |= Check("Route planner", () => rf.RitualPlanner, v => rf.RitualPlanner = v);
+                Controls.Tip("Pick the heaviest path through the Rite, by foretelling weight.");
+
+                if (rf.RitualPlanner)
+                {
+                    int steps = rf.RitualPlanSteps;
+                    if (Controls.SliderInt("Maps to plan", ref steps, 1, 8)) { rf.RitualPlanSteps = steps; d = true; }
+
+
+                }
+            }
+        }
+
         return d;
     }
 
@@ -703,6 +741,35 @@ public partial class ExileMapsCore
                 WeightLook,
                 id => Settings.GameData.Rumors[id].Description,
                 RumorWeightColumns());
+
+        if (foretellIds is { Count: > 0 } && Controls.Category("Ritual foretellings"))
+        {
+            if (foretellPricesStale) { RefreshForetellPrices(out foretellPriceNote); foretellPricesStale = false; }
+
+            if (ImGui.Button("Auto-assign from prices"))
+            {
+                AutoAssignForetellWeights(foretellLogScale, out foretellPriceNote);
+                d = true;
+            }
+            Controls.Tip("Weight each bounty by its NinjaPricer value.");
+            ImGui.SameLine();
+            if (ImGui.Button("Refresh prices")) RefreshForetellPrices(out foretellPriceNote);
+            Controls.Tip("Re-read prices from NinjaPricer.");
+            ImGui.SameLine();
+            ImGui.Checkbox("Log scale", ref foretellLogScale);
+            Controls.Tip("Off: raw value. On: compresses the top end.");
+            if (!string.IsNullOrEmpty(foretellPriceNote))
+            {
+                ImGui.SameLine();
+                ImGui.TextDisabled(foretellPriceNote);
+            }
+
+            d |= Weight.List("w_foretell", foretellIds,
+                id => Settings.GameData.Foretellings[id],
+                id => Settings.ForetellingWeight(id),
+                (id, v) => Settings.Active.Foretellings[id] = v,
+                ForetellWeightLook, null, ForetellWeightColumns());
+        }
 
         if (specialMapsChanged) { RequestSpecialMapsRefresh(); d = true; }
         if (d) weightsDirty = true;
@@ -813,6 +880,19 @@ public partial class ExileMapsCore
         },
     ];
 
+    private TableColumn<string>[] ForetellWeightColumns() =>
+    [
+        new TableColumn<string> {
+            Header = "Price (div)", Width = 90f, SortKey = id => ForetellPrice(id),
+            Draw = (id, _) => {
+                ImGui.AlignTextToFramePadding();
+                double v = ForetellPrice(id);
+                if (v <= 0) { ImGui.TextDisabled("-"); return; }
+                ImGui.TextUnformatted(v >= 100 ? $"{v:0}" : v >= 1 ? $"{v:0.0}" : $"{v:0.###}");
+            },
+        },
+    ];
+
     private TableColumn<string>[] RumorWeightColumns() =>
     [
         new TableColumn<string> {
@@ -896,7 +976,7 @@ public partial class ExileMapsCore
             d |= Controls.SliderInt("Auto Tour Reach", () => t.AutoTourReach, v => t.AutoTourReach = v, 1, 10);
             Controls.Tip("Max steps between stops when auto-tour chains a route.");
 
-            if (Check("Weight-aware routing", () => t.WeightAwareRouting, v => t.WeightAwareRouting = v)) {
+            if (Check("Weight-aware routing##tour", () => t.WeightAwareRouting, v => t.WeightAwareRouting = v)) {
                 d = true;
                 RebuildTours();
             }
@@ -1153,6 +1233,8 @@ public partial class ExileMapsCore
                 Tog("Debug Mode", () => f.DebugMode, v => f.DebugMode = v),
                 Tog("Show Performance Monitor", () => f.ShowPerfMonitor, v => f.ShowPerfMonitor = v,
                     "Overlay: 60-frame avg CPU time per render/cache section."),
+                Tog("Debug Atlas Buttons", () => f.DebugAtlasButtons, v => f.DebugAtlasButtons = v,
+                    "Label every AtlasPanel.Buttons entry on the map."),
             }, 0);
         }
 

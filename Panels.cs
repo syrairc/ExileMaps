@@ -26,7 +26,7 @@ public partial class ExileMapsCore
             ImGui.SetNextWindowBgAlpha(0.9f);
 
             if (ImGui.Begin("ExileMaps###exilemapspanel", ref panelOpen, ImGuiWindowFlags.NoCollapse))
-                ExileImGui2.Nav.Rail("sections", navItems, navState);
+                ExileImGui2.Nav.Rail("sections", navItems, navState, collapsedWidth: 64f, expandedWidth: 190f, iconSize: 40f);
             ImGui.End();
         } catch (Exception e) {
             LogError("Error drawing grouped panel: " + e.Message);

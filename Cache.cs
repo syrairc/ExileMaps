@@ -181,6 +181,16 @@ public partial class ExileMapsCore
         cachedNode.IsVisited = visited;
         cachedNode.IsActive = el.IsActive;
         cachedNode.IsCompleted = completed;
+
+        int kids = (int)el.ChildCount;
+        if (kids != cachedNode.ModifierChildCount) {
+            cachedNode.ModifierChildCount = kids;
+            cachedNode.SpecialModifiers.Clear();
+            cachedNode.ModifierDetails.Clear();
+            AddSpecialModifiers(node, cachedNode);
+            changed = true;
+        }
+
         cachedNode.ParentAddress = node.Address;
         cachedNode.MapNode = node;
         cachedNode.ArtWidth = el.Width;
@@ -199,9 +209,12 @@ public partial class ExileMapsCore
             if (!string.IsNullOrWhiteSpace(fullId)) {
                 cachedNode.Id = fullId.Trim();
                 cachedNode.MapType = ResolveMapType(fullId.Trim().Replace("_NoBoss", ""), fullId);
+                if (string.IsNullOrWhiteSpace(cachedNode.Name))
+                    cachedNode.Name = el.Area.Name;
                 cachedNode.Content.Clear();
                 cachedNode.Biomes.Clear();
                 cachedNode.SpecialModifiers.Clear();
+                cachedNode.ModifierDetails.Clear();
                 AddNodeContentFromIdentity(node, cachedNode);
                 AddIdBasedContent(cachedNode);
                 AddNodeBiome(node, cachedNode);
@@ -351,19 +364,30 @@ public partial class ExileMapsCore
 
             foreach (var child in children) {
                 var tt = child?.Tooltip;
-                if (tt == null)
-                    continue;
-                var text = tt.TextNoTags;
+                string text = null;
+                if (tt != null) {
+                    text = tt.TextNoTags;
+                    if (string.IsNullOrWhiteSpace(text))
+                        text = tt.Text;
+                }
                 if (string.IsNullOrWhiteSpace(text))
-                    text = tt.Text;
+                    text = child?.TextNoTags;
                 if (string.IsNullOrWhiteSpace(text))
                     continue;
 
-                var line = text.Split('\n')[0].Trim();
+                var lines = text.Split('\n');
+                var line = lines[0].Trim();
                 if (line.Length == 0)
                     continue;
                 if (!toNode.SpecialModifiers.Contains(line, StringComparer.OrdinalIgnoreCase))
                     toNode.SpecialModifiers.Add(line);
+                for (int i = 1; i < lines.Length; i++) {
+                    var detail = lines[i].Trim();
+                    if (detail.Length == 0)
+                        continue;
+                    if (!toNode.ModifierDetails.Contains(detail, StringComparer.OrdinalIgnoreCase))
+                        toNode.ModifierDetails.Add(detail);
+                }
             }
         }
         catch (Exception e) { DebugSwallow("AddSpecialModifiers", e); }
@@ -741,9 +765,7 @@ public partial class ExileMapsCore
 
         IEnumerable<Node> q = nodes;
         if (!string.IsNullOrEmpty(filter))
-            q = q.Where(n => n.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)
-                          || n.Content.Any(c => c.Value.Name == filter)
-                          || n.SpecialModifiers.Any(m => m.Contains(filter, StringComparison.OrdinalIgnoreCase)));
+            q = q.Where(n => MapSearchText(n).Contains(filter, StringComparison.OrdinalIgnoreCase));
         if (maxSteps > 0)
             q = q.Where(n => Steps(n) <= maxSteps);
 

@@ -96,6 +96,10 @@ public class Node
     [JsonIgnore]
     public List<string> SpecialModifiers { get; set; } = [];
     [JsonIgnore]
+    public List<string> ModifierDetails { get; set; } = [];
+    [JsonIgnore]
+    public int ModifierChildCount { get; set; } = -1;
+    [JsonIgnore]
     public MapInfo MapType { get; set; }
     [JsonIgnore]
     public float Weight { get; set; }
@@ -484,6 +488,7 @@ public struct TourStop
 public class Expedition
 {
     public int Id;
+    public string Kind = "Ocean";
     public Vector2i SpawnCoord;
     public Vector2i RegionCoord;
     public List<Vector2i> ButtonCoords = new();
@@ -516,6 +521,7 @@ public class Profile
     public ConcurrentDictionary<string, ContentTuning> Content { get; set; } = new();
     public ConcurrentDictionary<string, float> Biomes { get; set; } = new();
     public ConcurrentDictionary<string, float> Rumors { get; set; } = new();
+    public ConcurrentDictionary<string, float> Foretellings { get; set; } = new();
 
     public LabelStyleSettings Labels { get; set; } = LabelStyleSettings.Defaults();
 

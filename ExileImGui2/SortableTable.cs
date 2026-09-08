@@ -70,6 +70,15 @@ public static class SortableTable
             filter = f;
         }
 
+        // the search box above ate into what is left, so a caller that passed "the rest of the window"
+        // now overflows it by exactly one box and the parent grows a scrollbar. clamp here rather than
+        // making every caller subtract a box height it did not ask for.
+        if (maxHeight > 0f)
+        {
+            float avail = ImGui.GetContentRegionAvail().Y;
+            if (avail > 0f && avail < maxHeight) maxHeight = avail;
+        }
+
         var visible = VisibleIndices(items, filterText, filter ?? "");
 
         // NoSavedSettings or imgui persists column widths per table id in its ini and REPLAYS them over

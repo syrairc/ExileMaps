@@ -429,6 +429,7 @@ public class GameData
     public Dictionary<string, ContentInfo> Content { get; set; } = new();
     public Dictionary<string, BiomeInfo> Biomes { get; set; } = new();
     public Dictionary<string, RumorInfo> Rumors { get; set; } = new();
+    public Dictionary<string, string> Foretellings { get; set; } = new();
 }
 
 public class ExileMapsSettings : ISettings
@@ -451,6 +452,8 @@ public class ExileMapsSettings : ISettings
     public float BiomeWeight(string id) => id != null && Active.Biomes.TryGetValue(id, out float w) ? w : 0f;
 
     public float RumorWeight(string id) => id != null && Active.Rumors.TryGetValue(id, out float w) ? w : 0f;
+
+    public float ForetellingWeight(string id) => id != null && Active.Foretellings.TryGetValue(id, out float w) ? w : 0f;
 
     private static readonly MapTuning UntunedMap = new();
     private static readonly ContentTuning UntunedContent = new();
@@ -529,6 +532,12 @@ public class FeatureSettings
     public bool DebugMode = false;
 
     public bool ShowPerfMonitor = false;
+
+    public bool DebugAtlasButtons = false;
+    public bool ShowRitualForetellings = false;
+    public bool RitualPlanner = false;
+    public int RitualPlanSteps = 6;
+    public System.Numerics.Vector2 RitualPanelPos = new System.Numerics.Vector2(20f, 180f);
 
     public bool ShowAtlasButton = true;
 
@@ -684,6 +693,8 @@ public class ContentDisplaySettings
 
     public bool ColorRumorsByWeight { get; set; } = true;
 
+    public bool ShowRitualMarkers { get; set; } = true;
+
     public Dictionary<string, bool> AtlasPointIcons { get; set; } = new();
 
     public bool ShowAtlasPoint(string type) =>
@@ -803,6 +814,7 @@ public static class GraphicsPresets
                 c.ShowGenericAtlasPoint = false;
                 c.ColorRumorsByWeight = false;
                 f.ExpeditionMarkers = ExpeditionMarkers.Nearest;
+                c.ShowRitualMarkers = true;
                 s.HighlightMatches = false;
                 break;
 
@@ -827,6 +839,7 @@ public static class GraphicsPresets
                 c.ShowGenericAtlasPoint = true;
                 c.ColorRumorsByWeight = true;
                 f.ExpeditionMarkers = ExpeditionMarkers.Nearest;
+                c.ShowRitualMarkers = true;
                 s.HighlightMatches = true;
                 break;
 
@@ -851,6 +864,7 @@ public static class GraphicsPresets
                 c.ShowGenericAtlasPoint = true;
                 c.ColorRumorsByWeight = true;
                 f.ExpeditionMarkers = ExpeditionMarkers.Nearest;
+                c.ShowRitualMarkers = true;
                 s.HighlightMatches = true;
                 break;
         }

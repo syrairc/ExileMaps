@@ -1,0 +1,390 @@
+[
+ {
+  "id": "RitualRiteOtherMapsIncreasedTribute",
+  "text": "Foretold Proliferation: Monsters Sacrificed at Ritual Altars grant 25% increased Tribute"
+ },
+ {
+  "id": "RitualRiteOtherMapsFreeRerolls",
+  "text": "Foretold Proliferation: Rerolling Favours at Ritual Altars has no Cost the first time"
+ },
+ {
+  "id": "RitualRiteOtherMapsRerollCost",
+  "text": "Foretold Proliferation: Rerolling Favours at Ritual Altars in your Maps costs -20% reduced Tribute"
+ },
+ {
+  "id": "RitualRiteOtherMapsAdditionalRerolls",
+  "text": "Foretold Proliferation: Ritual Altars in Area allow rerolling Favours an additional time"
+ },
+ {
+  "id": "RitualRiteOtherMapsAdditionalPacks",
+  "text": "Foretold Proliferation: Rituals contain an additional pack of Wildwood Monsters"
+ },
+ {
+  "id": "RitualRiteOtherMapsRewardsAmount",
+  "text": "Foretold Proliferation: Ritual Altars offer 20% increased number of Favours"
+ },
+ {
+  "id": "RitualRiteContainsVeryRareUnique",
+  "text": "RitualRiteContainsVeryRareUnique"
+ },
+ {
+  "id": "RitualRiteContainsMageblood",
+  "text": "Foretold Bounty: Mageblood",
+  "item": "Mageblood",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsHeadhunter",
+  "text": "Foretold Bounty: Headhunter",
+  "item": "Headhunter",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsKalandrasTouch",
+  "text": "Foretold Bounty: Kalandra's Touch",
+  "item": "Kalandra's Touch",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsQueenOfTheForest",
+  "text": "Foretold Bounty: Queen of the Forest",
+  "item": "Queen of the Forest",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsAlphasHowl",
+  "text": "Foretold Bounty: Alpha's Howl",
+  "item": "Alpha's Howl",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsDefianceOfDestiny",
+  "text": "Foretold Bounty: Defiance of Destiny",
+  "item": "Defiance of Destiny",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsYokeOfSuffering",
+  "text": "Foretold Bounty: Yoke of Suffering",
+  "item": "Yoke of Suffering",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsAstramentis",
+  "text": "Foretold Bounty: Astramentis",
+  "item": "Astramentis",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsDreamFragments",
+  "text": "Foretold Bounty: Dream Fragments",
+  "item": "Dream Fragments",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOriginalSin",
+  "text": "Foretold Bounty: Original Sin",
+  "item": "Original Sin",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenGreaterAnnulment",
+  "text": "Foretold Bounty: Omen of Greater Annulment",
+  "item": "Omen of Greater Annulment",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenAmelioration",
+  "text": "Foretold Bounty: Omen of Amelioration",
+  "item": "Omen of Amelioration",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenWhittling",
+  "text": "Foretold Bounty: Omen of Whittling",
+  "item": "Omen of Whittling",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenSinistralErasure",
+  "text": "Foretold Bounty: Omen of Sinistral Erasure",
+  "item": "Omen of Sinistral Erasure",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenDextralErasure",
+  "text": "Foretold Bounty: Omen of Dextral Erasure",
+  "item": "Omen of Dextral Erasure",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenCorruption",
+  "text": "Foretold Bounty: Omen of Corruption",
+  "item": "Omen of Corruption",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenSinistralExaltation",
+  "text": "Foretold Bounty: Omen of Sinistral Exaltation",
+  "item": "Omen of Sinistral Exaltation",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenDextralExaltation",
+  "text": "Foretold Bounty: Omen of Dextral Exaltation",
+  "item": "Omen of Dextral Exaltation",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenSinistralAnnulment",
+  "text": "Foretold Bounty: Omen of Sinistral Annulment",
+  "item": "Omen of Sinistral Annulment",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenDextralAnnulment",
+  "text": "Foretold Bounty: Omen of Dextral Annulment",
+  "item": "Omen of Dextral Annulment",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenBlessed",
+  "text": "Foretold Bounty: Omen of the Blessed",
+  "item": "Omen of the Blessed",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenChance",
+  "text": "Foretold Bounty: Omen of Chance",
+  "item": "Omen of Chance",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenSanctification",
+  "text": "Foretold Bounty: Omen of Sanctification",
+  "item": "Omen of Sanctification",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenDextralCrystallisation",
+  "text": "Foretold Bounty: Omen of Dextral Crystallisation",
+  "item": "Omen of Dextral Crystallisation",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOmenSinistralCrystallisation",
+  "text": "Foretold Bounty: Omen of Sinistral Crystallisation",
+  "item": "Omen of Sinistral Crystallisation",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsDivineOrbs",
+  "text": "Foretold Bounty: Divine Orb",
+  "item": "Divine Orb",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsDivineOrbs2",
+  "text": "Foretold Bounty: 2 Divine Orbs",
+  "item": "Divine Orb",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsDivineOrbs5",
+  "text": "Foretold Bounty: 5 Divine Orbs",
+  "item": "Divine Orb",
+  "count": 5
+ },
+ {
+  "id": "RitualRiteContainsChaosOrbs2",
+  "text": "Foretold Bounty: 2 Exalted Orbs",
+  "item": "Exalted Orb",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsChaosOrbs4",
+  "text": "Foretold Bounty: 4 Exalted Orbs",
+  "item": "Exalted Orb",
+  "count": 4
+ },
+ {
+  "id": "RitualRiteContainsChaosOrbs8",
+  "text": "Foretold Bounty: 8 Exalted Orbs",
+  "item": "Exalted Orb",
+  "count": 8
+ },
+ {
+  "id": "RitualRiteContainsExaltedOrbs2",
+  "text": "Foretold Bounty: 2 Chaos Orbs",
+  "item": "Chaos Orb",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsExaltedOrbs4",
+  "text": "Foretold Bounty: 4 Chaos Orbs",
+  "item": "Chaos Orb",
+  "count": 4
+ },
+ {
+  "id": "RitualRiteContainsExaltedOrbs8",
+  "text": "Foretold Bounty: 8 Chaos Orbs",
+  "item": "Chaos Orb",
+  "count": 8
+ },
+ {
+  "id": "RitualRiteContainsOrbsOfAnnulment",
+  "text": "Foretold Bounty: Orb of Annulment",
+  "item": "Orb of Annulment",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOrbsOfAnnulment2",
+  "text": "Foretold Bounty: 2 Orbs of Annulment",
+  "item": "Orb of Annulment",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsOrbsOfChance",
+  "text": "Foretold Bounty: Orb of Chance",
+  "item": "Orb of Chance",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsOrbsOfChance2",
+  "text": "Foretold Bounty: 2 Orbs of Chance",
+  "item": "Orb of Chance",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsGreaterAugmentation2",
+  "text": "Foretold Bounty: 2 Greater Orbs of Augmentation",
+  "item": "Greater Orb of Augmentation",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsGreaterAugmentation4",
+  "text": "Foretold Bounty: 4 Greater Orbs of Augmentation",
+  "item": "Greater Orb of Augmentation",
+  "count": 4
+ },
+ {
+  "id": "RitualRiteContainsGreaterAugmentation8",
+  "text": "Foretold Bounty: 8 Greater Orbs of Augmentation",
+  "item": "Greater Orb of Augmentation",
+  "count": 8
+ },
+ {
+  "id": "RitualRiteContainsGreaterTransmutation2",
+  "text": "Foretold Bounty: 2 Greater Orbs of Transmutation",
+  "item": "Greater Orb of Transmutation",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsGreaterTransmutation4",
+  "text": "Foretold Bounty: 4 Greater Orbs of Transmutation",
+  "item": "Greater Orb of Transmutation",
+  "count": 4
+ },
+ {
+  "id": "RitualRiteContainsGreaterTransmutation8",
+  "text": "Foretold Bounty: 8 Greater Orbs of Transmutation",
+  "item": "Greater Orb of Transmutation",
+  "count": 8
+ },
+ {
+  "id": "RitualRiteContainsGreaterChaos",
+  "text": "Foretold Bounty: Greater Chaos Orb",
+  "item": "Greater Chaos Orb",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsGreaterChaos2",
+  "text": "Foretold Bounty: 2 Greater Chaos Orbs",
+  "item": "Greater Chaos Orb",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsGreaterChaos5",
+  "text": "Foretold Bounty: 5 Greater Chaos Orbs",
+  "item": "Greater Chaos Orb",
+  "count": 5
+ },
+ {
+  "id": "RitualRiteContainsGreaterRegal",
+  "text": "Foretold Bounty: Greater Regal Orb",
+  "item": "Greater Regal Orb",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsGreaterRegal2",
+  "text": "Foretold Bounty: 2 Greater Regal Orbs",
+  "item": "Greater Regal Orb",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsGreaterRegal5",
+  "text": "Foretold Bounty: 5 Greater Regal Orbs",
+  "item": "Greater Regal Orb",
+  "count": 5
+ },
+ {
+  "id": "RitualRiteContainsGreaterExalt",
+  "text": "Foretold Bounty: Greater Exalted Orb",
+  "item": "Greater Exalted Orb",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsGreaterExalt2",
+  "text": "Foretold Bounty: 2 Greater Exalted Orbs",
+  "item": "Greater Exalted Orb",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsGreaterExalt5",
+  "text": "Foretold Bounty: 5 Greater Exalted Orbs",
+  "item": "Greater Exalted Orb",
+  "count": 5
+ },
+ {
+  "id": "RitualRiteContainsPerfectAugmentation",
+  "text": "Foretold Bounty: Perfect Orb of Augmentation",
+  "item": "Perfect Orb of Augmentation",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsPerfectAugmentation2",
+  "text": "Foretold Bounty: 2 Perfect Orbs of Augmentation",
+  "item": "Perfect Orb of Augmentation",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsPerfectTransmutation",
+  "text": "Foretold Bounty: Perfect Orb of Transmutation",
+  "item": "Perfect Orb of Transmutation",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsPerfectTransmutation2",
+  "text": "Foretold Bounty: 2 Perfect Orbs of Transmutation",
+  "item": "Perfect Orb of Transmutation",
+  "count": 2
+ },
+ {
+  "id": "RitualRiteContainsPerfectChaos",
+  "text": "Foretold Bounty: Perfect Chaos Orb",
+  "item": "Perfect Chaos Orb",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsPerfectRegal",
+  "text": "Foretold Bounty: Perfect Regal Orb",
+  "item": "Perfect Regal Orb",
+  "count": 1
+ },
+ {
+  "id": "RitualRiteContainsPerfectExalt",
+  "text": "Foretold Bounty: Perfect Exalted Orb",
+  "item": "Perfect Exalted Orb",
+  "count": 1
+ }
+]

@@ -1,8 +1,6 @@
-# ExileMaps
+﻿# ExileMaps
 
-An ExileCore2 overlay plugin for the endgame Atlas. It scores every map on the Atlas from weights
-you set, styles the nodes and labels to match, draws the connections between them, and manages
-waypoints and multi-stop tours with real routing behind them.
+An ExileCore2 overlay plugin for the endgame Atlas. It scores every map on the Atlas from weights you set, styles the nodes and labels to match, draws the connections between them, and manages waypoints and multi-stop tours with real routing behind them.
 
 ## Donations
 

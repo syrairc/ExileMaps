@@ -77,6 +77,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
     private volatile float cacheRefreshProgress = 0f;
     private const float maxMapWeight = 50.0f;
     private const float minMapWeight = -50.0f;
+    private const float maxForetellWeight = 300.0f;
+    private const float minForetellWeight = 0.0f;
     private readonly object mapCacheLock = new();
     private long lastRefreshMs = Environment.TickCount64;
     private volatile bool waypointSyncPending;
@@ -125,6 +127,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         WireProfiles();
 
         UpdateRumorData();
+        UpdateRitualModData();
 
         Graphics.InitImage("arrow.png", Path.Combine(DirectoryFullName, ArrowPath));
         arrowId = Graphics.GetTextureId("arrow.png");
@@ -297,6 +300,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
 
         DrawExileMapsButton();
+        DrawRitualOverlayButtons();
 
         if (atlasCamera is { Busy: true }) return;
         DrawSearch();
@@ -440,6 +444,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         if (perf) PerfMonitor.Record("Render.Waypoints", Stopwatch.GetTimestamp() - t0);
 
         DrawSearchHighlight();
+        DrawRitualPlanHighlight();
         DrawExpeditionHighlight();
         DrawExpeditionHoverRings();
         DrawExpeditions();
@@ -959,6 +964,8 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             ImGui.SameLine();
             ImGui.SetNextItemWidth(-1f);
             ImGui.InputTextWithHint("##q", "Search maps...", ref searchBoxText, 128);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Filters: map: content: biome: mod:");
 
             var actual = ImGui.GetWindowPos();
             Settings.Search.BoxPos = actual;
@@ -1073,6 +1080,50 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
                 float baseR = MathF.Max(rect.Width, rect.Height);
                 Graphics.DrawCircle(rect.Center, baseR * 0.7f, color, 3f, 32);
                 Graphics.DrawCircle(rect.Center, baseR * (0.8f + pulse * 0.6f), outer, 2f, 32);
+            }
+        }
+
+        void Ring(Vector3 origin, float r, Color c, float thickness)
+        {
+            Vector2 prev = default;
+            for (int i = 0; i <= SearchRingSegments; i++) {
+                float a = i * MathF.Tau / SearchRingSegments;
+                var p = cam.WorldToScreen(new Vector3(origin.X + MathF.Cos(a) * r, origin.Y + MathF.Sin(a) * r, origin.Z));
+                if (i > 0) Graphics.DrawLine(prev, p, thickness, c);
+                prev = p;
+            }
+        }
+    }
+
+    private void DrawRitualPlanHighlight()
+    {
+        if (ritualPlanSteps.Count == 0) return;
+
+        double secs = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+        float pulse = 0.5f + 0.5f * MathF.Sin((float)(secs * 3.0));
+
+        Color next = Color.FromArgb(255, 255, 152, 105);
+        Color later = Color.FromArgb(150, 255, 152, 105);
+
+        var cam = AtlasPanel?.Camera;
+        float spacing = cam == null ? 0f : NodeWorldSpacing();
+        float radius = spacing * 0.42f;
+
+        foreach (var (node, rect) in nodePositions) {
+            if (!ritualPlanSteps.TryGetValue(node.Coordinates, out int step)) continue;
+
+            bool isNext = step == 0;
+            Color c = isNext ? next : later;
+            float thick = isNext ? 4f : 2f;
+
+            var d3d = radius > 0f ? node.MapNode?.Description3D : null;
+            if (d3d != null) {
+                Ring(d3d.Position, radius, c, thick);
+                if (isNext) Ring(d3d.Position, radius * (1.15f + pulse * 0.55f),
+                    Color.FromArgb((int)(next.A * (1f - pulse * 0.8f)), next.R, next.G, next.B), 3f);
+            } else {
+                float baseR = MathF.Max(rect.Width, rect.Height);
+                Graphics.DrawCircle(rect.Center, baseR * 0.7f, c, thick, 32);
             }
         }
 

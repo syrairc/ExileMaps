@@ -233,11 +233,13 @@ public partial class ExileMapsCore
 
     private MapTuning MapTune(Node n) => Settings.ReadMap(n?.MapType?.ShortestId);
 
-    public Color WeightRampColor(float weight)
+    public Color WeightRampColor(float weight) => WeightRampColor(weight, minMapWeight, maxMapWeight);
+
+    public Color WeightRampColor(float weight, float min, float max)
     {
         var m = Settings.Maps;
-        float denom = maxMapWeight - minMapWeight;
-        float t = denom > 0.0001f ? Math.Clamp((weight - minMapWeight) / denom, 0f, 1f) : 0.5f;
+        float denom = max - min;
+        float t = denom > 0.0001f ? Math.Clamp((weight - min) / denom, 0f, 1f) : 0.5f;
         return t < 0.5f
             ? ColorUtils.InterpolateColor(m.BadNodeColor, m.NeutralNodeColor, t * 2f)
             : ColorUtils.InterpolateColor(m.NeutralNodeColor, m.GoodNodeColor, (t - 0.5f) * 2f);
