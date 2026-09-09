@@ -534,9 +534,12 @@ public class FeatureSettings
     public bool ShowPerfMonitor = false;
 
     public bool DebugAtlasButtons = false;
+
+    public bool DebugRitualRolls = false;
     public bool ShowRitualForetellings = false;
     public bool RitualPlanner = false;
     public int RitualPlanSteps = 6;
+    public bool RitualPlanUnlockedOnly = false;
     public System.Numerics.Vector2 RitualPanelPos = new System.Numerics.Vector2(20f, 180f);
 
     public bool ShowAtlasButton = true;

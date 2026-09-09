@@ -1882,6 +1882,8 @@ public partial class ExileMapsCore
     }
 
     private readonly Dictionary<string, double> foretellPrices = new();
+    private string foretellPriceUnit = "ex";
+    private const string DivineBaseName = "Divine Orb";
 
     public double ForetellPrice(string id) =>
         id != null && foretellPrices.TryGetValue(id, out double v) ? v : 0d;
@@ -1899,6 +1901,10 @@ public partial class ExileMapsCore
             if (bridge == null) { note = "NinjaPricer not loaded"; return 0; }
 
             var bases = BaseItemsByName();
+            double divRate = bases.TryGetValue(DivineBaseName, out var divBase) ? bridge(divBase) : 0d;
+            if (divRate > 0) foretellPriceUnit = "div";
+            else { divRate = 1d; foretellPriceUnit = "ex"; }
+
             int unpriced = 0;
             foreach (var r in rows)
             {
@@ -1906,7 +1912,7 @@ public partial class ExileMapsCore
                 if (!bases.TryGetValue(r.item, out var bit)) { unpriced++; continue; }
                 double unit = bridge(bit);
                 if (unit <= 0) { unpriced++; continue; }
-                foretellPrices[r.id] = unit * Math.Max(1, r.count);
+                foretellPrices[r.id] = unit * Math.Max(1, r.count) / divRate;
             }
             note = unpriced > 0 ? $"{foretellPrices.Count} priced, {unpriced} unpriced" : $"{foretellPrices.Count} priced";
             return foretellPrices.Count;
@@ -1944,8 +1950,163 @@ public partial class ExileMapsCore
         catch (Exception e) { note = e.Message; LogError($"AutoAssignForetellWeights failed: {e.Message}"); return 0; }
     }
 
+    private sealed class RitualRng
+    {
+        private readonly uint[] s = new uint[5];
+
+        public RitualRng(uint k0, uint k1, uint k2, uint k3)
+        {
+            var key = new[] { k0, k1, k2, k3 };
+            s[1] = 1077108818u;
+            s[2] = unchecked((uint)-811371972);
+            s[3] = 1017929585u;
+            s[4] = 932445695u;
+
+            int i = 1, cnt = 0, k = 0;
+            while (cnt < 4 && k < 7)
+            {
+                int j = (i + 1) % 4;
+                uint x = s[j + 1];
+                uint m = s[i % 4 + 1] ^ s[(i + 3) % 4 + 1] ^ x;
+                uint t = unchecked(1664525u * (m ^ (m >> 27)));
+                s[j + 1] = unchecked(x + t);
+                uint u = unchecked((uint)i + key[k] + t);
+                s[(i + 2) % 4 + 1] = unchecked(s[(i + 2) % 4 + 1] + u);
+                s[i % 4 + 1] = u;
+                i = j; cnt++; k++;
+            }
+            while (cnt < 7)
+            {
+                int j = (i + 1) % 4;
+                uint x = s[j + 1];
+                uint m = s[i % 4 + 1] ^ s[(i + 3) % 4 + 1] ^ x;
+                uint t = unchecked(1664525u * (m ^ (m >> 27)));
+                s[j + 1] = unchecked(x + t);
+                uint u = unchecked((uint)i + t);
+                s[(i + 2) % 4 + 1] = unchecked(s[(i + 2) % 4 + 1] + u);
+                s[i % 4 + 1] = u;
+                i = j; cnt++;
+            }
+            for (int r = 0; r < 4; r++)
+            {
+                int j = (i + 1) % 4;
+                uint x = s[j + 1];
+                uint m = unchecked(s[i % 4 + 1] + x + s[(i + 3) % 4 + 1]);
+                m ^= m >> 27;
+                uint t = unchecked(1566083941u * m);
+                s[j + 1] = t ^ x;
+                uint u = unchecked(t - (uint)i);
+                s[(i + 2) % 4 + 1] ^= u;
+                s[i % 4 + 1] = u;
+                i = j;
+            }
+            for (int r = 0; r < 8; r++) Next();
+        }
+
+        public uint Next()
+        {
+            uint z1 = s[2], z4 = s[4], z0 = s[1];
+            s[0]++;
+            s[1] = z1;
+            uint a = s[3] ^ z1 ^ (z0 & 0x7FFFFFFFu);
+            uint b = (2u * z4) ^ z4;
+            uint c = b ^ a ^ (a >> 1);
+            s[4] = c;
+            uint mask = ((b ^ a ^ (a >> 1)) & 1u) != 0 ? 0xFFFFFFFFu : 0u;
+            s[2] = s[3] ^ (mask & 0x8F7011EEu);
+            uint d = b ^ (c << 10) ^ (mask & 0xFC78FF1Fu);
+            s[3] = d;
+            uint t = unchecked(z1 + (d >> 8));
+            return c ^ t ^ (((t & 1u) != 0 ? 0xFFFFFFFFu : 0u) & 0x3793FDFFu);
+        }
+
+        public uint Below(uint n)
+        {
+            if (n <= 1) return 0;
+            if (0xFFFFFFFFu % n == n - 1) return Next() % n;
+            uint cap = 0xFFFFFFFFu / n;
+            while (true)
+            {
+                uint v = Next();
+                if (v / n < cap) return v % n;
+            }
+        }
+    }
+
+    private sealed class ForetellRow
+    {
+        public string key;
+        public uint weight;
+        public List<string> fam;
+        public bool enabled;
+    }
+
+    private List<ForetellRow> foretellRows;
+
     private readonly Dictionary<(int depth, int index), List<RitualModDef>> foretellRollMemo = new();
     private int foretellRollSeed = int.MinValue;
+    private int foretellRollLive = -1;
+    private bool foretellRollOk;
+    private bool foretellRollFailed;
+
+    private bool BuildForetellRows()
+    {
+        if (foretellRows != null) return foretellRows.Count > 0;
+        try
+        {
+            var rows = GameController.Files.RitualAtlasLineMods?.EntriesList;
+            if (rows == null || rows.Count == 0) return false;
+
+            var built = new List<ForetellRow>(rows.Count);
+            foreach (var r in rows)
+            {
+                var mod = r?.Mod1;
+                if (mod == null) continue;
+                int statId = r.Stat?.ID ?? 0;
+                built.Add(new ForetellRow
+                {
+                    key = mod.Key,
+                    weight = (uint)Math.Max(0, r.Weight),
+                    fam = mod.Groups,
+                    enabled = statId == 0 || RitualStat(statId) > 0,
+                });
+            }
+            int usable = built.Count(b => b.enabled && b.weight > 0);
+            if (Settings.Features.DebugRitualRolls)
+                LogMessage($"ForetellRows n={built.Count} usable={usable}");
+            if (usable == 0) return false;
+
+            foretellRows = built;
+            return true;
+        }
+        catch (Exception e) { LogError($"BuildForetellRows failed: {e.Message}"); return false; }
+    }
+
+    private ForetellRow ForetellPick(int seed, int depth, int index, int modCount, List<string> exclude)
+    {
+        if (!BuildForetellRows()) return null;
+        var rng = new RitualRng((uint)seed, (uint)depth, (uint)index, (uint)modCount);
+        uint total = 0;
+        ForetellRow chosen = null;
+        foreach (var r in foretellRows)
+        {
+            if (!r.enabled || r.weight == 0) continue;
+            if (exclude != null && r.fam != null)
+            {
+                bool clash = false;
+                foreach (var f in r.fam) if (exclude.Contains(f)) { clash = true; break; }
+                if (clash) continue;
+            }
+            total += r.weight;
+            if (rng.Below(total) < r.weight) chosen = r;
+        }
+        return chosen;
+    }
+
+    private static RitualModDef ForetellDef(string key) =>
+        ritualModsByKey != null && ritualModsByKey.TryGetValue(key, out var def)
+            ? def
+            : new RitualModDef { id = key, text = key };
 
     private List<RitualModDef> ForetellRoll(int depth, int index)
     {
@@ -1953,28 +2114,55 @@ public partial class ExileMapsCore
         var panel = AtlasPanel;
         if (panel == null) return empty;
 
-        int seed = panel.RitualForetoldSeed;
-        if (seed != foretellRollSeed) { foretellRollMemo.Clear(); foretellRollSeed = seed; }
+        int seed = RitualSeedRaw();
+        int live = RitualLineCount();
+        if (seed != foretellRollSeed)
+        {
+            foretellRollOk = false;
+            foretellRollFailed = false;
+            foretellRows = null;
+        }
+        if (seed != foretellRollSeed || live != foretellRollLive)
+        {
+            foretellRollMemo.Clear();
+            foretellRollSeed = seed;
+            foretellRollLive = live;
+        }
         if (foretellRollMemo.TryGetValue((depth, index), out var cached)) return cached;
 
-        var result = new List<RitualModDef>(2);
-        try
-        {
-            var mods = panel.GetForetoldRitualMods(depth, index);
-            if (mods != null)
-                foreach (var m in mods)
-                {
-                    var key = m?.Mod1?.Key;
-                    if (string.IsNullOrEmpty(key)) continue;
-                    result.Add(ritualModsByKey != null && ritualModsByKey.TryGetValue(key, out var def)
-                        ? def
-                        : new RitualModDef { id = key, text = key });
-                }
-        }
-        catch (Exception e) { LogError($"GetForetoldRitualMods failed: {e.Message}"); }
+        var first = ForetellPick(seed, depth, index, 0, null);
+        if (first == null) { foretellRollFailed = true; return empty; }
 
+        var result = new List<RitualModDef>(2) { ForetellDef(first.key) };
+        if (RitualSecondMod(seed, depth, index))
+        {
+            var second = ForetellPick(seed, depth, index, 1, first.fam);
+            if (second != null) result.Add(ForetellDef(second.key));
+        }
+
+        if (Settings.Features.DebugRitualRolls)
+            LogMessage($"ForetellRoll seed={seed} live={live} d={depth} i={index} -> [{string.Join("|", result.Select(p => p.id))}]");
+
+        foretellRollOk = true;
         foretellRollMemo[(depth, index)] = result;
         return result;
+    }
+
+    private bool RitualSecondMod(int seed, int depth, int index)
+    {
+        try
+        {
+            int chance = RitualStat(RitualSecondModStat);
+            if (chance <= 0) return false;
+            if (chance >= 100) return true;
+
+            var gate = new RitualRng((uint)seed, (uint)depth, (uint)index, RitualSecondModSalt);
+            uint roll = gate.Below(100);
+            if (Settings.Features.DebugRitualRolls)
+                LogMessage($"RitualSecondMod d={depth} i={index} chance={chance} roll={roll} -> {roll < (uint)chance}");
+            return roll < (uint)chance;
+        }
+        catch (Exception e) { LogError($"RitualSecondMod failed: {e.Message}"); return false; }
     }
 
     private float ForetellValueOf(List<RitualModDef> picks)
@@ -1996,11 +2184,68 @@ public partial class ExileMapsCore
     private const int RitualAdjBeginOffset = 0x578;
     private const int RitualAdjEndOffset = 0x580;
     private const int RitualAdjStride = 68;
+    private const int RitualSeedOffset = 0x624;
+    private const int RitualLineBeginOffset = 0x648;
+    private const int RitualLineEndOffset = 0x650;
+
+    private int RitualSeedRaw()
+    {
+        try
+        {
+            long page = AtlasPanel?.Address ?? 0;
+            return page == 0 ? 0 : GameController.Memory.Read<int>(page + RitualSeedOffset);
+        }
+        catch { return 0; }
+    }
+
+    private int RitualLineCountRaw()
+    {
+        try
+        {
+            long page = AtlasPanel?.Address ?? 0;
+            if (page == 0) return -1;
+            var mem = GameController.Memory;
+            long b = mem.Read<long>(page + RitualLineBeginOffset);
+            long e = mem.Read<long>(page + RitualLineEndOffset);
+            if (b == 0 || e < b) return -1;
+            long n = (e - b) / 8;
+            return n < 0 || n > 64 ? -1 : (int)n;
+        }
+        catch { return -1; }
+    }
+
+    private int RitualLineCount()
+    {
+        int n = RitualLineCountRaw();
+        if (n >= 0) return n;
+        try { return AtlasPanel?.SelectedForetoldRitualMaps?.Count ?? 0; }
+        catch { return 0; }
+    }
+
+    private List<Vector2i> RitualSelectedRaw()
+    {
+        int n = RitualLineCountRaw();
+        if (n < 0) return null;
+        try
+        {
+            long page = AtlasPanel?.Address ?? 0;
+            if (page == 0) return null;
+            var mem = GameController.Memory;
+            long b = mem.Read<long>(page + RitualLineBeginOffset);
+            var list = new List<Vector2i>(n);
+            for (int i = 0; i < n; i++)
+                list.Add(new Vector2i(mem.Read<int>(b + i * 8), mem.Read<int>(b + i * 8 + 4)));
+            return list;
+        }
+        catch { return null; }
+    }
 
     private static bool SameCoord(Vector2i a, Vector2i b) => a.X == b.X && a.Y == b.Y;
 
     private List<Vector2i> RitualSelected()
     {
+        var raw = RitualSelectedRaw();
+        if (raw != null) return raw;
         try { return new List<Vector2i>(AtlasPanel?.SelectedForetoldRitualMaps ?? new List<Vector2i>()); }
         catch { return new List<Vector2i>(); }
     }
@@ -2052,6 +2297,8 @@ public partial class ExileMapsCore
     private const int RitualStatsEnd = 1040;
     private const int RitualStatStride = 40;
     private const int RitualMaxLineStat = 26381;
+    private const int RitualSecondModStat = 26382;
+    private const uint RitualSecondModSalt = 0x91DA3AD9u;
     private const int RitualBaseLineLength = 5;
 
     private int RitualStat(int statId)
@@ -2114,6 +2361,30 @@ public partial class ExileMapsCore
         return list;
     }
 
+    private HashSet<Vector2i> ritualValidNow = new();
+    private long ritualValidNowAt;
+    private const int RitualValidCacheMs = 500;
+
+    private HashSet<Vector2i> RitualValidNow()
+    {
+        long now = Environment.TickCount64;
+        if (now - ritualValidNowAt > RitualValidCacheMs)
+        {
+            ritualValidNow = new HashSet<Vector2i>(RitualValidTargets());
+            ritualValidNowAt = now;
+            if (Settings.Features.DebugRitualRolls)
+                LogMessage($"RitualValidNow n={ritualValidNow.Count} [{string.Join(" ", ritualValidNow.Select(c => $"({c.X},{c.Y})"))}]");
+        }
+        return ritualValidNow;
+    }
+
+    private bool RitualSelectableNow(Vector2i coord)
+    {
+        if (!RitualSelectable(coord)) return false;
+        var valid = RitualValidNow();
+        return valid.Count == 0 || valid.Contains(coord);
+    }
+
     private bool RitualSelectable(Vector2i coord)
     {
         lock (mapCacheLock)
@@ -2135,7 +2406,13 @@ public partial class ExileMapsCore
         return result;
     }
 
-    private string PlanLabel(Vector2i coord) => $"{NodeNameAt(coord)} [{coord.X},{coord.Y}]";
+    private string PlanLabel(Vector2i coord) =>
+        $"{NodeNameAt(coord)} [{coord.X},{coord.Y}]{(IsLockedNode(coord) ? "  (locked)" : "")}";
+
+    private bool IsLockedNode(Vector2i coord) => NodeAtCoords(coord) is { IsVisible: false };
+
+    private bool RitualPlannable(Vector2i coord) =>
+        !Settings.Features.RitualPlanUnlockedOnly || !IsLockedNode(coord);
 
     private string NodeNameAt(Vector2i coord)
     {
@@ -2150,15 +2427,29 @@ public partial class ExileMapsCore
         {
             var panel = AtlasPanel;
             if (panel == null) return false;
-            seed = panel.RitualForetoldSeed;
-            depth = panel.SelectedForetoldRitualMaps?.Count ?? 0;
+            seed = RitualSeedRaw();
+            depth = RitualLineCount();
 
             long page = panel.Address;
             if (page != 0) selecting = GameController.Memory.Read<byte>(page + RitualGateOffset) != 0;
+
+            if (Settings.Features.DebugRitualRolls)
+            {
+                var state = (seed, depth, selecting);
+                if (!state.Equals(ritualLineStateLogged))
+                {
+                    ritualLineStateLogged = state;
+                    int engineSeed = 0, engineDepth = -1;
+                    try { engineSeed = panel.RitualForetoldSeed; engineDepth = panel.SelectedForetoldRitualMaps?.Count ?? -1; } catch { }
+                    LogMessage($"RitualLineState seed={seed} depth={depth} selecting={selecting} rawCount={RitualLineCountRaw()} engineSeed={engineSeed} engineDepth={engineDepth} maxLine={RitualMaxLine()} valid={RitualValidTargets().Count}");
+                }
+            }
             return true;
         }
         catch { return false; }
     }
+
+    private (int seed, int depth, bool selecting) ritualLineStateLogged = (int.MinValue, -1, false);
 
     private static readonly string[] ForetellPrefixes = { "Foretold Proliferation: ", "Foretold Bounty: " };
 
@@ -2184,7 +2475,7 @@ public partial class ExileMapsCore
     private readonly Dictionary<Vector2i, int> ritualPlanSteps = new();
     public bool ritualStartSearchPending;
     private List<Vector2i> ritualBestStartPlan = new();
-    private (int seed, int wver, int steps, bool uniques) ritualBestStartKey;
+    private (int seed, int wver, int steps, bool dataOk, bool unlocked) ritualBestStartKey;
     private string ritualStartSearchNote;
     private string ritualPlanActionNote;
     private bool ritualUiActive;
@@ -2197,7 +2488,7 @@ public partial class ExileMapsCore
     private List<Vector2i> ritualShownPlan = new();
     private const float RitualHoverSlack = 0.6f;
     public List<Vector2i> RitualPlanCoords => ritualPlan;
-    private (int seed, int depth, Vector2i tip, int wver, int steps, bool uniques) ritualPlanKey;
+    private (int seed, int depth, Vector2i tip, int wver, int steps, bool dataOk, bool unlocked) ritualPlanKey;
 
     private List<Vector2i> RitualCandidatesMemo(Vector2i tip, List<Vector2i> selected)
     {
@@ -2219,6 +2510,9 @@ public partial class ExileMapsCore
     }
 
     private float RitualBestPath(int depth, Vector2i tip, List<Vector2i> selected, int steps, List<Vector2i> into)
+        => RitualBestPath(depth, tip, selected, steps, into, false);
+
+    private float RitualBestPath(int depth, Vector2i tip, List<Vector2i> selected, int steps, List<Vector2i> into, bool liveStep)
     {
         into.Clear();
         if (steps <= 0) return 0f;
@@ -2229,7 +2523,8 @@ public partial class ExileMapsCore
         var scratch = new List<Vector2i>();
         for (int i = 0; i < candidates.Count; i++)
         {
-            if (!RitualSelectable(candidates[i])) continue;
+            if (liveStep ? !RitualSelectableNow(candidates[i]) : !RitualSelectable(candidates[i])) continue;
+            if (!RitualPlannable(candidates[i])) continue;
             float here = ForetellWeightOf(ForetellRoll(depth, i));
             selected.Add(candidates[i]);
             float rest = RitualBestPath(depth + 1, candidates[i], selected, steps - 1, scratch);
@@ -2265,7 +2560,7 @@ public partial class ExileMapsCore
 
     private List<Vector2i> RitualPlanFromStart(int seed, Vector2i start)
     {
-        var key = (seed, -1, start, weightsRecalcVersion, RitualStartSteps(), false);
+        var key = (seed, -1, start, weightsRecalcVersion, RitualStartSteps(), foretellRollOk, Settings.Features.RitualPlanUnlockedOnly);
         if (key.Equals(ritualPlanKey)) return ritualPlan;
         ritualPlanKey = key;
         ritualAdjMemo.Clear();
@@ -2287,7 +2582,7 @@ public partial class ExileMapsCore
         var sw = System.Diagnostics.Stopwatch.StartNew();
         foreach (var start in starts)
         {
-            if (!RitualSelectable(start)) continue;
+            if (!RitualSelectable(start) || !RitualPlannable(start)) continue;
             looked++;
             float score = RitualEvaluateStart(start, steps, scratch);
             if (score > bestScore) { bestScore = score; best = new List<Vector2i>(scratch); }
@@ -2295,7 +2590,7 @@ public partial class ExileMapsCore
         sw.Stop();
 
         ritualBestStartPlan = best;
-        ritualBestStartKey = (seed, weightsRecalcVersion, steps, false);
+        ritualBestStartKey = (seed, weightsRecalcVersion, steps, foretellRollOk, Settings.Features.RitualPlanUnlockedOnly);
         ritualStartSearchNote = $"searched {looked} starts in {sw.ElapsedMilliseconds} ms";
         ritualPlanKey = default;
     }
@@ -2306,13 +2601,13 @@ public partial class ExileMapsCore
         int steps = Math.Clamp(Settings.Features.RitualPlanSteps, 1, 8);
         if (remaining > 0) steps = Math.Min(steps, remaining);
         else steps = 0;
-        var key = (seed, depth, tip, weightsRecalcVersion, steps, false);
+        var key = (seed, depth, tip, weightsRecalcVersion, steps, foretellRollOk, Settings.Features.RitualPlanUnlockedOnly);
         if (key.Equals(ritualPlanKey)) return;
         ritualPlanKey = key;
         ritualAdjMemo.Clear();
         var plan = new List<Vector2i>();
         if (steps > 0)
-            RitualBestPath(depth, tip, new List<Vector2i>(selected), steps, plan);
+            RitualBestPath(depth, tip, new List<Vector2i>(selected), steps, plan, true);
         ritualPlan = plan;
     }
 
@@ -2347,6 +2642,7 @@ public partial class ExileMapsCore
         public float Weight;
         public float Value;
         public int Maps;
+        public int Visible;
         public List<Vector2i> Plan = new();
     }
 
@@ -2373,7 +2669,7 @@ public partial class ExileMapsCore
             var scratch = new List<Vector2i>();
             foreach (var start in starts)
             {
-                if (!RitualSelectable(start)) continue;
+                if (!RitualSelectable(start) || !RitualPlannable(start)) continue;
                 float weight = RitualEvaluateStart(start, steps, scratch);
                 var plan = new List<Vector2i>(scratch);
 
@@ -2394,7 +2690,8 @@ public partial class ExileMapsCore
 
                 rows.Add(new RitualStartRow {
                     Start = start, Name = NodeNameAt(start),
-                    Weight = weight, Value = value, Maps = plan.Count, Plan = plan,
+                    Weight = weight, Value = value, Maps = plan.Count,
+                    Visible = plan.Count(c => !IsLockedNode(c)), Plan = plan,
                 });
             }
             sw.Stop();
@@ -2435,8 +2732,12 @@ public partial class ExileMapsCore
                 Draw = (r, _) => { ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted($"{r.Name} [{r.Start.X},{r.Start.Y}]"); },
             },
             new() {
-                Header = "Maps", Width = 50f, SortKey = r => r.Maps,
-                Draw = (r, _) => { ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted(r.Maps.ToString()); },
+                Header = "Maps", Width = 50f, SortKey = r => r.Visible,
+                Draw = (r, _) => {
+                    ImGui.AlignTextToFramePadding();
+                    ImGui.TextUnformatted($"{r.Visible}/{r.Maps}");
+                    Controls.Tip(r.Visible >= r.Maps ? "All maps visible" : $"{r.Maps - r.Visible} fogged, unfog first");
+                },
             },
             new() {
                 Header = "Weight", Width = 70f, SortKey = r => r.Weight,
@@ -2444,7 +2745,7 @@ public partial class ExileMapsCore
             },
             new() {
                 Header = "Value", Width = 80f, SortKey = r => r.Value,
-                Draw = (r, _) => { ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted($"{r.Value:0.##} div"); },
+                Draw = (r, _) => { ImGui.AlignTextToFramePadding(); ImGui.TextUnformatted($"{r.Value:0.##} {foretellPriceUnit}"); },
             },
             new() {
                 Header = "Tour", Width = 46f,
@@ -2518,6 +2819,11 @@ public partial class ExileMapsCore
                 bool hasPlan = ritualShownPlan is { Count: > 0 };
                 ImGui.SameLine();
                 ImGui.BeginDisabled(!hasPlan);
+                if (HacksCameraPanReady)
+                {
+                    if (ImGui.Button("Go to first map")) GotoNode(NodeAtCoords(ritualShownPlan[0]));
+                    ImGui.SameLine();
+                }
                 if (ImGui.Button("Waypoint to first map")) ritualPlanActionNote = RitualPlanToWaypoint();
                 ImGui.SameLine();
                 if (ImGui.Button("Tour whole Rite")) ritualPlanActionNote = RitualPlanToTour();
@@ -2640,7 +2946,7 @@ public partial class ExileMapsCore
                 }
 
                 if (hovered.HasValue) plan = RitualPlanFromStart(seed, hovered.Value);
-                else if (ritualBestStartKey.Equals((seed, weightsRecalcVersion, RitualStartSteps(), false)))
+                else if (ritualBestStartKey.Equals((seed, weightsRecalcVersion, RitualStartSteps(), foretellRollOk, Settings.Features.RitualPlanUnlockedOnly)))
                     plan = ritualBestStartPlan;
                 else plan = null;
 
@@ -2678,8 +2984,26 @@ public partial class ExileMapsCore
             var route = new List<(string text, System.Drawing.Color color)> { ($"{head}   (line {depth}/{cap})", tint) };
 
             float total = 0f, totalWeight = 0f;
-            var walk = new List<Vector2i>(selected);
-            Vector2i? at = atStart ? null : tip;
+            var taken = System.Drawing.Color.FromArgb(120, 170, 170, 170);
+            var walk = new List<Vector2i>();
+            Vector2i? at = null;
+            for (int k = 0; k < selected.Count; k++)
+            {
+                var chosen = new List<RitualModDef>();
+                if (at.HasValue)
+                {
+                    var cand = RitualCandidatesMemo(at.Value, walk);
+                    int idx = cand.FindIndex(v => SameCoord(v, selected[k]));
+                    if (idx >= 0) chosen = ForetellRoll(k, idx);
+                }
+                total += ForetellValueOf(chosen);
+                totalWeight += ForetellWeightOf(chosen);
+                route.Add(($"{k + 1}. {PlanLabel(selected[k])} (taken)", taken));
+                foreach (var pk in chosen)
+                    route.Add(("     " + ForetellText(pk), ColorUtils.WithAlphaOf(ForetellColor(pk), taken)));
+                walk.Add(selected[k]);
+                at = selected[k];
+            }
             for (int step = 0; step < plan.Count; step++)
             {
                 var picks = new List<RitualModDef>();
@@ -2687,6 +3011,8 @@ public partial class ExileMapsCore
                 {
                     var cand = RitualCandidatesMemo(at.Value, walk);
                     int idx = cand.FindIndex(v => SameCoord(v, plan[step]));
+                    if (Settings.Features.DebugRitualRolls)
+                        LogMessage($"RitePlan step={step} d={depth + step} tip=({at.Value.X},{at.Value.Y}) pick=({plan[step].X},{plan[step].Y}) idx={idx} cand=[{string.Join(" ", cand.Select(c => $"({c.X},{c.Y})"))}]");
                     if (idx >= 0) picks = ForetellRoll(depth + step, idx);
                 }
                 total += ForetellValueOf(picks);
@@ -2694,8 +3020,8 @@ public partial class ExileMapsCore
 
                 float stepWeight = ForetellWeightOf(picks);
                 route.Add(picks.Count == 0
-                    ? ($"{step + 1}. {PlanLabel(plan[step])}", sub)
-                    : ($"{step + 1}. {PlanLabel(plan[step])} ({stepWeight:0.#})", sub));
+                    ? ($"{depth + step + 1}. {PlanLabel(plan[step])}", sub)
+                    : ($"{depth + step + 1}. {PlanLabel(plan[step])} ({stepWeight:0.#})", sub));
                 foreach (var pk in picks) route.Add(("     " + ForetellText(pk), ForetellColor(pk)));
                 if (picks.Count == 0) route.Add(("     -", sub));
 
@@ -2703,14 +3029,16 @@ public partial class ExileMapsCore
                 {
                     var stamp = new List<(string, System.Drawing.Color)>();
                     for (int k = 0; k < picks.Count; k++)
-                        stamp.Add((k == 0 ? $"{step + 1}. " + ForetellText(picks[k]) : "    " + ForetellText(picks[k]), ForetellColor(picks[k])));
+                        stamp.Add((k == 0 ? $"{depth + step + 1}. " + ForetellText(picks[k]) : "    " + ForetellText(picks[k]), ForetellColor(picks[k])));
                     if (stamp.Count > 0) RitualNodePanel(plan[step], prect, screen, stamp);
                 }
 
                 walk.Add(plan[step]);
                 at = plan[step];
             }
-            route.Add(($"total value {total:0.##} div   weight {totalWeight:0.#}", tint));
+            if (!foretellRollOk && foretellRollFailed)
+                route.Add(("ritual mod data not loaded - open the atlas once", sub));
+            route.Add(($"total value {total:0.##} {foretellPriceUnit}   weight {totalWeight:0.#}", tint));
 
             FlushHover();
 

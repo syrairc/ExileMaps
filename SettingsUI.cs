@@ -699,7 +699,8 @@ public partial class ExileMapsCore
                     int steps = rf.RitualPlanSteps;
                     if (Controls.SliderInt("Maps to plan", ref steps, 1, 8)) { rf.RitualPlanSteps = steps; d = true; }
 
-
+                    d |= Check("Unlocked maps only", () => rf.RitualPlanUnlockedOnly, v => rf.RitualPlanUnlockedOnly = v);
+                    Controls.Tip("Skip fogged maps when planning a route.");
                 }
             }
         }
@@ -768,7 +769,7 @@ public partial class ExileMapsCore
                 id => Settings.GameData.Foretellings[id],
                 id => Settings.ForetellingWeight(id),
                 (id, v) => Settings.Active.Foretellings[id] = v,
-                ForetellWeightLook, null, ForetellWeightColumns());
+                ForetellWeightLook, id => Settings.GameData.Foretellings[id], ForetellWeightColumns());
         }
 
         if (specialMapsChanged) { RequestSpecialMapsRefresh(); d = true; }
@@ -1235,6 +1236,8 @@ public partial class ExileMapsCore
                     "Overlay: 60-frame avg CPU time per render/cache section."),
                 Tog("Debug Atlas Buttons", () => f.DebugAtlasButtons, v => f.DebugAtlasButtons = v,
                     "Label every AtlasPanel.Buttons entry on the map."),
+                Tog("Log Rite Rolls", () => f.DebugRitualRolls, v => f.DebugRitualRolls = v,
+                    "Log every foretelling roll and plan step."),
             }, 0);
         }
 
