@@ -653,6 +653,8 @@ public partial class ExileMapsCore
 
     private (List<Node> path, int steps, float weight) Route(Node start, Func<Node, bool> isGoal, HashSet<Vector2i> done, float? extraMapCost)
     {
+        if (!start.IsNavigable) return (null, 0, 0f);
+
         var best = new Dictionary<Vector2i, (float cost, int steps, float weight)> { [start.Coordinates] = (0f, 0, 0f) };
         var parent = new Dictionary<Vector2i, Node> { [start.Coordinates] = null };
         var pq = new PriorityQueue<Node, (float cost, int steps, float negWeight)>();
@@ -675,7 +677,7 @@ public partial class ExileMapsCore
             }
             foreach (var nb in current.Neighbors.Values)
             {
-                if (nb == null) continue;
+                if (nb == null || !nb.IsNavigable) continue;
                 float step = RouteCost(nb, done, extraMapCost, out bool fresh);
                 var cand = (cur.cost + step, cur.steps + (fresh ? 1 : 0), cur.weight + (fresh ? nb.Weight : 0f));
                 if (best.TryGetValue(nb.Coordinates, out var old) && !Better(cand, old)) continue;
@@ -735,7 +737,7 @@ public partial class ExileMapsCore
                 int nextDist = stepCounts[current.Coordinates] + 1;
                 foreach (var neighbor in current.Neighbors.Values)
                 {
-                    if (neighbor == null || stepCounts.ContainsKey(neighbor.Coordinates))
+                    if (neighbor == null || !neighbor.IsNavigable || stepCounts.ContainsKey(neighbor.Coordinates))
                         continue;
                     stepCounts[neighbor.Coordinates] = nextDist;
                     queue.Enqueue(neighbor);

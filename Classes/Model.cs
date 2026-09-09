@@ -52,6 +52,8 @@ public class Node
     [JsonIgnore]
     public bool IsDone => IsVisited || IsCompleted;
     [JsonIgnore]
+    public bool IsNavigable => IsVisible || !Biomes.ContainsKey("BreachCity");
+    [JsonIgnore]
     public System.Numerics.Vector3 WorldPos;
     [JsonIgnore]
     public bool HasWorldPos;
