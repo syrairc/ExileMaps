@@ -105,7 +105,7 @@ public partial class ExileMapsCore
         if (!string.IsNullOrEmpty(camera.LastError))
             LogError($"ExileMaps camera pan: {camera.LastError}");
 
-        if (Settings.Features.DebugMode)
+        if (Settings.Features.DebugLogging)
             foreach (var line in camera.Trace) LogMessage($"pan {line}");
     }
 

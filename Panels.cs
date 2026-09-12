@@ -1,9 +1,11 @@
 ﻿
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Numerics;
+using System.Reflection;
 using ExileCore2.PoEMemory;
 using ImGuiNET;
 using ExileImGui2;
@@ -241,6 +243,41 @@ public partial class ExileMapsCore
     private Node debugNode;
     private bool debugNodeOpen;
 
+    private void HandleDebugMode()
+    {
+        try {
+            var node = GetClosestNodeToCursor();
+            if (node == null) return;
+
+            var rect = GetNodeRect(node);
+            if (rect.Width <= 0) return;
+
+            float margin = rect.Width * 0.35f;
+            Graphics.DrawCircle(rect.Center, rect.Width * 0.6f, Color.FromArgb(255, 90, 180, 255), 3f, 32);
+
+            var flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove
+                      | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoBackground
+                      | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing;
+
+            Vector2 winPos = new(rect.Left - margin, rect.Top - margin);
+            Vector2 winSize = new(rect.Width + margin * 2f, rect.Height + margin * 2f);
+            ImGui.SetNextWindowPos(winPos, ImGuiCond.Always);
+            ImGui.SetNextWindowSize(winSize, ImGuiCond.Always);
+            ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+            if (ImGui.Begin("##debugmodecapture", flags)) {
+                ImGui.InvisibleButton("##debugmodenode", winSize);
+                if (ImGui.IsItemHovered()) ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+                if (ImGui.IsItemClicked(ImGuiMouseButton.Left)) {
+                    debugNode = node;
+                    debugNodeOpen = true;
+                }
+            }
+            ImGui.End();
+            ImGui.PopStyleVar();
+        }
+        catch (Exception e) { DebugSwallow("HandleDebugMode", e); }
+    }
+
     private void DrawNodeDebugPanel() {
         try {
             if (debugNode == null) { debugNodeOpen = false; return; }
@@ -251,11 +288,11 @@ public partial class ExileMapsCore
             try { pos = node.MapNode.Element.GetClientRect().Center + new Vector2(30, 0); }
             catch (Exception e) { pos = screenCenter; DebugSwallow("waypoint position read", e); }
             ImGui.SetNextWindowPos(pos, ImGuiCond.Appearing);
-            ImGui.SetNextWindowSize(new Vector2(360, 0), ImGuiCond.Appearing);
+            ImGui.SetNextWindowSize(new Vector2(420, 620), ImGuiCond.Appearing);
             ImGui.SetNextWindowBgAlpha(0.93f);
 
-            if (ImGui.Begin("Node Debug###nodedebug", ref debugNodeOpen, ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.AlwaysAutoResize)) {
-                ImGui.TextUnformatted(node.DebugText(false));
+            if (ImGui.Begin("Node Debug###nodedebug", ref debugNodeOpen, ImGuiWindowFlags.NoCollapse)) {
+                ImGui.TextUnformatted(node.DebugText());
 
                 string parentAddr = $"{node.ParentAddress:X}";
                 if (ImGui.SmallButton($"Copy Parent Address##nd")) ImGui.SetClipboardText(parentAddr);
@@ -300,6 +337,13 @@ public partial class ExileMapsCore
                     foreach (var (_, c) in node.Content)
                         ImGui.TextUnformatted($"  {c.Name}{(string.IsNullOrEmpty(c.AtlasIcon) ? "" : "  [game icon]")}");
 
+                ImGui.Text("Atlas modifiers:");
+                if (node.AtlasMods.Count == 0)
+                    ImGui.TextDisabled("  (none)");
+                else
+                    foreach (var m in node.AtlasMods)
+                        ImGui.TextUnformatted($"  {m.Text}   [{m.Key} = {m.Value}]");
+
                 ImGui.Text("Special modifiers:");
                 if (node.SpecialModifiers.Count == 0)
                     ImGui.TextDisabled("  (none)");
@@ -316,6 +360,14 @@ public partial class ExileMapsCore
                         ImGui.TextUnformatted($"  {b}");
 
                 ImGui.Separator();
+                if (ImGui.CollapsingHeader("Raw##nd")) {
+                    ImGui.TextDisabled("Right click a value to copy it.");
+                    DebugTree("Node", node, 0);
+                    DebugTree("MapNode", node.MapNode, 0);
+                    DebugTree("Element", el, 0);
+                }
+
+                ImGui.Separator();
                 if (ImGui.Button("Close##nd")) debugNodeOpen = false;
             }
             ImGui.End();
@@ -326,6 +378,68 @@ public partial class ExileMapsCore
             debugNodeOpen = false;
             debugNode = null;
         }
+    }
+
+    private const int DebugTreeMaxDepth = 4;
+    private const int DebugTreeMaxItems = 50;
+
+    private static bool DebugIsLeaf(Type t) =>
+        t.IsPrimitive || t.IsEnum || t == typeof(string) || t == typeof(decimal) || t == typeof(IntPtr)
+        || (t.IsValueType && t.GetMethod("ToString", Type.EmptyTypes)?.DeclaringType == t);
+
+    private static string DebugLeafText(string label, object v)
+    {
+        if (v is IntPtr p) return $"0x{p.ToInt64():X}";
+        if (label.IndexOf("Address", StringComparison.OrdinalIgnoreCase) >= 0) {
+            if (v is long l) return $"0x{l:X}";
+            if (v is ulong u) return $"0x{u:X}";
+        }
+        return v.ToString();
+    }
+
+    private static void DebugTree(string label, object value, int depth)
+    {
+        if (value == null) { ImGui.TextDisabled($"{label}: (null)"); return; }
+
+        var type = value.GetType();
+
+        if (DebugIsLeaf(type)) {
+            string text;
+            try { text = DebugLeafText(label, value); }
+            catch (Exception e) { ImGui.TextDisabled($"{label}: <{e.Message}>"); return; }
+            ImGui.TextUnformatted($"{label}: {text}");
+            if (ImGui.IsItemClicked(ImGuiMouseButton.Right)) ImGui.SetClipboardText(text);
+            return;
+        }
+
+        if (depth >= DebugTreeMaxDepth) { ImGui.TextDisabled($"{label}: {type.Name}"); return; }
+        if (!ImGui.TreeNode($"{label}  ({type.Name})##{label}")) return;
+
+        try {
+            if (value is IEnumerable items) {
+                int i = 0;
+                foreach (var item in items) {
+                    if (i >= DebugTreeMaxItems) { ImGui.TextDisabled($"... more than {DebugTreeMaxItems}"); break; }
+                    DebugTree($"[{i++}]", item, depth + 1);
+                }
+                if (i == 0) ImGui.TextDisabled("(empty)");
+            } else {
+                foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance)) {
+                    if (prop.GetIndexParameters().Length > 0) continue;
+                    object v;
+                    try { v = prop.GetValue(value); }
+                    catch (Exception e) {
+                        ImGui.TextDisabled($"{prop.Name}: <{(e.InnerException ?? e).Message}>");
+                        continue;
+                    }
+                    DebugTree(prop.Name, v, depth + 1);
+                }
+            }
+        } catch (Exception e) {
+            ImGui.TextDisabled($"<{(e.InnerException ?? e).Message}>");
+        }
+
+        ImGui.TreePop();
     }
 
     private void DrawPerfMonitorOverlay()

@@ -16,6 +16,7 @@ using ImGuiNET;
 using RectangleF = ExileCore2.Shared.RectangleF;
 using ExileMaps.Classes;
 using ExileImGui2;
+using ExileCore2.RitualAtlas;
 
 namespace ExileMaps;
 
@@ -26,6 +27,7 @@ public partial class ExileMapsCore
     private void DrawWaypointPath(Waypoint waypoint)
     {
         DrawPath(waypoint.PathFromStart, waypoint.Color);
+        
     }
 
     private static Vector2 HopPoint(Vector2[] curve, bool reversed, int hops, int k, Vector2 start, Vector2 end)
@@ -1503,13 +1505,25 @@ public partial class ExileMapsCore
 
             var tint = ExpeditionTint(e);
 
+            bool revealed = false; Vector2i revealedCoord = default;
+            foreach (var c in e.ButtonCoords)
+                if (frameVisibleExpeditionButtonCoords.Contains(c)) { revealed = true; revealedCoord = c; break; }
+
+            if (revealed)
+            {
+                bool buttonHover = frameHoverButtonRegion is (Vector2i br, string bk)
+                    && bk == e.Kind && br.Equals(e.RegionCoord);
+                if (!ritual && !buttonHover && NodeRectAt(revealedCoord, out var gameRect) && IsOnScreen(gameRect.Center))
+                    LayoutPossibleRumors(e, gameRect, screen, gameRect.Contains(mouse), tint, below: true);
+                continue;
+            }
+
             IEnumerable<Vector2i> coords = e.ButtonCoords;
             if (!ritual && markerMode == ExpeditionMarkers.Nearest)
             {
                 bool found = false; Vector2i best = default; int bestSteps = int.MaxValue;
                 foreach (var c in e.ButtonCoords)
                 {
-                    if (frameVisibleExpeditionButtonCoords.Contains(c)) continue;
                     int s = steps.TryGetValue(c, out var v) ? v : int.MaxValue;
                     if (!found || s < bestSteps) { found = true; bestSteps = s; best = c; }
                 }
@@ -1518,19 +1532,7 @@ public partial class ExileMapsCore
 
             foreach (var coord in coords)
             {
-                if (frameVisibleExpeditionButtonCoords.Contains(coord)) continue;
-
-                Node node;
-                lock (mapCacheLock)
-                    if (!mapCache.TryGetValue(coord, out node)) node = null;
-                if (node == null) continue;
-
-                var rect = GetNodeRect(node);
-                if (rect.IsEmpty || rect.Width <= 0) continue;
-
-                float size = MathF.Max(rect.Width, rect.Height) * MarkerScale;
-                var iconRect = new RectangleF(rect.Center.X - size / 2f, rect.Top - size, size, size);
-                if (!IsOnScreen(iconRect.Center)) continue;
+                if (!MarkerRect(coord, out var iconRect)) continue;
 
                 bool hover = iconRect.Contains(mouse);
                 frameExpeditionIcons.Add((iconRect, MarkerArt(e.Kind, hover), System.Drawing.Color.White));
@@ -1548,6 +1550,29 @@ public partial class ExileMapsCore
         }
     }
 
+    private bool NodeRectAt(Vector2i coord, out RectangleF rect)
+    {
+        rect = default;
+        Node node;
+        lock (mapCacheLock)
+            if (!mapCache.TryGetValue(coord, out node)) node = null;
+        if (node == null) return false;
+        rect = GetNodeRect(node);
+        return !rect.IsEmpty && rect.Width > 0;
+    }
+
+    private bool MarkerRect(Vector2i coord, out RectangleF iconRect)
+    {
+        iconRect = default;
+        if (!NodeRectAt(coord, out var rect)) return false;
+        float size = MathF.Max(rect.Width, rect.Height) * MarkerScale;
+        iconRect = new RectangleF(rect.Center.X - size / 2f, rect.Top - size, size, size);
+        return IsOnScreen(iconRect.Center);
+    }
+
+    private static string RumorRow(string content, string hint)
+        => string.IsNullOrEmpty(hint) ? "- " + content : $"- {content} ({hint})";
+
     private System.Drawing.Color RumorTextColor(float w, System.Drawing.Color fallback)
     {
         if (!Settings.ContentDisplay.ColorRumorsByWeight || MathF.Abs(w) < 0.5f) return fallback;
@@ -1555,7 +1580,7 @@ public partial class ExileMapsCore
         return ColorUtils.WithAlphaOf(c, fallback);
     }
 
-    private void LayoutPossibleRumors(Classes.Expedition e, RectangleF iconRect, Vector2 screen, bool hover, System.Drawing.Color tint)
+    private void LayoutPossibleRumors(Classes.Expedition e, RectangleF iconRect, Vector2 screen, bool hover, System.Drawing.Color tint, bool below = false)
     {
         try
         {
@@ -1563,18 +1588,18 @@ public partial class ExileMapsCore
             if (!rumorPanelMemo.TryGetValue(e.RegionCoord, out var m)
                 || !ReferenceEquals(m.Exp, e) || m.Wver != weightsRecalcVersion || m.Hover != hover)
             {
-                var rows = new List<(string content, string desc, float w)>();
+                var rows = new List<(string content, string hint, string desc, float w)>();
                 foreach (var (text, _) in e.Rumors)
                     if (Settings.GameData.Rumors.TryGetValue(text, out var info))
-                        rows.Add((info.Content, info.Description, Settings.RumorWeight(text)));
+                        rows.Add((info.Content, info.Text, info.Description, Settings.RumorWeight(text)));
                 if (rows.Count == 0) { rumorPanelMemo.Remove(e.RegionCoord); return; }
                 rows.Sort((a, b) => b.w.CompareTo(a.w));
 
                 var sub = System.Drawing.Color.FromArgb(180, 180, 180, 180);
                 var lines = new List<(string, System.Drawing.Color)> { ($"Expedition #{e.Id}", tint) };
-                foreach (var (content, desc, w) in rows)
+                foreach (var (content, hint, desc, w) in rows)
                 {
-                    lines.Add(("- " + content, RumorTextColor(w, OverlayText)));
+                    lines.Add((RumorRow(content, hint), RumorTextColor(w, OverlayText)));
                     if (hover && !string.IsNullOrEmpty(desc))
                         lines.Add(("    " + desc, sub));
                 }
@@ -1584,9 +1609,10 @@ public partial class ExileMapsCore
             }
 
             float x = iconRect.Center.X - m.BoxW / 2f;
-            float y = iconRect.Top - m.BoxH - 2f;
+            float y = below ? iconRect.Bottom + 2f : iconRect.Top - m.BoxH - 2f;
             x = Math.Clamp(x, 0f, MathF.Max(0f, screen.X - m.BoxW));
             if (y < 0f) y = iconRect.Bottom + 2f;
+            if (y + m.BoxH > screen.Y) y = MathF.Max(0f, screen.Y - m.BoxH);
 
             RegisterPanel(new Vector2(x, y), m.BoxW, m.BoxH, pad, m.LineH, m.Lines);
         }
@@ -2609,6 +2635,7 @@ public partial class ExileMapsCore
         if (steps > 0)
             RitualBestPath(depth, tip, new List<Vector2i>(selected), steps, plan, true);
         ritualPlan = plan;
+        
     }
 
     private bool RitualNodeRect(Vector2i coord, out RectangleF rect)
@@ -3067,6 +3094,7 @@ public partial class ExileMapsCore
             var buttons = AtlasPanel?.Buttons;
             ScanAtlasButtonDebug(buttons);
             if (buttons == null) return;
+            var mouse = ImGuiNET.ImGui.GetMousePos();
             foreach (var b in buttons)
             {
                 if (b == null || !b.IsVisible) continue;
@@ -3074,16 +3102,19 @@ public partial class ExileMapsCore
                 if (kind != ExpeditionKind && kind != RitualKind) continue;
                 frameVisibleExpeditionButtonCoords.Add(b.Coordinate);
 
-                var children = b.Children;
-                var visual = children != null && children.Count > 0 ? children[0] : null;
-                if (visual == null || !visual.HasShinyHighlight) continue;
-                var tip = visual.Tooltip;
-                if (tip == null || !tip.IsVisible) continue;
-                var r = tip.GetClientRect();
-                if (r.Width <= 0 || r.Height <= 0) continue;
+                var btnRect = b.GetClientRect();
+                if (btnRect.Width <= 0 || !btnRect.Contains(mouse)) continue;
 
                 frameHoverButtonRegion = (b.RegionCoordinate, kind);
-                if (kind == ExpeditionKind && frameLogbookPopup == null) frameLogbookPopup = tip;
+                if (kind != ExpeditionKind || frameLogbookPopup != null) continue;
+
+                var children = b.Children;
+                var visual = children != null && children.Count > 0 ? children[0] : null;
+                var tip = visual?.Tooltip;
+                if (tip == null) continue;
+                var r = tip.GetClientRect();
+                if (r.Width <= 0 || r.Height <= 0) continue;
+                frameLogbookPopup = tip;
             }
         }
         catch (Exception e) { LogError($"ScanExpeditionButtons failed: {e.Message}"); }
@@ -3110,13 +3141,13 @@ public partial class ExileMapsCore
             var texts = new List<string>();
             ReadPopupRumors(popup, texts);
 
-            var rows = new List<(string content, string desc, float w)>();
+            var rows = new List<(string content, string hint, string desc, float w)>();
             var seen = new HashSet<string>();
             foreach (var t in texts)
             {
                 if (!seen.Add(t)) continue;
                 if (Settings.GameData.Rumors.TryGetValue(t, out var info))
-                    rows.Add((info.Content, info.Description, Settings.RumorWeight(t)));
+                    rows.Add((info.Content, info.Text, info.Description, Settings.RumorWeight(t)));
             }
             if (rows.Count == 0) return;
             rows.Sort((a, b) => b.w.CompareTo(a.w));
@@ -3125,9 +3156,9 @@ public partial class ExileMapsCore
 
             var lines = new List<(string text, System.Drawing.Color color)>();
             lines.Add(("Rumours", fontColor));
-            foreach (var (content, desc, w) in rows)
+            foreach (var (content, hint, desc, w) in rows)
             {
-                lines.Add(("- " + content, RumorTextColor(w, fontColor)));
+                lines.Add((RumorRow(content, hint), RumorTextColor(w, fontColor)));
                 if (!string.IsNullOrEmpty(desc))
                 {
                     var sub = System.Drawing.Color.FromArgb(180, 180, 180, 180);

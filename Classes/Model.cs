@@ -92,6 +92,12 @@ public class Node
     public Vector2i Coordinates { get; set; }
     [JsonIgnore]
     public Dictionary<Vector2i, Node> Neighbors { get; set; } = [];
+    [JsonIgnore]
+    public List<AtlasModEntry> AtlasMods { get; set; } = [];
+    [JsonIgnore]
+    public bool AtlasModsBuilt;
+    [JsonIgnore]
+    public int AtlasModFingerprint;
     public Dictionary<string, BiomeInfo> Biomes { get; set; } = [];
     [JsonIgnore]
     public Dictionary<string, ContentInfo> Content { get; set; } = [];
@@ -204,6 +210,9 @@ public class Node
         foreach (var biome in Biomes)
             Weight += settings.BiomeWeight(biome.Value?.Name);
 
+        for (int i = 0; i < AtlasMods.Count; i++)
+            Weight += settings.ReadAtlasMod(AtlasMods[i].Key).Weight * AtlasMods[i].WeightScale;
+
     }
 
     public override string ToString()
@@ -224,17 +233,13 @@ public class Node
         return sb.ToString();
     }
 
-    public string DebugText(bool includeContentBiomes = true) {
+    public string DebugText() {
 
         StringBuilder sb = new();
         sb.AppendLine($"Id: {Id}");
         sb.AppendLine($"ParentAddress: {ParentAddress:X}");
         sb.AppendLine($"Weight: {Weight}");
         sb.AppendLine($"Coordinates: {Coordinates}");
-        if (includeContentBiomes) {
-            sb.AppendLine($"Biomes: {string.Join(", ", Biomes.Where(x => x.Value != null).Select(x => x.Value.Name))}");
-            sb.AppendLine($"Content: {string.Join(", ", Content.Select(x => x.Value.Name))}");
-        }
 
         return sb.ToString();
     }
@@ -273,6 +278,25 @@ public class RumorInfo
     public string Text { get; set; } = "";
     public string Content { get; set; } = "";
     public string Description { get; set; } = "";
+}
+
+public class AtlasModInfo
+{
+    public string Key { get; set; } = "";
+    public int StatId { get; set; }
+    public string Text { get; set; } = "";
+    public bool ScalesWithValue { get; set; }
+    public bool FromContent { get; set; }
+
+    public override string ToString() => Text;
+}
+
+public readonly struct AtlasModEntry(string key, int value, string text, int weightScale)
+{
+    public string Key { get; } = key;
+    public int Value { get; } = value;
+    public string Text { get; } = text;
+    public int WeightScale { get; } = weightScale;
 }
 
 #endregion
@@ -517,6 +541,12 @@ public class ContentTuning
     public bool Favorite { get; set; }
 }
 
+public class AtlasModTuning
+{
+    public float Weight { get; set; }
+    public bool Show { get; set; } = true;
+}
+
 public class Profile
 {
     public ConcurrentDictionary<string, MapTuning> Maps { get; set; } = new();
@@ -524,6 +554,7 @@ public class Profile
     public ConcurrentDictionary<string, float> Biomes { get; set; } = new();
     public ConcurrentDictionary<string, float> Rumors { get; set; } = new();
     public ConcurrentDictionary<string, float> Foretellings { get; set; } = new();
+    public ConcurrentDictionary<string, AtlasModTuning> AtlasMods { get; set; } = new();
 
     public LabelStyleSettings Labels { get; set; } = LabelStyleSettings.Defaults();
 

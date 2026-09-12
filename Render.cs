@@ -82,7 +82,7 @@ public partial class ExileMapsCore
 
     private void DrawHoveredNodeOverTooltip()
     {
-        if (Settings.Features.DebugMode || !mapTooltipVisible)
+        if (!mapTooltipVisible)
             return;
 
         try {
@@ -102,14 +102,6 @@ public partial class ExileMapsCore
         } catch (Exception e) {
             DebugSwallow("Render: hovered node over tooltip", e);
         }
-    }
-
-    private void DrawDebugging(Node cachedNode) {
-        var rect = WorldAlignedRect(cachedNode, cachedNode.MapNode.Element.GetClientRect());
-        string debugText = cachedNode.DebugText() + $"Size: {rect.Width:0} x {rect.Height:0}\n";
-        using (Graphics.SetTextScale(1.0f))
-            DrawCenteredTextWithBackground(debugText, rect.Center, OverlayText, OverlayBg, true, 10, 4);
-
     }
 
     #endregion
@@ -748,6 +740,53 @@ public partial class ExileMapsCore
         return Math.Clamp(zoom / Settings.Graphics.ZoomScaleStart, Settings.Graphics.MinZoomScale, 1f);
     }
 
+    private const float AtlasModLineGap = 2f;
+    private static readonly Color AtlasModTextColor = Color.FromArgb(255, 138, 156, 255);
+    private static readonly Color AtlasModBg = Color.FromArgb(190, 0, 0, 0);
+
+    private Color AtlasModColor(float weight)
+    {
+        if (!Settings.Graphics.ColorAtlasModsByWeight || MathF.Abs(weight) < 0.5f)
+            return AtlasModTextColor;
+        return ColorUtils.WithAlphaOf(WeightRampColor(weight), AtlasModTextColor);
+    }
+
+    private void DrawAtlasModLines(Node cachedNode, RectangleF nodeCurrentPosition)
+    {
+        try {
+            if (!Settings.Graphics.ShowAtlasModifiers || cachedNode.AtlasMods.Count == 0)
+                return;
+            if (cachedNode.IsDone && !cachedNode.IsAttempted)
+                return;
+
+            float zoom = NodeZoom(cachedNode, nodeCurrentPosition);
+            float scale = Settings.Graphics.AtlasModifierScale * zoom;
+            if (scale <= 0.01f)
+                return;
+
+            float y = contentRowTopByCoord.TryGetValue(cachedNode.Coordinates, out var rowTop)
+                ? rowTop + Settings.Graphics.IconSize * zoom
+                : nodeCurrentPosition.Center.Y + Settings.Graphics.MapNameOffsetY + ContentRowOffsetY * zoom;
+
+            using (Graphics.SetTextScale(scale)) {
+                foreach (var mod in cachedNode.AtlasMods) {
+                    var tune = Settings.ReadAtlasMod(mod.Key);
+                    if (!tune.Show || string.IsNullOrEmpty(mod.Text))
+                        continue;
+
+                    float lineHeight = MeasureCached(mod.Text, scale).Y + 4f;
+                    y += lineHeight / 2f + AtlasModLineGap;
+                    DrawCenteredTextWithBackground(mod.Text,
+                        new Vector2(nodeCurrentPosition.Center.X + MapNameOffsetX, y),
+                        AtlasModColor(tune.Weight), AtlasModBg, true, 10, 4);
+                    y += lineHeight / 2f;
+                }
+            }
+        } catch (Exception e) {
+            DebugSwallow("DrawAtlasModLines", e);
+        }
+    }
+
     private float NameHalf(Node node)
     {
         if (nameHalfByCoord.TryGetValue(node.Coordinates, out var half))
@@ -1054,7 +1093,7 @@ public partial class ExileMapsCore
 
             if (records == 0 || count <= 0 || count > 200000)
             {
-                if (Settings.Features.DebugMode)
+                if (Settings.Features.DebugLogging)
                     LogMessage($"ConnectionCurves: bad read (records={records:X} count={count}), offsets likely stale after a patch");
                 return;
             }
@@ -1120,7 +1159,7 @@ public partial class ExileMapsCore
                 built[key] = pts;
             }
 
-            if (addedThisPass > 0 && Settings.Features.DebugMode)
+            if (addedThisPass > 0 && Settings.Features.DebugLogging)
                 LogMessage($"ConnectionCurves: built {addedThisPass} new curves ({built.Count} total)");
         }
         catch (Exception e)

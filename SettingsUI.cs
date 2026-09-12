@@ -253,17 +253,31 @@ public partial class ExileMapsCore
 
         if (Controls.Category("Map Labels"))
         {
-            d |= ImGui.Checkbox("Uppercase Map Names", ref g.UppercaseMapNames);
-            Controls.Tip("Draw map names in ALL CAPS. Off = use the map's normal casing.");
+            var labelTogs = new List<Controls.ToggleItem> {
+                Tog("Uppercase Map Names", () => g.UppercaseMapNames, v => g.UppercaseMapNames = v,
+                    "Draw map names in ALL CAPS. Off = the map's normal casing."),
+                Tog("Show Weight Value", () => g.DrawWeightOnMap, v => g.DrawWeightOnMap = v,
+                    "Numeric weight beside the name. Zeroes are skipped."),
+                Tog("Scale Names With Zoom", () => g.ScaleLabelsWithZoom, v => g.ScaleLabelsWithZoom = v,
+                    "Shrink names as you zoom out, down to Minimum Zoom Scale."),
+                Tog("Show Atlas Modifiers", () => g.ShowAtlasModifiers, v => g.ShowAtlasModifiers = v,
+                    "Draw a map's modifier lines. Per-mod in Tuning."),
+            };
+            if (g.ShowAtlasModifiers)
+            {
+                labelTogs.Add(Tog("Colour Modifiers By Weight", () => g.ColorAtlasModsByWeight, v => g.ColorAtlasModsByWeight = v,
+                    "Tint each modifier line along the weight ramp."));
+            }
+            d |= Controls.ToggleGrid("label_togs", labelTogs.ToArray(), 0);
 
             d |= Controls.SliderInt("Map Name Offset Y", () => g.MapNameOffsetY, v => g.MapNameOffsetY = v, -200, 200);
             Controls.Tip("Vertical offset of the map name/weight text from node center.");
 
-            d |= ImGui.Checkbox("Show Weight Value", ref g.DrawWeightOnMap);
-            Controls.Tip("Numeric weight beside the name. Zeroes are skipped.");
-
-            d |= ImGui.Checkbox("Scale Names With Zoom", ref g.ScaleLabelsWithZoom);
-            Controls.Tip("Shrink names as you zoom out, down to Minimum Zoom Scale.");
+            if (g.ShowAtlasModifiers)
+            {
+                d |= Controls.SliderFloat("Modifier Text Scale", () => g.AtlasModifierScale, v => g.AtlasModifierScale = v, 0.4f, 1.5f);
+                Controls.Tip("Size of the modifier lines relative to labels.");
+            }
 
             var lb = Settings.Labels.Base;
             ImGui.Spacing();
@@ -385,11 +399,16 @@ public partial class ExileMapsCore
 
     private readonly List<LabelRow> labelRows = [];
 
+    private static void PendingNote(string message)
+    {
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextDisabled(message);
+    }
+
     private bool GameDataPending()
     {
         if (gameFilesScraped) return false;
-        ImGui.AlignTextToFramePadding();
-        ImGui.TextDisabled("Open the atlas to load content.");
+        PendingNote("Open the atlas to load content.");
         return true;
     }
 
@@ -553,7 +572,7 @@ public partial class ExileMapsCore
 
     #region Weights Tab
 
-    private List<string> mapIds, contentIds, biomeIds, rumorIds, foretellIds;
+    private List<string> mapIds, contentIds, biomeIds, rumorIds, foretellIds, atlasModIds;
     private bool foretellLogScale = true;
     private bool foretellPricesStale = true;
     private string foretellPriceNote;
@@ -565,6 +584,7 @@ public partial class ExileMapsCore
         biomeIds   = [.. Settings.GameData.Biomes.Keys.OrderBy(k => Settings.GameData.Biomes[k].Name)];
         rumorIds   = [.. Settings.GameData.Rumors.Keys.OrderBy(k => k)];
         foretellIds = [.. Settings.GameData.Foretellings.Keys.OrderBy(k => Settings.GameData.Foretellings[k])];
+        atlasModIds = [.. Settings.GameData.AtlasMods.Keys.OrderBy(k => Settings.GameData.AtlasMods[k].Text)];
     }
 
     private WeightListOpts ForetellWeightLook => new()
@@ -713,6 +733,8 @@ public partial class ExileMapsCore
         bool d = false;
         specialMapsChanged = false;
 
+        if (atlasModsChanged) { atlasModsChanged = false; RebuildWeightEditorIds(); }
+
         if (Controls.Category("Maps") && !GameDataPending())
             d |= Weight.List("w_maps", mapIds,
                 MapName,
@@ -733,6 +755,20 @@ public partial class ExileMapsCore
                 id => Settings.BiomeWeight(id),
                 (id, v) => Settings.Active.Biomes[id] = v,
                 WeightLook);
+
+        if (Controls.Category("Atlas modifiers"))
+        {
+            if (atlasModIds is not { Count: > 0 })
+                PendingNote("Open the atlas to load modifier descriptions.");
+
+            d |= Weight.List("w_atlasmods", atlasModIds ?? [],
+                id => Settings.GameData.AtlasMods[id].Text,
+                id => Settings.ReadAtlasMod(id).Weight,
+                (id, v) => Settings.TuneAtlasMod(id).Weight = v,
+                WeightLook,
+                AtlasModTip,
+                AtlasModWeightColumns());
+        }
 
         if (Controls.Category("Expedition rumours"))
             d |= Weight.List("w_rumors2", rumorIds,
@@ -890,6 +926,26 @@ public partial class ExileMapsCore
                 double v = ForetellPrice(id);
                 if (v <= 0) { ImGui.TextDisabled("-"); return; }
                 ImGui.TextUnformatted(v >= 100 ? $"{v:0}" : v >= 1 ? $"{v:0.0}" : $"{v:0.###}");
+            },
+        },
+    ];
+
+    private string AtlasModTip(string id)
+    {
+        var info = Settings.GameData.AtlasMods[id];
+        return info.ScalesWithValue
+            ? info.Key + Environment.NewLine
+              + "Counts per point: weight is multiplied by the modifier's value, so +5 is worth five times this weight."
+            : info.Key;
+    }
+
+    private TableColumn<string>[] AtlasModWeightColumns() =>
+    [
+        new TableColumn<string> {
+            Header = "Show", Width = CheckHeaderWidth("Show"), SortKey = id => Settings.ReadAtlasMod(id).Show,
+            Draw = (id, _) => {
+                CenteredCheck("##show", () => Settings.ReadAtlasMod(id).Show, v => Settings.TuneAtlasMod(id).Show = v);
+                Controls.Tip("Draw this modifier under the map name on the atlas.");
             },
         },
     ];
@@ -1231,7 +1287,10 @@ public partial class ExileMapsCore
         if (Controls.Category("Diagnostics"))
         {
             d |= Controls.ToggleGrid("dbg_togs", new[] {
-                Tog("Debug Mode", () => f.DebugMode, v => f.DebugMode = v),
+                Tog("Debug Mode", () => f.DebugLogging, v => f.DebugLogging = v,
+                    "Log-only diagnostics. Changes nothing on screen."),
+                Tog("Debug Atlas Nodes", () => f.DebugMode, v => f.DebugMode = v,
+                    "Draw per-node debug text on the atlas."),
                 Tog("Show Performance Monitor", () => f.ShowPerfMonitor, v => f.ShowPerfMonitor = v,
                     "Overlay: 60-frame avg CPU time per render/cache section."),
                 Tog("Debug Atlas Buttons", () => f.DebugAtlasButtons, v => f.DebugAtlasButtons = v,

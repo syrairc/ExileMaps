@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using ExileCore2.PoEMemory.Elements.AtlasElements;
 using GameOffsets2.Native;
 using ExileMaps.Classes;
@@ -11,6 +12,9 @@ using System.IO;
 using Newtonsoft.Json;
 using ExileCore2;
 using ExileCore2.Shared.Helpers;
+using ExileCore2.Shared.Enums;
+using ExileCore2.Shared.Interfaces;
+using ExileCore2.PoEMemory.FilesInMemory;
 using System.Numerics;
 using ImGuiNET;
 
@@ -36,6 +40,8 @@ public partial class ExileMapsCore
             connectionCurves.Clear();
             lastCurveRecordCount = -1;
         }
+
+        RefreshRitualLine();
 
         long tSnap = Stopwatch.GetTimestamp();
         List<AtlasNodeDescription> atlasNodes = [.. AtlasPanel.Descriptions];
@@ -153,6 +159,7 @@ public partial class ExileMapsCore
                 AddNodeBiome(node, newNode);
                 SetAtlasPassive(node, newNode);
                 AddSpecialModifiers(node, newNode);
+                RefreshNodeAtlasMods(node, newNode);
 
             } catch (Exception e) {
                 LogError($"Error getting Content for map type {node.Address.ToString("X")}: " + e.Message);
@@ -201,6 +208,8 @@ public partial class ExileMapsCore
         cachedNode.ResolveSpecial();
         changed |= wasSpecial != cachedNode.IsSpecial;
 
+        changed |= RefreshNodeAtlasMods(node, cachedNode);
+
         if (cachedNode.IsDone)
             return changed;
 
@@ -220,6 +229,7 @@ public partial class ExileMapsCore
                 AddNodeBiome(node, cachedNode);
                 SetAtlasPassive(node, cachedNode);
                 AddSpecialModifiers(node, cachedNode);
+                RefreshNodeAtlasMods(node, cachedNode, force: true);
                 cachedNode.StaticResolved = true;
                 changed = true;
             }
@@ -323,6 +333,266 @@ public partial class ExileMapsCore
                 toNode.Content.TryAdd(contentType.Name, contentType);
         }
     }
+
+    #region Atlas Modifiers
+
+    private readonly Dictionary<(string, int), string> atlasModTextCache = [];
+    private readonly Dictionary<string, AtlasModInfo> atlasModByKey = [];
+    private readonly Dictionary<string, GameStat> atlasModStats = [];
+    private readonly Dictionary<GameStat, int> atlasModScratch = [];
+    private readonly List<AtlasStatValue> atlasModRaw = [];
+    private readonly Dictionary<string, int> atlasModTotals = [];
+    private readonly List<AtlasStatValue> atlasModOrder = [];
+    private readonly Dictionary<StatDescriptionWrapper, HashSet<GameStat>> atlasModOwnedStats = [];
+    private readonly HashSet<string> atlasModContentOnly = [];
+    private bool atlasModDescriptionsUsable;
+    private AtlasNodeModReader atlasModReader;
+    private StatDescriptionWrapper endgameMapStatDescriptions;
+    private bool endgameMapStatDescriptionsFailed;
+    private long ritualLineAddress;
+    private long ritualLineStamp;
+    private bool atlasModsChanged;
+
+    private const string EndgameMapStatDescriptionsFile = "Metadata/StatDescriptions/endgame_map_stat_descriptions.csd";
+
+    private AtlasNodeModReader AtlasModReader =>
+        atlasModReader ??= new AtlasNodeModReader(GameController.Memory, GameController.Files);
+
+    private void RefreshRitualLine()
+    {
+        try {
+            ritualLineAddress = AtlasModReader.ReadRitualLine(AtlasPanel?.Address ?? 0);
+            ritualLineStamp = AtlasModReader.ReadRitualLineStamp(ritualLineAddress);
+        } catch (Exception e) {
+            ritualLineAddress = 0;
+            ritualLineStamp = 0;
+            DebugSwallow("RefreshRitualLine", e);
+        }
+    }
+
+    private bool RefreshNodeAtlasMods(AtlasNodeDescription node, Node toNode, bool force = false)
+    {
+        try {
+            var element = node.Element;
+            long el = element?.Address ?? 0;
+            if (el == 0)
+                return false;
+
+            var pin = AtlasModReader.ReadPin(el);
+            int fingerprint = AtlasNodeModReader.Fingerprint(pin, ritualLineStamp);
+
+            if (!force && toNode.AtlasModsBuilt && fingerprint == toNode.AtlasModFingerprint)
+                return false;
+
+            toNode.AtlasModFingerprint = fingerprint;
+            toNode.AtlasModsBuilt = true;
+            toNode.AtlasMods.Clear();
+
+            atlasModRaw.Clear();
+            AtlasModReader.Collect(pin, ritualLineAddress, atlasModRaw);
+            int contentStart = atlasModRaw.Count;
+            AddContentStats(element, atlasModRaw);
+
+            atlasModTotals.Clear();
+            atlasModOrder.Clear();
+            atlasModContentOnly.Clear();
+            for (int i = 0; i < atlasModRaw.Count; i++) {
+                var stat = atlasModRaw[i];
+                if (!atlasModTotals.ContainsKey(stat.Key)) {
+                    atlasModOrder.Add(stat);
+                    if (i >= contentStart)
+                        atlasModContentOnly.Add(stat.Key);
+                }
+                atlasModTotals[stat.Key] = atlasModTotals.GetValueOrDefault(stat.Key) + stat.Value;
+            }
+
+            foreach (var stat in atlasModOrder) {
+                int value = atlasModTotals[stat.Key];
+                if (value == 0)
+                    continue;
+
+                var info = ResolveAtlasMod(stat.Key, stat.Stat, stat.Type, atlasModContentOnly.Contains(stat.Key));
+                if (info == null)
+                    continue;
+
+                toNode.AtlasMods.Add(new AtlasModEntry(stat.Key, value, AtlasModText(info, value),
+                    info.ScalesWithValue ? value : 1));
+            }
+
+            return true;
+        } catch (Exception e) {
+            DebugSwallow("RefreshNodeAtlasMods", e);
+            return false;
+        }
+    }
+
+    private static void AddContentStats(AtlasPanelNode element, List<AtlasStatValue> into)
+    {
+        var contents = element.Content;
+        if (contents == null)
+            return;
+
+        foreach (var content in contents) {
+            var stats = content?.Stats;
+            var values = content?.StatValues;
+            if (stats == null || values == null)
+                continue;
+
+            int n = Math.Min(stats.Count, values.Count);
+            for (int i = 0; i < n; i++) {
+                var record = stats[i];
+                int value = values[i];
+                if (record == null || value == 0 || string.IsNullOrEmpty(record.Key))
+                    continue;
+
+                into.Add(new AtlasStatValue(record.Key, record.MatchingStat, record.Type, value));
+            }
+        }
+    }
+
+    private AtlasModInfo ResolveAtlasMod(string key, GameStat stat, StatType type, bool fromContent)
+    {
+        if (atlasModByKey.TryGetValue(key, out var known)) {
+            if (!fromContent && known is { FromContent: true })
+                known.FromContent = false;
+            return known;
+        }
+
+        string text = TranslateAtlasMod(stat);
+        if (text == null) {
+            if (atlasModDescriptionsUsable) {
+                atlasModByKey[key] = null;
+                return null;
+            }
+            text = PrettifyStatKey(key);
+        }
+
+        atlasModStats[key] = stat;
+
+        var info = new AtlasModInfo {
+            Key = key,
+            ScalesWithValue = type == StatType.IntValue,
+            FromContent = fromContent,
+            Text = text
+        };
+
+        atlasModByKey[key] = info;
+        Settings.GameData.AtlasMods[key] = info;
+        SeedAtlasModShow(info);
+        atlasModsChanged = true;
+        return info;
+    }
+
+    private void SeedAtlasModShow(AtlasModInfo info)
+    {
+        if (info is { FromContent: true })
+            Settings.Active.AtlasMods.GetOrAdd(info.Key, _ => new AtlasModTuning { Show = false });
+    }
+
+    public void SeedContentAtlasModShow()
+    {
+        foreach (var info in Settings.GameData.AtlasMods.Values)
+            SeedAtlasModShow(info);
+    }
+
+    private string AtlasModText(AtlasModInfo info, int value)
+    {
+        var cacheKey = (info.Key, value);
+        if (atlasModTextCache.TryGetValue(cacheKey, out var cached))
+            return cached;
+
+        string text = (atlasModStats.TryGetValue(info.Key, out var stat)
+            ? TranslateAtlasMod(stat, value)
+            : null) ?? info.Text;
+
+        atlasModTextCache[cacheKey] = text;
+        return text;
+    }
+
+    private static readonly char[] ModTextBreaks = ['\n', '\r'];
+
+    private static readonly Regex ModTagPattern = new(@"\[(?:[^\[\]|]*\|)?([^\[\]]*)\]", RegexOptions.Compiled);
+
+    private static string CollapseModText(string text) =>
+        ModTagPattern.Replace(
+            string.Join(" ", text.Split(ModTextBreaks, StringSplitOptions.RemoveEmptyEntries)), "$1").Trim();
+
+    private static bool IsUntranslated(string text) =>
+        string.IsNullOrWhiteSpace(text) || text.Contains("<unknown", StringComparison.OrdinalIgnoreCase);
+
+    private StatDescriptionWrapper EndgameMapStatDescriptions
+    {
+        get {
+            if (endgameMapStatDescriptions != null || endgameMapStatDescriptionsFailed)
+                return endgameMapStatDescriptions;
+            try {
+                endgameMapStatDescriptions = new StatDescriptionWrapper(
+                    GameController.Memory, GameController.Files.FindFile, EndgameMapStatDescriptionsFile);
+            } catch (Exception e) {
+                endgameMapStatDescriptionsFailed = true;
+                DebugSwallow("EndgameMapStatDescriptions", e);
+            }
+            return endgameMapStatDescriptions;
+        }
+    }
+
+    private bool DescribesStat(StatDescriptionWrapper wrapper, GameStat stat)
+    {
+        if (!atlasModOwnedStats.TryGetValue(wrapper, out var owned)) {
+            owned = [];
+            var entries = wrapper.EntriesList;
+            if (entries != null)
+                foreach (var entry in entries)
+                    if (entry?.Stats != null)
+                        foreach (var described in entry.Stats)
+                            owned.Add(described);
+            if (owned.Count == 0)
+                return true;
+            atlasModOwnedStats[wrapper] = owned;
+            atlasModDescriptionsUsable = true;
+        }
+
+        return owned.Contains(stat);
+    }
+
+    private string TranslateWith(StatDescriptionWrapper wrapper, GameStat stat, string label)
+    {
+        if (wrapper == null)
+            return null;
+        try {
+            if (!DescribesStat(wrapper, stat))
+                return null;
+            var text = wrapper.TranslateMod(atlasModScratch);
+            return IsUntranslated(text) ? null : CollapseModText(text);
+        } catch (Exception e) {
+            DebugSwallow("TranslateAtlasMod: " + label, e);
+            return null;
+        }
+    }
+
+    private string TranslateAtlasMod(GameStat stat, int value = 1)
+    {
+        atlasModScratch.Clear();
+        atlasModScratch[stat] = value;
+
+        var files = GameController.Files;
+        return TranslateWith(files.StatDescriptions, stat, "general")
+            ?? TranslateWith(files.AtlasStatDescriptions, stat, "atlas")
+            ?? TranslateWith(EndgameMapStatDescriptions, stat, "endgame");
+    }
+
+    private static string PrettifyStatKey(string key)
+    {
+        if (string.IsNullOrEmpty(key))
+            return "";
+        var words = key.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < words.Length; i++)
+            if (words[i].Length > 1 && char.IsLetter(words[i][0]))
+                words[i] = char.ToUpperInvariant(words[i][0]) + words[i][1..];
+        return string.Join(" ", words);
+    }
+
+    #endregion
 
     private void AddNodeBiome(AtlasNodeDescription node, Node toNode) {
         var biomeId = node.Element?.Biome?.Id;
@@ -777,27 +1047,78 @@ public partial class ExileMapsCore
         return cachedAtlasList;
     }
 
-    private Node GetClosestNodeToCursor() {
-        var cursor = ImGui.GetMousePos();
-        var project = frameWorldToScreen;
+    private const int HoverChainDepth = 12;
+    private long hoverPickLogged;
 
-        Node best = null;
-        float bestDistSq = float.MaxValue;
+    private Node HoveredAtlasNode() {
+        try {
+            var hover = GameController.IngameState.UIHoverElement;
+            if (hover == null || hover.Address == 0)
+                return null;
 
-        if (project != null) {
-            var pool = selectedNodes.Count > 0 ? (IEnumerable<Node>)selectedNodes : mapCache.Values;
-            foreach (var n in pool) {
-                if (n == null || !n.HasWorldPos)
+            var byAddress = BuildNodeAddressIndex();
+            var el = hover;
+            for (int depth = 0; el != null && el.Address != 0 && depth < HoverChainDepth; depth++, el = el.Parent) {
+                if (!byAddress.TryGetValue(el.Address, out var coord))
                     continue;
-                float distSq = Vector2.DistanceSquared(cursor, project(n.WorldPos));
-                if (distSq < bestDistSq) { bestDistSq = distSq; best = n; }
+                lock (mapCacheLock)
+                    if (mapCache.TryGetValue(coord, out var n))
+                        return n;
             }
-            if (best != null)
-                return best;
+        } catch (Exception e) { DebugSwallow("HoveredAtlasNode", e); }
+        return null;
+    }
+
+    private Dictionary<long, Vector2i> BuildNodeAddressIndex() {
+        var byAddress = new Dictionary<long, Vector2i>();
+        foreach (var d in AtlasPanel.Descriptions) {
+            long a = d?.Element?.Address ?? 0;
+            if (a != 0) byAddress[a] = d.Coordinate;
+        }
+        return byAddress;
+    }
+
+    private Node ClosestNodeGeometric(Vector2 cursor) {
+        var project = frameWorldToScreen;
+        if (project == null)
+            return null;
+
+        var pool = selectedNodes.Count > 0 ? (IEnumerable<Node>)selectedNodes : mapCache.Values;
+
+        Node centre = null, rectHit = null;
+        float centreDistSq = float.MaxValue, rectDistSq = float.MaxValue;
+
+        foreach (var n in pool) {
+            if (n == null || !n.HasWorldPos)
+                continue;
+            float distSq = Vector2.DistanceSquared(cursor, project(n.WorldPos));
+            if (distSq < centreDistSq) { centreDistSq = distSq; centre = n; }
+            if (distSq >= rectDistSq)
+                continue;
+            var rect = GetNodeRect(n);
+            if (rect.Width > 0 && rect.Contains(cursor)) { rectDistSq = distSq; rectHit = n; }
+        }
+        return rectHit ?? centre;
+    }
+
+    private Node GetClosestNodeToCursor() {
+        var hovered = HoveredAtlasNode();
+        var cursor = ImGui.GetMousePos();
+        var pick = hovered ?? ClosestNodeGeometric(cursor);
+
+        if (Settings.Features.DebugLogging) {
+            long stamp = Environment.TickCount64 / 500;
+            if (stamp != hoverPickLogged) {
+                hoverPickLogged = stamp;
+                LogMessage($"NodePick cursor=({cursor.X:0},{cursor.Y:0}) hover={Where(hovered)} pick={Where(pick)}");
+            }
         }
 
+        if (pick != null)
+            return pick;
+
         AtlasNodeDescription closestNode = null;
-        bestDistSq = float.MaxValue;
+        float bestDistSq = float.MaxValue;
         foreach (var d in AtlasPanel.Descriptions) {
             float distSq = Vector2.DistanceSquared(cursor, WorldAlignedRect(d, d.Element.GetClientRectCache).Center);
             if (distSq < bestDistSq) { bestDistSq = distSq; closestNode = d; }
@@ -808,6 +1129,12 @@ public partial class ExileMapsCore
         else
             return null;
     }
+
+    private static string Where(Node n) =>
+        n == null ? "-" : $"{n.Name}[{n.Coordinates.X},{n.Coordinates.Y}]";
+
+
+
 
     private void UpdateWaypointPaths()
     {

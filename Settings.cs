@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
@@ -42,6 +43,7 @@ public partial class ExileMapsCore
         RebuildWeightEditorIds();
         RegisterHotkeys();
         RequestSpecialMapsRefresh();
+        SeedContentAtlasModShow();
         refreshCache = true;
         lastRefreshMs = long.MinValue / 2;
         weightsDirty = true;
@@ -429,6 +431,8 @@ public class GameData
     public Dictionary<string, ContentInfo> Content { get; set; } = new();
     public Dictionary<string, BiomeInfo> Biomes { get; set; } = new();
     public Dictionary<string, RumorInfo> Rumors { get; set; } = new();
+
+    public ConcurrentDictionary<string, AtlasModInfo> AtlasMods { get; set; } = new();
     public Dictionary<string, string> Foretellings { get; set; } = new();
 }
 
@@ -460,6 +464,10 @@ public class ExileMapsSettings : ISettings
     public MapTuning ReadMap(string id) => id != null && Active.Maps.TryGetValue(id, out var t) ? t : UntunedMap;
 
     public ContentTuning ReadContent(string id) => id != null && Active.Content.TryGetValue(id, out var t) ? t : UntunedContent;
+
+    private static readonly AtlasModTuning UntunedAtlasMod = new();
+    public AtlasModTuning TuneAtlasMod(string key) => Active.AtlasMods.GetOrAdd(key, _ => new AtlasModTuning());
+    public AtlasModTuning ReadAtlasMod(string key) => key != null && Active.AtlasMods.TryGetValue(key, out var t) ? t : UntunedAtlasMod;
 
     // wire names are pinned to ActiveProfile/Profiles inside the store, so this is the same json
     // shape the old hand-rolled ProfileSettings wrote - existing profiles load untouched.
@@ -530,6 +538,8 @@ public class FeatureSettings
     public bool EnableDrawing = true;
 
     public bool DebugMode = false;
+
+    public bool DebugLogging = false;
 
     public bool ShowPerfMonitor = false;
 
@@ -609,6 +619,12 @@ public class GraphicSettings
     public bool ShowContentRow = true;
 
     public bool ShowBiomeIcon = true;
+
+    public bool ShowAtlasModifiers = true;
+
+    public float AtlasModifierScale = 0.85f;
+
+    public bool ColorAtlasModsByWeight = true;
 
     public bool DrawWeightOnMap = false;
 

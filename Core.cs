@@ -310,6 +310,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             DrawBuildModeIndicator();
         }
 
+        if (Settings.Features.DebugMode)
+            HandleDebugMode();
+
         if (!Settings.Features.EnableDrawing) return;
 
         UpdateScreenBounds();
@@ -363,63 +366,60 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
             catch (Exception e) { DebugSwallow("Render: node rect read", e); }
         }
 
-        if (Settings.Features.DebugMode) {
-            foreach (var (node, _) in nodePositions)
-                DrawDebugging(node);
-        } else {
-            t0 = Stopwatch.GetTimestamp();
-            foreach (var (node, rect) in nodePositions)
-                DrawNodeLines(node, rect);
-            if (perf) PerfMonitor.Record("Render.Lines", Stopwatch.GetTimestamp() - t0);
+        t0 = Stopwatch.GetTimestamp();
+        foreach (var (node, rect) in nodePositions)
+            DrawNodeLines(node, rect);
+        if (perf) PerfMonitor.Record("Render.Lines", Stopwatch.GetTimestamp() - t0);
 
-            t0 = Stopwatch.GetTimestamp();
-            foreach (var (node, rect) in nodePositions) {
-                try { DrawMapNode(node, rect); }
-                catch (Exception e) { LogError("Error drawing node fill: " + e.Message); }
-            }
-            if (perf) PerfMonitor.Record("Render.Fills", Stopwatch.GetTimestamp() - t0);
-
-            t0 = Stopwatch.GetTimestamp();
-            contentIconRects.Clear();
-            contentRowTopByCoord.Clear();
-            biomeIconRectByCoord.Clear();
-            foreach (var (node, rect) in nodePositions) {
-                DrawBiomeIcon(node, rect);
-                DrawContentRow(node, rect);
-                DrawOverrideIcon(node, rect);
-            }
-            if (perf) PerfMonitor.Record("Render.ContentRow", Stopwatch.GetTimestamp() - t0);
-
-            t0 = Stopwatch.GetTimestamp();
-            foreach (var (node, rect) in nodePositions)
-                DrawFavoriteIndicator(node, rect);
-            foreach (var node in specialNodes) {
-                var rect = GetNodeRect(node);
-                if (rect.Width > 0)
-                    DrawSpecialIndicator(node, rect);
-            }
-            foreach (var (node, rect) in nodePositions)
-                DrawAtlasQuestIndicator(node, rect);
-            if (perf) PerfMonitor.Record("Render.Indicators", Stopwatch.GetTimestamp() - t0);
-
-            t0 = Stopwatch.GetTimestamp();
-            foreach (var (node, rect) in nodePositions)
-                DrawNodeLabels(node, rect);
-            foreach (var node in specialNodes) {
-                var rect = GetNodeRect(node);
-                if (rect.Width > 0)
-                    DrawSpecialMapName(node, rect);
-            }
-            if (perf) PerfMonitor.Record("Render.Labels", Stopwatch.GetTimestamp() - t0);
-
-            t0 = Stopwatch.GetTimestamp();
-            DrawHoveredNodeOverTooltip();
-            if (perf) PerfMonitor.Record("Render.HoveredOverTooltip", Stopwatch.GetTimestamp() - t0);
-
-            t0 = Stopwatch.GetTimestamp();
-            DrawIconTooltips();
-            if (perf) PerfMonitor.Record("Render.IconTooltips", Stopwatch.GetTimestamp() - t0);
+        t0 = Stopwatch.GetTimestamp();
+        foreach (var (node, rect) in nodePositions) {
+            try { DrawMapNode(node, rect); }
+            catch (Exception e) { LogError("Error drawing node fill: " + e.Message); }
         }
+        if (perf) PerfMonitor.Record("Render.Fills", Stopwatch.GetTimestamp() - t0);
+
+        t0 = Stopwatch.GetTimestamp();
+        contentIconRects.Clear();
+        contentRowTopByCoord.Clear();
+        biomeIconRectByCoord.Clear();
+        foreach (var (node, rect) in nodePositions) {
+            DrawBiomeIcon(node, rect);
+            DrawContentRow(node, rect);
+            DrawOverrideIcon(node, rect);
+        }
+        if (perf) PerfMonitor.Record("Render.ContentRow", Stopwatch.GetTimestamp() - t0);
+
+        t0 = Stopwatch.GetTimestamp();
+        foreach (var (node, rect) in nodePositions)
+            DrawFavoriteIndicator(node, rect);
+        foreach (var node in specialNodes) {
+            var rect = GetNodeRect(node);
+            if (rect.Width > 0)
+                DrawSpecialIndicator(node, rect);
+        }
+        foreach (var (node, rect) in nodePositions)
+            DrawAtlasQuestIndicator(node, rect);
+        if (perf) PerfMonitor.Record("Render.Indicators", Stopwatch.GetTimestamp() - t0);
+
+        t0 = Stopwatch.GetTimestamp();
+        foreach (var (node, rect) in nodePositions)
+            DrawAtlasModLines(node, rect);
+        foreach (var (node, rect) in nodePositions)
+            DrawNodeLabels(node, rect);
+        foreach (var node in specialNodes) {
+            var rect = GetNodeRect(node);
+            if (rect.Width > 0)
+                DrawSpecialMapName(node, rect);
+        }
+        if (perf) PerfMonitor.Record("Render.Labels", Stopwatch.GetTimestamp() - t0);
+
+        t0 = Stopwatch.GetTimestamp();
+        DrawHoveredNodeOverTooltip();
+        if (perf) PerfMonitor.Record("Render.HoveredOverTooltip", Stopwatch.GetTimestamp() - t0);
+
+        t0 = Stopwatch.GetTimestamp();
+        DrawIconTooltips();
+        if (perf) PerfMonitor.Record("Render.IconTooltips", Stopwatch.GetTimestamp() - t0);
 
         if (waypointSyncPending) {
             waypointSyncPending = false;
@@ -1161,7 +1161,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
         samples.Sort();
         worldSpacing = samples[samples.Count / 2];
-        if (Settings.Features.DebugMode)
+        if (Settings.Features.DebugLogging)
             LogMessage($"Search ring: world units per grid step = {worldSpacing:F1} (from {samples.Count} links)");
         return worldSpacing;
     }
@@ -1174,7 +1174,7 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private void DebugSwallow(string context, Exception e)
     {
-        if (Settings.Features.DebugMode)
+        if (Settings.Features.DebugLogging)
             LogError($"{context}: {e.Message}");
     }
 
