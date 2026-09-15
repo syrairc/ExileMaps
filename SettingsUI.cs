@@ -573,6 +573,10 @@ public partial class ExileMapsCore
     #region Weights Tab
 
     private List<string> mapIds, contentIds, biomeIds, rumorIds, foretellIds, atlasModIds;
+    private Dictionary<string, List<string>> atlasModGroups = [];
+
+    private List<string> AtlasModGroup(string id) =>
+        atlasModGroups.TryGetValue(id, out var group) ? group : [id];
     private bool foretellLogScale = true;
     private bool foretellPricesStale = true;
     private string foretellPriceNote;
@@ -584,7 +588,11 @@ public partial class ExileMapsCore
         biomeIds   = [.. Settings.GameData.Biomes.Keys.OrderBy(k => Settings.GameData.Biomes[k].Name)];
         rumorIds   = [.. Settings.GameData.Rumors.Keys.OrderBy(k => k)];
         foretellIds = [.. Settings.GameData.Foretellings.Keys.OrderBy(k => Settings.GameData.Foretellings[k])];
-        atlasModIds = [.. Settings.GameData.AtlasMods.Keys.OrderBy(k => Settings.GameData.AtlasMods[k].Text)];
+        atlasModGroups = Settings.GameData.AtlasMods
+            .GroupBy(kv => kv.Value.Text, StringComparer.Ordinal)
+            .Select(g => g.Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal).ToList())
+            .ToDictionary(ids => ids[0], ids => ids, StringComparer.Ordinal);
+        atlasModIds = [.. atlasModGroups.Keys.OrderBy(k => Settings.GameData.AtlasMods[k].Text, StringComparer.Ordinal)];
     }
 
     private WeightListOpts ForetellWeightLook => new()
@@ -760,11 +768,13 @@ public partial class ExileMapsCore
         {
             if (atlasModIds is not { Count: > 0 })
                 PendingNote("Open the atlas to load modifier descriptions.");
+            else
+                PendingNote($"{atlasModIds.Count} modifiers from the game files.");
 
             d |= Weight.List("w_atlasmods", atlasModIds ?? [],
                 id => Settings.GameData.AtlasMods[id].Text,
-                id => Settings.ReadAtlasMod(id).Weight,
-                (id, v) => Settings.TuneAtlasMod(id).Weight = v,
+                AtlasModWeight,
+                (id, v) => { foreach (var key in AtlasModGroup(id)) Settings.TuneAtlasMod(key).Weight = v; },
                 WeightLook,
                 AtlasModTip,
                 AtlasModWeightColumns());
@@ -930,13 +940,24 @@ public partial class ExileMapsCore
         },
     ];
 
+    private float AtlasModWeight(string id)
+    {
+        foreach (var key in AtlasModGroup(id)) {
+            float weight = Settings.ReadAtlasMod(key).Weight;
+            if (weight != 0)
+                return weight;
+        }
+        return 0;
+    }
+
     private string AtlasModTip(string id)
     {
         var info = Settings.GameData.AtlasMods[id];
+        var keys = string.Join(Environment.NewLine, AtlasModGroup(id));
         return info.ScalesWithValue
-            ? info.Key + Environment.NewLine
+            ? keys + Environment.NewLine
               + "Counts per point: weight is multiplied by the modifier's value, so +5 is worth five times this weight."
-            : info.Key;
+            : keys;
     }
 
     private TableColumn<string>[] AtlasModWeightColumns() =>
@@ -944,7 +965,8 @@ public partial class ExileMapsCore
         new TableColumn<string> {
             Header = "Show", Width = CheckHeaderWidth("Show"), SortKey = id => Settings.ReadAtlasMod(id).Show,
             Draw = (id, _) => {
-                CenteredCheck("##show", () => Settings.ReadAtlasMod(id).Show, v => Settings.TuneAtlasMod(id).Show = v);
+                CenteredCheck("##show", () => Settings.ReadAtlasMod(id).Show,
+                    v => { foreach (var key in AtlasModGroup(id)) Settings.TuneAtlasMod(key).Show = v; });
                 Controls.Tip("Draw this modifier under the map name on the atlas.");
             },
         },

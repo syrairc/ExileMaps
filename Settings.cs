@@ -43,7 +43,6 @@ public partial class ExileMapsCore
         RebuildWeightEditorIds();
         RegisterHotkeys();
         RequestSpecialMapsRefresh();
-        SeedContentAtlasModShow();
         refreshCache = true;
         lastRefreshMs = long.MinValue / 2;
         weightsDirty = true;
@@ -427,13 +426,13 @@ public partial class ExileMapsCore
 
 public class GameData
 {
-    public Dictionary<string, MapInfo> Maps { get; set; } = new();
-    public Dictionary<string, ContentInfo> Content { get; set; } = new();
-    public Dictionary<string, BiomeInfo> Biomes { get; set; } = new();
-    public Dictionary<string, RumorInfo> Rumors { get; set; } = new();
+    [JsonIgnore] public Dictionary<string, MapInfo> Maps { get; set; } = new();
+    [JsonIgnore] public Dictionary<string, ContentInfo> Content { get; set; } = new();
+    [JsonIgnore] public Dictionary<string, BiomeInfo> Biomes { get; set; } = new();
+    [JsonIgnore] public Dictionary<string, RumorInfo> Rumors { get; set; } = new();
+    [JsonIgnore] public Dictionary<string, string> Foretellings { get; set; } = new();
 
     public ConcurrentDictionary<string, AtlasModInfo> AtlasMods { get; set; } = new();
-    public Dictionary<string, string> Foretellings { get; set; } = new();
 }
 
 public class ExileMapsSettings : ISettings
@@ -443,7 +442,6 @@ public class ExileMapsSettings : ISettings
     public bool SettingsBackupDone { get; set; } = false;
     public bool LegacyImportHandled { get; set; } = false;
 
-    [JsonIgnore]
     public GameData GameData { get; set; } = new();
 
     // the store memoizes this, so it's a dictionary hit only when the active profile moves

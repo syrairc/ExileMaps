@@ -329,6 +329,14 @@ public partial class ExileMapsCore
                         ImGui.PopStyleColor();
                         first = false;
                     }
+                    var modCol = new Vector4(AtlasModTextColor.R / 255f, AtlasModTextColor.G / 255f, AtlasModTextColor.B / 255f, 1f);
+                    foreach (var m in n.AtlasMods) {
+                        if (!first) { ImGui.SameLine(0, 0); ImGui.TextUnformatted(", "); ImGui.SameLine(0, 0); }
+                        ImGui.PushStyleColor(ImGuiCol.Text, modCol);
+                        ImGui.TextUnformatted(m.Text);
+                        ImGui.PopStyleColor();
+                        first = false;
+                    }
                     if (first) ImGui.TextUnformatted("");
                 },
             },
@@ -418,6 +426,8 @@ public partial class ExileMapsCore
             Tag("mod", m);
         foreach (var d in n.ModifierDetails)
             Tag("mod", d);
+        foreach (var m in n.AtlasMods)
+            Tag("mod", m.Text);
         return sb.ToString();
     }
 

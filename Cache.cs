@@ -42,6 +42,7 @@ public partial class ExileMapsCore
         }
 
         RefreshRitualLine();
+        SeedAtlasModCatalogue();
 
         long tSnap = Stopwatch.GetTimestamp();
         List<AtlasNodeDescription> atlasNodes = [.. AtlasPanel.Descriptions];
@@ -344,7 +345,6 @@ public partial class ExileMapsCore
     private readonly Dictionary<string, int> atlasModTotals = [];
     private readonly List<AtlasStatValue> atlasModOrder = [];
     private readonly Dictionary<StatDescriptionWrapper, HashSet<GameStat>> atlasModOwnedStats = [];
-    private readonly HashSet<string> atlasModContentOnly = [];
     private bool atlasModDescriptionsUsable;
     private AtlasNodeModReader atlasModReader;
     private StatDescriptionWrapper endgameMapStatDescriptions;
@@ -390,19 +390,13 @@ public partial class ExileMapsCore
 
             atlasModRaw.Clear();
             AtlasModReader.Collect(pin, ritualLineAddress, atlasModRaw);
-            int contentStart = atlasModRaw.Count;
             AddContentStats(element, atlasModRaw);
 
             atlasModTotals.Clear();
             atlasModOrder.Clear();
-            atlasModContentOnly.Clear();
-            for (int i = 0; i < atlasModRaw.Count; i++) {
-                var stat = atlasModRaw[i];
-                if (!atlasModTotals.ContainsKey(stat.Key)) {
+            foreach (var stat in atlasModRaw) {
+                if (!atlasModTotals.ContainsKey(stat.Key))
                     atlasModOrder.Add(stat);
-                    if (i >= contentStart)
-                        atlasModContentOnly.Add(stat.Key);
-                }
                 atlasModTotals[stat.Key] = atlasModTotals.GetValueOrDefault(stat.Key) + stat.Value;
             }
 
@@ -411,7 +405,7 @@ public partial class ExileMapsCore
                 if (value == 0)
                     continue;
 
-                var info = ResolveAtlasMod(stat.Key, stat.Stat, stat.Type, atlasModContentOnly.Contains(stat.Key));
+                var info = ResolveAtlasMod(stat.Key, stat.Stat, stat.Type);
                 if (info == null)
                     continue;
 
@@ -450,16 +444,15 @@ public partial class ExileMapsCore
         }
     }
 
-    private AtlasModInfo ResolveAtlasMod(string key, GameStat stat, StatType type, bool fromContent)
+    private AtlasModInfo ResolveAtlasMod(string key, GameStat stat, StatType type)
     {
-        if (atlasModByKey.TryGetValue(key, out var known)) {
-            if (!fromContent && known is { FromContent: true })
-                known.FromContent = false;
+        if (atlasModByKey.TryGetValue(key, out var known))
             return known;
-        }
 
-        string text = TranslateAtlasMod(stat);
-        if (text == null) {
+        Settings.GameData.AtlasMods.TryGetValue(key, out var stored);
+
+        string text = HashProbeValue(TranslateAtlasMod(stat, AtlasModLabelProbe) ?? stored?.Text);
+        if (string.IsNullOrEmpty(text)) {
             if (atlasModDescriptionsUsable) {
                 atlasModByKey[key] = null;
                 return null;
@@ -469,30 +462,66 @@ public partial class ExileMapsCore
 
         atlasModStats[key] = stat;
 
-        var info = new AtlasModInfo {
-            Key = key,
-            ScalesWithValue = type == StatType.IntValue,
-            FromContent = fromContent,
-            Text = text
-        };
+        var info = stored ?? new AtlasModInfo { Key = key };
+        info.Text = text;
+        info.ScalesWithValue = type == StatType.IntValue;
 
         atlasModByKey[key] = info;
         Settings.GameData.AtlasMods[key] = info;
-        SeedAtlasModShow(info);
         atlasModsChanged = true;
         return info;
     }
 
-    private void SeedAtlasModShow(AtlasModInfo info)
+    private const int AreaModDomain = 6;
+
+    private bool atlasModCatalogueSeeded;
+
+    private void SeedAtlasModCatalogue()
     {
-        if (info is { FromContent: true })
-            Settings.Active.AtlasMods.GetOrAdd(info.Key, _ => new AtlasModTuning { Show = false });
+        if (atlasModCatalogueSeeded)
+            return;
+        atlasModCatalogueSeeded = true;
+
+        int scanned = 0, before = Settings.GameData.AtlasMods.Count;
+        try {
+            var mods = GameController.Files.Mods?.records;
+            if (mods != null)
+                foreach (var mod in mods.Values) {
+                    try {
+                        if (mod == null || (int)mod.Domain != AreaModDomain)
+                            continue;
+                        scanned++;
+                        SeedStatRecords(mod.StatNames);
+                    } catch (Exception e) {
+                        DebugSwallow("SeedAtlasModCatalogue: mod", e);
+                    }
+                }
+
+            var contents = GameController.Files.EndgameMapContent?.EntriesList;
+            if (contents != null)
+                foreach (var content in contents) {
+                    try {
+                        SeedStatRecords(content?.Stats);
+                    } catch (Exception e) {
+                        DebugSwallow("SeedAtlasModCatalogue: content", e);
+                    }
+                }
+        } catch (Exception e) {
+            atlasModCatalogueSeeded = false;
+            DebugSwallow("SeedAtlasModCatalogue", e);
+        }
+
+        LogMessage($"ExileMaps: atlas modifier catalogue seeded from {scanned} area mods, " +
+                   $"{Settings.GameData.AtlasMods.Count - before} new, {Settings.GameData.AtlasMods.Count} total");
     }
 
-    public void SeedContentAtlasModShow()
+    private void SeedStatRecords(IEnumerable<StatsDat.StatRecord> records)
     {
-        foreach (var info in Settings.GameData.AtlasMods.Values)
-            SeedAtlasModShow(info);
+        if (records == null)
+            return;
+        foreach (var record in records)
+            if (record != null && !string.IsNullOrEmpty(record.Key))
+                ResolveAtlasMod(record.Key, record.MatchingStat, record.Type);
     }
 
     private string AtlasModText(AtlasModInfo info, int value)
@@ -555,12 +584,12 @@ public partial class ExileMapsCore
         return owned.Contains(stat);
     }
 
-    private string TranslateWith(StatDescriptionWrapper wrapper, GameStat stat, string label)
+    private string TranslateWith(StatDescriptionWrapper wrapper, GameStat stat, string label, bool gated = true)
     {
         if (wrapper == null)
             return null;
         try {
-            if (!DescribesStat(wrapper, stat))
+            if (gated && !DescribesStat(wrapper, stat))
                 return null;
             var text = wrapper.TranslateMod(atlasModScratch);
             return IsUntranslated(text) ? null : CollapseModText(text);
@@ -578,8 +607,19 @@ public partial class ExileMapsCore
         var files = GameController.Files;
         return TranslateWith(files.StatDescriptions, stat, "general")
             ?? TranslateWith(files.AtlasStatDescriptions, stat, "atlas")
-            ?? TranslateWith(EndgameMapStatDescriptions, stat, "endgame");
+            ?? TranslateWith(EndgameMapStatDescriptions, stat, "endgame")
+            ?? TranslateWith(files.StatDescriptions, stat, "general ungated", false)
+            ?? TranslateWith(EndgameMapStatDescriptions, stat, "endgame ungated", false)
+            ?? TranslateWith(files.AtlasStatDescriptions, stat, "atlas ungated", false);
     }
+
+    private const int AtlasModLabelProbe = 1;
+
+    private static readonly Regex AtlasModProbePattern =
+        new(@"(?<![\w.])" + AtlasModLabelProbe + @"(?![\d.])", RegexOptions.Compiled);
+
+    private static string HashProbeValue(string text) =>
+        text == null ? null : AtlasModProbePattern.Replace(text, "#");
 
     private static string PrettifyStatKey(string key)
     {

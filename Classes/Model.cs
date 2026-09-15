@@ -286,7 +286,6 @@ public class AtlasModInfo
     public int StatId { get; set; }
     public string Text { get; set; } = "";
     public bool ScalesWithValue { get; set; }
-    public bool FromContent { get; set; }
 
     public override string ToString() => Text;
 }
@@ -544,7 +543,7 @@ public class ContentTuning
 public class AtlasModTuning
 {
     public float Weight { get; set; }
-    public bool Show { get; set; } = true;
+    public bool Show { get; set; }
 }
 
 public class Profile
