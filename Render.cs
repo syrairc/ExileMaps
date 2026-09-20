@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Numerics;
 using ExileCore2;
+using ExileCore2.PoEMemory.Elements.AtlasElements;
 using GameOffsets2.Native;
 using RectangleF = ExileCore2.Shared.RectangleF;
 using ExileMaps.Classes;
@@ -1045,14 +1046,6 @@ public partial class ExileMapsCore
         Graphics.DrawQuad(textureId, topLeft, topRight, bottomRight, bottomLeft, color);
         }
 
-    private const int PageOwner = 0x310;
-    private const int OwnerConnections = 0x17E8;
-    private const int ConnRecords = 984;
-    private const int ConnCount = 1000;
-    private const int RecordStride = 184;
-    private const int RecP0 = 56;
-    private const int RecSegments = 176;
-
     #endregion
 
     #region Connection Curves
@@ -1078,29 +1071,13 @@ public partial class ExileMapsCore
 
         try
         {
-            long atlas = AtlasPanel?.Address ?? 0;
-            if (atlas == 0)
+            var curves = AtlasPanel?.ConnectionCurves;
+            if (curves == null || curves.Count == 0)
                 return;
 
-            var mem = GameController.Memory;
-            long owner = mem.Read<long>(atlas + PageOwner);
-            if (owner == 0)
+            if (curves.Count == lastCurveRecordCount && !connectionCurves.IsEmpty)
                 return;
-
-            long wmc = owner + OwnerConnections;
-            long records = mem.Read<long>(wmc + ConnRecords);
-            long count = mem.Read<long>(wmc + ConnCount);
-
-            if (records == 0 || count <= 0 || count > 200000)
-            {
-                if (Settings.Features.DebugLogging)
-                    LogMessage($"ConnectionCurves: bad read (records={records:X} count={count}), offsets likely stale after a patch");
-                return;
-            }
-
-            if (count == lastCurveRecordCount && !connectionCurves.IsEmpty)
-                return;
-            lastCurveRecordCount = count;
+            lastCurveRecordCount = curves.Count;
 
             var byPos = new Dictionary<long, Vector2i>(nodes.Count);
             foreach (var n in nodes)
@@ -1113,28 +1090,17 @@ public partial class ExileMapsCore
             if (byPos.Count == 0)
                 return;
 
-            byte[] blob = mem.ReadBytes(records, (int)count * RecordStride);
-            if (blob == null || blob.Length < count * RecordStride)
-                return;
-
             const int extra = 1;
 
             var built = connectionCurves;
             int addedThisPass = 0;
 
-            for (int i = 0; i < count; i++)
+            foreach (var curve in curves)
             {
-                int o = i * RecordStride;
-                Vector3 p0 = ReadVec3(blob, o + RecP0);
-                Vector3 p1 = ReadVec3(blob, o + RecP0 + 16);
-                Vector3 p2 = ReadVec3(blob, o + RecP0 + 32);
-                Vector3 p3 = ReadVec3(blob, o + RecP0 + 48);
-                int segments = BitConverter.ToInt32(blob, o + RecSegments);
-
-                if (segments < 2)
+                if (curve.Segments < 2)
                     continue;
 
-                if (!byPos.TryGetValue(PosKey(p1), out var ca) || !byPos.TryGetValue(PosKey(p2), out var cb))
+                if (!byPos.TryGetValue(PosKey(curve.P1), out var ca) || !byPos.TryGetValue(PosKey(curve.P2), out var cb))
                     continue;
 
                 var key = EdgeKey(ca, cb);
@@ -1142,17 +1108,17 @@ public partial class ExileMapsCore
                     continue;
                 addedThisPass++;
 
-                int steps = Math.Min((segments - 1) * extra, 512);
+                int steps = Math.Min((curve.Segments - 1) * extra, 512);
                 var pts = new Vector3[steps + 1];
-                HermiteCoefficients(p0, p1, p2, p3, out var a, out var b, out var c, out var d);
+                HermiteCoefficients(curve.P0, curve.P1, curve.P2, curve.P3, out var a, out var b, out var c, out var d);
                 for (int s = 0; s <= steps; s++)
                 {
                     float t = (float)s / steps;
                     pts[s] = ((a * t + b) * t + c) * t + d;
                 }
 
-                pts[0] = p1;
-                pts[steps] = p2;
+                pts[0] = curve.P1;
+                pts[steps] = curve.P2;
 
                 if (key.Item1 != ca)
                     Array.Reverse(pts);
@@ -1167,11 +1133,6 @@ public partial class ExileMapsCore
             DebugSwallow("ConnectionCurves: refresh", e);
         }
     }
-
-    private static Vector3 ReadVec3(byte[] b, int o) => new(
-        BitConverter.ToSingle(b, o),
-        BitConverter.ToSingle(b, o + 4),
-        BitConverter.ToSingle(b, o + 8));
 
     private static void HermiteCoefficients(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3,
                                             out Vector3 a, out Vector3 b, out Vector3 c, out Vector3 d)

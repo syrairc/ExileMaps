@@ -669,36 +669,6 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
         }
     }
 
-    private const int ElementTextureRef = 0x240;
-
-    private string TextureOf(ExileCore2.PoEMemory.Element element)
-    {
-        try {
-            long addr = element?.Address ?? 0;
-            if (addr == 0)
-                return null;
-
-            var mem = GameController.Memory;
-            long slot = mem.Read<long>(addr + ElementTextureRef);
-            if (slot == 0)
-                return null;
-
-            long str = mem.Read<long>(slot + 8);
-            if (str == 0)
-                return null;
-
-            string raw = mem.ReadStringU(str, 512);
-            if (string.IsNullOrEmpty(raw))
-                return null;
-
-            int bar = raw.IndexOf('|');
-            return bar > 0 ? raw[..bar] : raw;
-        } catch (Exception e) {
-            DebugSwallow("TextureOf", e);
-            return null;
-        }
-    }
-
     private const string TooltipTexturePrefix = "Art/Textures/Interface/2D/2DArt/UIImages/InGame/AtlasScreen/";
     private static bool IsTooltipTexture(string textureName) =>
         textureName != null && textureName.StartsWith(TooltipTexturePrefix) && textureName.Contains("Popup");
@@ -721,10 +691,10 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
     private void AddExcludeRectsByTexture(ExileCore2.PoEMemory.Element element, int depth, List<RectangleF> target)
     {
-        if (element == null || depth > 8 || !element.IsVisible)
+        if (element == null || depth > 8 || !element.IsVisibleLocal)
             return;
 
-        string texture = TextureOf(element);
+        string texture = element.TextureNameRaw;
         if (texture != null)
         {
             if (ExcludeTextureSubtrees.Contains(texture))
@@ -784,9 +754,9 @@ public partial class ExileMapsCore : BaseSettingsPlugin<ExileMapsSettings>
 
             mapTooltipVisible = false;
             foreach (var tooltip in UI.WorldMap.Children) {
-                if (tooltip == null || !tooltip.IsVisible)
+                if (tooltip == null || !tooltip.IsVisibleLocal)
                     continue;
-                if (!IsTooltipTexture(TextureOf(tooltip)))
+                if (!IsTooltipTexture(tooltip.TextureNameRaw))
                     continue;
 
                 RectangleF mapTooltip = tooltip.GetClientRect();

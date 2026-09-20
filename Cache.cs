@@ -41,7 +41,6 @@ public partial class ExileMapsCore
             lastCurveRecordCount = -1;
         }
 
-        RefreshRitualLine();
         SeedAtlasModCatalogue();
 
         long tSnap = Stopwatch.GetTimestamp();
@@ -346,40 +345,23 @@ public partial class ExileMapsCore
     private readonly List<AtlasStatValue> atlasModOrder = [];
     private readonly Dictionary<StatDescriptionWrapper, HashSet<GameStat>> atlasModOwnedStats = [];
     private bool atlasModDescriptionsUsable;
-    private AtlasNodeModReader atlasModReader;
     private StatDescriptionWrapper endgameMapStatDescriptions;
     private bool endgameMapStatDescriptionsFailed;
-    private long ritualLineAddress;
-    private long ritualLineStamp;
     private bool atlasModsChanged;
+    private readonly TinyMt32 modRng = new();
 
     private const string EndgameMapStatDescriptionsFile = "Metadata/StatDescriptions/endgame_map_stat_descriptions.csd";
-
-    private AtlasNodeModReader AtlasModReader =>
-        atlasModReader ??= new AtlasNodeModReader(GameController.Memory, GameController.Files);
-
-    private void RefreshRitualLine()
-    {
-        try {
-            ritualLineAddress = AtlasModReader.ReadRitualLine(AtlasPanel?.Address ?? 0);
-            ritualLineStamp = AtlasModReader.ReadRitualLineStamp(ritualLineAddress);
-        } catch (Exception e) {
-            ritualLineAddress = 0;
-            ritualLineStamp = 0;
-            DebugSwallow("RefreshRitualLine", e);
-        }
-    }
 
     private bool RefreshNodeAtlasMods(AtlasNodeDescription node, Node toNode, bool force = false)
     {
         try {
             var element = node.Element;
-            long el = element?.Address ?? 0;
-            if (el == 0)
+            if (element == null)
                 return false;
 
-            var pin = AtlasModReader.ReadPin(el);
-            int fingerprint = AtlasNodeModReader.Fingerprint(pin, ritualLineStamp);
+            int fingerprint = HashCode.Combine(element.ModRollSeed, element.ModRollTier, element.ModRollSalt,
+                element.Flags, element.AbyssFissureFamily, element.AbyssFissureDepth, element.IsCleansed,
+                element.Area?.Address ?? 0);
 
             if (!force && toNode.AtlasModsBuilt && fingerprint == toNode.AtlasModFingerprint)
                 return false;
@@ -389,7 +371,63 @@ public partial class ExileMapsCore
             toNode.AtlasMods.Clear();
 
             atlasModRaw.Clear();
-            AtlasModReader.Collect(pin, ritualLineAddress, atlasModRaw);
+
+            foreach (var (stat, value) in element.Stats)
+                if (value != 0)
+                {
+                    var statRecord = GameController.Files.Stats?.recordsById.TryGetValue((int)stat, out var sr) == true ? sr : null;
+                    if (statRecord != null && !string.IsNullOrEmpty(statRecord.Key))
+                        atlasModRaw.Add(new AtlasStatValue(statRecord.Key, statRecord.MatchingStat, statRecord.Type, value));
+                }
+
+            foreach (var mod in element.AbyssMods)
+                AtlasModHelpers.AddModStats(mod, atlasModRaw, rolled: false, modRng);
+
+            if (element.Flags[2])
+            {
+                modRng.InitByArray((uint)element.ModRollSeed, (uint)element.Coordinate.X, (uint)element.Coordinate.Y, element.ModRollSalt);
+
+                int total = 0;
+                ModsDat.ModRecord chosen = null;
+
+                var rows = element.IsCleansed
+                    ? GameController.Files.EndgameCleansedMods.EntriesList.Select(x => (x.Mod, x.Weights))
+                    : GameController.Files.EndgameCorruptionMods.EntriesList.Select(x => (x.Mod, x.Weights));
+                foreach (var row in rows)
+                {
+                    if (row.Weights == null || row.Weights.Count == 0) continue;
+                    int idx = Math.Min(element.ModRollTier, row.Weights.Count - 1);
+                    int weight = row.Weights[idx];
+                    if (weight <= 0) continue;
+                    total += weight;
+                    if (modRng.NextRange((uint)total) < weight) chosen = row.Mod;
+                }
+
+                if (chosen != null)
+                    AtlasModHelpers.AddModStats(chosen, atlasModRaw, rolled: true, modRng);
+            }
+
+            var area = element.Area;
+            if (area != null)
+            {
+                foreach (var mod in area.MapMods)
+                {
+                    modRng.InitByArray(0, (uint)element.ModRollSeed, (uint)element.Coordinate.X, (uint)element.Coordinate.Y, element.ModRollSalt);
+                    AtlasModHelpers.AddModStats(mod, atlasModRaw, rolled: true, modRng);
+                }
+            }
+
+            var mapMods = GameController.IngameState.ServerData.MapMods;
+            if (mapMods != null && mapMods.TryGetValue(element.Coordinate, out var ritualModList))
+            {
+                foreach (var itemMod in ritualModList)
+                {
+                    var mod = itemMod?.ModRecord;
+                    if (mod != null)
+                        AtlasModHelpers.AddModStats(mod, atlasModRaw, rolled: false, modRng);
+                }
+            }
+
             AddContentStats(element, atlasModRaw);
 
             atlasModTotals.Clear();

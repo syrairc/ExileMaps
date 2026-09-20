@@ -11,6 +11,7 @@ using System.Windows.Forms;
 using ExileCore2;
 using ExileCore2.PoEMemory.Elements.AtlasElements;
 using ExileCore2.PoEMemory.Models;
+using ExileCore2.Shared.Enums;
 using GameOffsets2.Native;
 using ImGuiNET;
 using RectangleF = ExileCore2.Shared.RectangleF;
@@ -1869,8 +1870,6 @@ public partial class ExileMapsCore
 
     #region Ritual Foretelling
 
-    private const int RitualGateOffset = 0x61F;
-
     private class RitualModDef { public string id { get; set; } public string text { get; set; } public string item { get; set; } public int count { get; set; } }
 
     private static List<RitualModDef> ritualMods;
@@ -2150,7 +2149,7 @@ public partial class ExileMapsCore
         var panel = AtlasPanel;
         if (panel == null) return empty;
 
-        int seed = RitualSeedRaw();
+        int seed = panel.RitualForetoldSeed;
         int live = RitualLineCount();
         if (seed != foretellRollSeed)
         {
@@ -2217,121 +2216,30 @@ public partial class ExileMapsCore
         return w;
     }
 
-    private const int RitualAdjBeginOffset = 0x578;
-    private const int RitualAdjEndOffset = 0x580;
-    private const int RitualAdjStride = 68;
-    private const int RitualSeedOffset = 0x624;
-    private const int RitualLineBeginOffset = 0x648;
-    private const int RitualLineEndOffset = 0x650;
-
-    private int RitualSeedRaw()
-    {
-        try
-        {
-            long page = AtlasPanel?.Address ?? 0;
-            return page == 0 ? 0 : GameController.Memory.Read<int>(page + RitualSeedOffset);
-        }
-        catch { return 0; }
-    }
-
-    private int RitualLineCountRaw()
-    {
-        try
-        {
-            long page = AtlasPanel?.Address ?? 0;
-            if (page == 0) return -1;
-            var mem = GameController.Memory;
-            long b = mem.Read<long>(page + RitualLineBeginOffset);
-            long e = mem.Read<long>(page + RitualLineEndOffset);
-            if (b == 0 || e < b) return -1;
-            long n = (e - b) / 8;
-            return n < 0 || n > 64 ? -1 : (int)n;
-        }
-        catch { return -1; }
-    }
-
     private int RitualLineCount()
     {
-        int n = RitualLineCountRaw();
-        if (n >= 0) return n;
         try { return AtlasPanel?.SelectedForetoldRitualMaps?.Count ?? 0; }
         catch { return 0; }
-    }
-
-    private List<Vector2i> RitualSelectedRaw()
-    {
-        int n = RitualLineCountRaw();
-        if (n < 0) return null;
-        try
-        {
-            long page = AtlasPanel?.Address ?? 0;
-            if (page == 0) return null;
-            var mem = GameController.Memory;
-            long b = mem.Read<long>(page + RitualLineBeginOffset);
-            var list = new List<Vector2i>(n);
-            for (int i = 0; i < n; i++)
-                list.Add(new Vector2i(mem.Read<int>(b + i * 8), mem.Read<int>(b + i * 8 + 4)));
-            return list;
-        }
-        catch { return null; }
     }
 
     private static bool SameCoord(Vector2i a, Vector2i b) => a.X == b.X && a.Y == b.Y;
 
     private List<Vector2i> RitualSelected()
     {
-        var raw = RitualSelectedRaw();
-        if (raw != null) return raw;
-        try { return new List<Vector2i>(AtlasPanel?.SelectedForetoldRitualMaps ?? new List<Vector2i>()); }
-        catch { return new List<Vector2i>(); }
+        try { return new List<Vector2i>(AtlasPanel?.SelectedForetoldRitualMaps ?? []); }
+        catch { return []; }
     }
 
-    private bool RitualNeighbours(Vector2i coord, List<Vector2i> into)
+    private List<Vector2i> RitualNeighbours(Vector2i coord)
     {
-        into.Clear();
         try
         {
-            long page = AtlasPanel?.Address ?? 0;
-            if (page == 0) return false;
-            var mem = GameController.Memory;
-            long b = mem.Read<long>(page + RitualAdjBeginOffset);
-            long e = mem.Read<long>(page + RitualAdjEndOffset);
-            if (b == 0 || e < b) return false;
-            long n = (e - b) / RitualAdjStride;
-            if (n <= 0 || n > 200000) return false;
-
-            int want = (coord.X << 16) + coord.Y;
-            long lo = 0, cnt = n;
-            while (cnt > 0)
-            {
-                long half = cnt / 2;
-                long rec = b + (lo + half) * RitualAdjStride;
-                int key = (mem.Read<int>(rec) << 16) + mem.Read<int>(rec + 4);
-                if (key >= want) cnt = half;
-                else { lo += half + 1; cnt -= half + 1; }
-            }
-            if (lo >= n) return false;
-
-            long found = b + lo * RitualAdjStride;
-            if (mem.Read<int>(found) != coord.X || mem.Read<int>(found + 4) != coord.Y) return false;
-            for (int i = 0; i < 5; i++)
-            {
-                long p = found + 8 + i * 12;
-                var c = new Vector2i(mem.Read<int>(p), mem.Read<int>(p + 4));
-                if (c.X == 0 && c.Y == 0) continue;
-                into.Add(c);
-            }
-            return true;
+            var set = AtlasPanel?.Points?.FirstOrDefault(p => p.Source == coord);
+            return set?.Targets ?? [];
         }
-        catch { return false; }
+        catch { return []; }
     }
 
-    private const int RitualSessionOffset = 0x308;
-    private const int RitualAccountOffset = 0x1B0;
-    private const int RitualStatsOffset = 0x3A20;
-    private const int RitualStatsBegin = 1032;
-    private const int RitualStatsEnd = 1040;
-    private const int RitualStatStride = 40;
     private const int RitualMaxLineStat = 26381;
     private const int RitualSecondModStat = 26382;
     private const uint RitualSecondModSalt = 0x91DA3AD9u;
@@ -2339,27 +2247,8 @@ public partial class ExileMapsCore
 
     private int RitualStat(int statId)
     {
-        try
-        {
-            long page = AtlasPanel?.Address ?? 0;
-            if (page == 0) return 0;
-            var mem = GameController.Memory;
-            long a = mem.Read<long>(page + RitualSessionOffset);
-            if (a == 0) return 0;
-            long b = mem.Read<long>(a + RitualAccountOffset);
-            if (b == 0) return 0;
-            long stats = mem.Read<long>(b + RitualStatsOffset);
-            if (stats == 0) return 0;
-
-            long begin = mem.Read<long>(stats + RitualStatsBegin);
-            long end = mem.Read<long>(stats + RitualStatsEnd);
-            if (begin == 0 || end < begin || end - begin > RitualStatStride * 8192) return 0;
-
-            for (long p = begin; p < end; p += RitualStatStride)
-                if (mem.Read<int>(p) == statId) return mem.Read<int>(p + 8);
-        }
-        catch { }
-        return 0;
+        try { return GameController.IngameState.ServerData.AtlasStats?.GetValueOrDefault((GameStat)statId, 0) ?? 0; }
+        catch { return 0; }
     }
 
     private const long RitualMaxLineCacheMs = 500;
@@ -2375,26 +2264,15 @@ public partial class ExileMapsCore
         return ritualMaxLineCached;
     }
 
-    private const int RitualValidBeginOffset = 0x630;
-    private const int RitualValidEndOffset = 0x638;
-
     private List<Vector2i> RitualValidTargets()
     {
-        var list = new List<Vector2i>();
         try
         {
-            long page = AtlasPanel?.Address ?? 0;
-            if (page == 0) return list;
-            var mem = GameController.Memory;
-            long b = mem.Read<long>(page + RitualValidBeginOffset);
-            long e = mem.Read<long>(page + RitualValidEndOffset);
-            if (b == 0 || e < b || e - b > 8 * 4096) return list;
-            for (long p = b; p < e; p += 8)
-                list.Add(new Vector2i(mem.Read<int>(p), mem.Read<int>(p + 4)));
+            var list = new List<Vector2i>(AtlasPanel?.SelectableForetoldRitualMaps ?? []);
+            list.Sort((p, q) => p.X != q.X ? p.X.CompareTo(q.X) : p.Y.CompareTo(q.Y));
+            return list;
         }
-        catch { }
-        list.Sort((p, q) => p.X != q.X ? p.X.CompareTo(q.X) : p.Y.CompareTo(q.Y));
-        return list;
+        catch { return []; }
     }
 
     private HashSet<Vector2i> ritualValidNow = new();
@@ -2429,9 +2307,8 @@ public partial class ExileMapsCore
 
     private List<Vector2i> RitualCandidates(Vector2i tip, List<Vector2i> selected)
     {
-        var raw = new List<Vector2i>();
+        var raw = RitualNeighbours(tip);
         var result = new List<Vector2i>();
-        if (!RitualNeighbours(tip, raw)) return result;
         foreach (var c in raw)
         {
             bool taken = false;
@@ -2463,11 +2340,9 @@ public partial class ExileMapsCore
         {
             var panel = AtlasPanel;
             if (panel == null) return false;
-            seed = RitualSeedRaw();
+            seed = panel.RitualForetoldSeed;
             depth = RitualLineCount();
-
-            long page = panel.Address;
-            if (page != 0) selecting = GameController.Memory.Read<byte>(page + RitualGateOffset) != 0;
+            selecting = panel.IsRitualForetoldSelectionActive;
 
             if (Settings.Features.DebugRitualRolls)
             {
@@ -2475,9 +2350,7 @@ public partial class ExileMapsCore
                 if (!state.Equals(ritualLineStateLogged))
                 {
                     ritualLineStateLogged = state;
-                    int engineSeed = 0, engineDepth = -1;
-                    try { engineSeed = panel.RitualForetoldSeed; engineDepth = panel.SelectedForetoldRitualMaps?.Count ?? -1; } catch { }
-                    LogMessage($"RitualLineState seed={seed} depth={depth} selecting={selecting} rawCount={RitualLineCountRaw()} engineSeed={engineSeed} engineDepth={engineDepth} maxLine={RitualMaxLine()} valid={RitualValidTargets().Count}");
+                    LogMessage($"RitualLineState seed={seed} depth={depth} selecting={selecting} maxLine={RitualMaxLine()} valid={RitualValidTargets().Count}");
                 }
             }
             return true;
@@ -2506,7 +2379,6 @@ public partial class ExileMapsCore
         return ColorUtils.WithAlphaOf(WeightRampColor(w, minForetellWeight, maxForetellWeight), OverlayText);
     }
 
-    private readonly Dictionary<Vector2i, List<Vector2i>> ritualAdjMemo = new();
     private List<Vector2i> ritualPlan = new();
     private readonly Dictionary<Vector2i, int> ritualPlanSteps = new();
     public bool ritualStartSearchPending;
@@ -2528,12 +2400,7 @@ public partial class ExileMapsCore
 
     private List<Vector2i> RitualCandidatesMemo(Vector2i tip, List<Vector2i> selected)
     {
-        if (!ritualAdjMemo.TryGetValue(tip, out var raw))
-        {
-            raw = new List<Vector2i>();
-            RitualNeighbours(tip, raw);
-            ritualAdjMemo[tip] = raw;
-        }
+        var raw = RitualNeighbours(tip);
         var result = new List<Vector2i>();
         foreach (var c in raw)
         {
@@ -2599,7 +2466,6 @@ public partial class ExileMapsCore
         var key = (seed, -1, start, weightsRecalcVersion, RitualStartSteps(), foretellRollOk, Settings.Features.RitualPlanUnlockedOnly);
         if (key.Equals(ritualPlanKey)) return ritualPlan;
         ritualPlanKey = key;
-        ritualAdjMemo.Clear();
         var plan = new List<Vector2i>();
         RitualEvaluateStart(start, RitualStartSteps(), plan);
         ritualPlan = plan;
@@ -2609,7 +2475,6 @@ public partial class ExileMapsCore
     private void SearchBestRitualStart(int seed, List<Vector2i> starts)
     {
         int steps = RitualStartSteps();
-        ritualAdjMemo.Clear();
 
         var best = new List<Vector2i>();
         float bestScore = float.NegativeInfinity;
@@ -2640,7 +2505,6 @@ public partial class ExileMapsCore
         var key = (seed, depth, tip, weightsRecalcVersion, steps, foretellRollOk, Settings.Features.RitualPlanUnlockedOnly);
         if (key.Equals(ritualPlanKey)) return;
         ritualPlanKey = key;
-        ritualAdjMemo.Clear();
         var plan = new List<Vector2i>();
         if (steps > 0)
             RitualBestPath(depth, tip, new List<Vector2i>(selected), steps, plan, true);
@@ -2700,7 +2564,6 @@ public partial class ExileMapsCore
 
             var starts = RitualValidTargets();
             int steps = RitualStartSteps();
-            ritualAdjMemo.Clear();
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
             var scratch = new List<Vector2i>();

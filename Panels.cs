@@ -64,7 +64,7 @@ public partial class ExileMapsCore
             var kids = UI?.WorldMap?.Children;
             if (kids == null) return null;
             foreach (var c in kids)
-                if (TextureOf(c)?.EndsWith(SearchBoxTexture, StringComparison.OrdinalIgnoreCase) == true) {
+                if (c.TextureNameRaw?.EndsWith(SearchBoxTexture, StringComparison.OrdinalIgnoreCase) == true) {
                     cachedSearchBox = c;
                     break;
                 }
